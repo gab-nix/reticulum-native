@@ -17,6 +17,7 @@ reticulum_add_test(test_announce unit/test_announce.c)
 reticulum_add_test(test_framing unit/test_framing.c)
 reticulum_add_test(test_transport unit/test_transport.c)
 reticulum_add_test(test_lxmf_router unit/test_lxmf_router.c)
+reticulum_add_test(test_node unit/test_node.c)
 reticulum_add_test(test_udp integration/test_udp.c)
 
 if(TARGET rnid)

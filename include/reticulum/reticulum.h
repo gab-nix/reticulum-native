@@ -10,6 +10,7 @@
 #include "reticulum/identity.h"
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_router.h"
+#include "reticulum/node.h"
 #include "reticulum/packet.h"
 #include "reticulum/status.h"
 #include "reticulum/transport.h"
