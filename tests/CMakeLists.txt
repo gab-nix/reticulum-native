@@ -16,6 +16,7 @@ reticulum_add_test(test_lxmf unit/test_lxmf.c)
 reticulum_add_test(test_announce unit/test_announce.c)
 reticulum_add_test(test_framing unit/test_framing.c)
 reticulum_add_test(test_transport unit/test_transport.c)
+reticulum_add_test(test_lxmf_router unit/test_lxmf_router.c)
 
 if(TARGET rnid)
     add_test(NAME test_rnid
