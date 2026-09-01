@@ -15,3 +15,11 @@ reticulum_add_test(test_packet unit/test_packet.c)
 reticulum_add_test(test_lxmf unit/test_lxmf.c)
 reticulum_add_test(test_announce unit/test_announce.c)
 reticulum_add_test(test_framing unit/test_framing.c)
+
+if(TARGET rnid)
+    add_test(NAME test_rnid
+        COMMAND ${CMAKE_COMMAND}
+            -DRNID=$<TARGET_FILE:rnid>
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/test_rnid.cmake)
+endif()

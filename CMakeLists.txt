@@ -7,6 +7,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(RETICULUM_BUILD_TESTS "Build reticulum-c tests" ${BUILD_TESTING})
+option(RETICULUM_BUILD_APPS "Build reticulum-c command-line applications" ON)
 option(RETICULUM_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 set(RETICULUM_SANITIZERS "" CACHE STRING
     "Comma-separated sanitizers (for example: address,undefined)")
@@ -44,6 +45,10 @@ if(RETICULUM_SANITIZERS)
     reticulum_enable_sanitizers(reticulum "${RETICULUM_SANITIZERS}")
 endif()
 
+if(RETICULUM_BUILD_APPS)
+    add_subdirectory(apps)
+endif()
+
 if(RETICULUM_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
@@ -72,4 +77,3 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/reticulum-config.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/reticulum-config-version.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/reticulum)
-
