@@ -8,9 +8,9 @@ The initial interoperability baseline, resolved on 2026-09-01, is:
 
 | Component | Release | Git commit |
 | --- | --- | --- |
-| Reticulum | 1.5.2 | `e983c1e30b5929fbf588f65f83da822650003c45` |
-| LXMF | 1.1.0 | `38dd74bed0fdac6aba291e64df2ae0e39688f493` |
-| Nomad Network | 1.2.0 | `29e9ed619769067aa3fad7b0a5d9c05b6c9dc4c2` |
+| Reticulum | 1.5.2 | `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6` |
+| LXMF | 1.1.0 | `795fdaa2b0777c13033787d933d1afc94a2377cb` |
+| Nomad Network | 1.2.0 | `475c0ee2a0388cf8470e7f1e90d5decb67b579ea` |
 
 Golden vectors generated from these revisions must record the generator,
 revision, inputs and expected bytes. Updating a baseline requires regenerating
@@ -24,4 +24,3 @@ the vectors and passing all differential interoperability tests.
   are never silently reinterpreted.
 - Claims of interoperability require a bidirectional test against the pinned
   Python implementation, not only tests between two C instances.
-
