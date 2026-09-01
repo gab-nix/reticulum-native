@@ -5,6 +5,7 @@
 #include "reticulum/buffer.h"
 #include "reticulum/crypto.h"
 #include "reticulum/destination.h"
+#include "reticulum/framing.h"
 #include "reticulum/hal.h"
 #include "reticulum/identity.h"
 #include "reticulum/lxmf.h"
