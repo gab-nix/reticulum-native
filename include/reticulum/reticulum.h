@@ -14,6 +14,7 @@
 #include "reticulum/node.h"
 #include "reticulum/packet.h"
 #include "reticulum/status.h"
+#include "reticulum/tcp.h"
 #include "reticulum/transport.h"
 #include "reticulum/udp.h"
 
