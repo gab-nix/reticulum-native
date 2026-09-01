@@ -1,0 +1,11 @@
+/build/
+/build-*/
+/.cache/
+/compile_commands.json
+/.clangd/
+*.dSYM/
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
