@@ -25,3 +25,17 @@ discarded through the next delimiter, after which normal decoding resumes.
 `malformed_frames` and `oversized_frames` are monotonic diagnostic counters.
 Callback errors are returned immediately to the stream owner; framing errors
 are counted and recovered in-stream.
+
+## POSIX UDP
+
+`rns_udp_endpoint_t` wraps one nonblocking IPv4 or IPv6 datagram socket. The
+caller owns the event loop: bind or connect the endpoint, send packets, and call
+`rns_udp_poll()` when the socket is readable. Polling never waits, creates no
+thread, and delivers each datagram together with its source address.
+
+Send and receive paths enforce Reticulum's `RNS_MTU`; an outbound packet larger
+than the MTU is rejected before reaching the network and an oversized inbound
+datagram is consumed and reported as `RNS_ERROR_OVERFLOW`. Broadcast, multicast
+loop/hop controls, and IPv4/IPv6 multicast membership are exposed explicitly.
+IPv6 membership accepts an interface index; portable IPv4 membership currently
+uses the system's default multicast interface.

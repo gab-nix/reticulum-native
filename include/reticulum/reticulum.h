@@ -13,6 +13,7 @@
 #include "reticulum/packet.h"
 #include "reticulum/status.h"
 #include "reticulum/transport.h"
+#include "reticulum/udp.h"
 
 #define RETICULUM_C_VERSION_MAJOR 0
 #define RETICULUM_C_VERSION_MINOR 1
