@@ -1,6 +1,7 @@
 #ifndef RETICULUM_RETICULUM_H
 #define RETICULUM_RETICULUM_H
 
+#include "reticulum/announce.h"
 #include "reticulum/buffer.h"
 #include "reticulum/crypto.h"
 #include "reticulum/destination.h"
