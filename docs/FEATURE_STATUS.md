@@ -16,7 +16,7 @@ This is the source of truth for implementation progress. `IMPLEMENTED` means cod
 | LXMF delivery and propagation | WIP | Opportunistic UDP exchange works C-to-C. Direct links/resources, retry queues and propagation sync remain. |
 | Peer and message persistence | IMPLEMENTED | Crash-recovering message journal and durable peer settings tests. |
 | Nomad conversations | WIP | Search, trust tabs, composer, history and offline queue exist. Live receive/send, attachments, replies and reactions remain. |
-| Network screen and active nodes | WIP | Configured TUI runtime consumes verified announces and renders sorted persistent records. Search, path refresh, details and upstream verification remain. |
+| Network screen and active nodes | WIP | Configured TUI runtime consumes verified announces, associates Nomad nodes with LXMF inboxes, and renders sorted persistent records. Search, path refresh, details and upstream verification remain. |
 | Native Micron browser | WIP | Bounded parser, links and history exist. Remote fetch, forms, complete markup and upstream page tests remain. |
 | Channels/RRC, Interfaces, Config, Guide, Logs, hosted node | PLANNED | Shell navigation seams exist; working screens do not. |
 | CLI utilities | WIP | `rnid`, `rnsd`, and `nomad-chat` history/node diagnostics exist, including JSON node output. Core utility parity remains. |
