@@ -30,3 +30,10 @@ if(TARGET rnid)
             -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/test_rnid.cmake)
 endif()
+
+if(TARGET nomad-chat)
+    add_test(NAME test_nomad_chat
+        COMMAND ${CMAKE_COMMAND}
+            -DNOMAD_CHAT=$<TARGET_FILE:nomad-chat>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/test_nomad_chat.cmake)
+endif()
