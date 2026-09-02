@@ -8,6 +8,7 @@ int main(void) {
     rns_runtime_t *runtime = NULL;
     rns_runtime_interface_info_t info;
     rns_runtime_link_t *link = (rns_runtime_link_t *)1;
+    rns_request_receipt_t *receipt = (rns_request_receipt_t *)1;
     rns_identity remote;
     uint8_t destination[16] = {1U};
     size_t processed = 99U;
@@ -30,6 +31,12 @@ int main(void) {
     assert(link == NULL);
     assert(rns_runtime_link_state(NULL) == RNS_LINK_CLOSED);
     assert(rns_runtime_link_id(NULL) == NULL);
+    assert(rns_runtime_link_request(NULL, "/page/index.mu", NULL, 0U, NULL,
+                                    &receipt) == RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_request_receipt_state(NULL) == RNS_REQUEST_FAILED);
+    assert(rns_request_receipt_id(NULL) == NULL);
+    rns_request_receipt_cancel(NULL);
+    rns_request_receipt_destroy(NULL);
     assert(runtime != NULL);
     assert(rns_runtime_interface_count(runtime) == 2U);
     assert(rns_runtime_interface_info(runtime, 0U, &info) == RNS_OK);

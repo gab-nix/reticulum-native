@@ -17,8 +17,13 @@ extern "C" {
 
 typedef struct rns_runtime rns_runtime_t;
 typedef struct rns_runtime_link rns_runtime_link_t;
+typedef struct rns_request_receipt rns_request_receipt_t;
 
 #define RNS_RUNTIME_MAX_LINKS 16u
+#define RNS_RUNTIME_MAX_REQUESTS 8u
+#define RNS_REQUEST_DEFAULT_MAX_RESPONSE (8u * 1024u * 1024u)
+#define RNS_LINK_CONTEXT_REQUEST 0x09u
+#define RNS_LINK_CONTEXT_RESPONSE 0x0au
 #define RNS_LINK_CONTEXT_KEEPALIVE 0xfau
 #define RNS_LINK_CONTEXT_CLOSE 0xfcu
 #define RNS_LINK_CONTEXT_RTT 0xfeu
@@ -38,6 +43,25 @@ typedef struct rns_runtime_link_options {
     rns_runtime_link_packet_callback_t packet_callback;
     void *callback_context;
 } rns_runtime_link_options_t;
+
+typedef enum rns_request_state {
+    RNS_REQUEST_PENDING = 0,
+    RNS_REQUEST_COMPLETE,
+    RNS_REQUEST_FAILED,
+    RNS_REQUEST_CANCELLED
+} rns_request_state_t;
+
+typedef void (*rns_request_callback_t)(
+    rns_request_receipt_t *receipt, rns_request_state_t state,
+    rns_status_t status, const uint8_t *response, size_t response_length,
+    void *context);
+
+typedef struct rns_request_options {
+    double timeout_seconds;
+    size_t max_response_size;
+    rns_request_callback_t callback;
+    void *callback_context;
+} rns_request_options_t;
 
 typedef enum rns_runtime_interface_state {
     RNS_RUNTIME_INTERFACE_DISABLED = 0,
@@ -122,6 +146,15 @@ rns_status_t rns_runtime_link_send(rns_runtime_link_t *link, uint8_t context,
 rns_link_state rns_runtime_link_state(const rns_runtime_link_t *link);
 const uint8_t *rns_runtime_link_id(const rns_runtime_link_t *link);
 void rns_runtime_link_destroy(rns_runtime_link_t *link);
+rns_status_t rns_runtime_link_request(
+    rns_runtime_link_t *link, const char *path, const uint8_t *data_msgpack,
+    size_t data_msgpack_length, const rns_request_options_t *options,
+    rns_request_receipt_t **receipt);
+rns_request_state_t rns_request_receipt_state(
+    const rns_request_receipt_t *receipt);
+const uint8_t *rns_request_receipt_id(const rns_request_receipt_t *receipt);
+void rns_request_receipt_cancel(rns_request_receipt_t *receipt);
+void rns_request_receipt_destroy(rns_request_receipt_t *receipt);
 
 #ifdef __cplusplus
 }
