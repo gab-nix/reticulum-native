@@ -19,7 +19,7 @@ This is the source of truth for implementation progress. `IMPLEMENTED` means cod
 | Network screen and active nodes | WIP | Configured TUI runtime consumes verified announces and renders sorted persistent records. Search, path refresh, details and upstream verification remain. |
 | Native Micron browser | WIP | Bounded parser, links and history exist. Remote fetch, forms, complete markup and upstream page tests remain. |
 | Channels/RRC, Interfaces, Config, Guide, Logs, hosted node | PLANNED | Shell navigation seams exist; working screens do not. |
-| CLI utilities | WIP | `rnid`, `rnsd`, and initial `nomad-chat` commands exist. Core utility parity and JSON diagnostics remain. |
+| CLI utilities | WIP | `rnid`, `rnsd`, and `nomad-chat` history/node diagnostics exist, including JSON node output. Core utility parity remains. |
 | Embedded portability | PLANNED | HAL boundary exists; cross-build examples and non-OpenSSL provider remain. |
 | Upstream interoperability | BLOCKED | No complete bidirectional acceptance matrix or captured live upstream traffic yet. |
 

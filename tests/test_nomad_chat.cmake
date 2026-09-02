@@ -27,4 +27,8 @@ execute_process(COMMAND "${NOMAD_CHAT}" send-file "${tmp}/message.lxm" RESULT_VA
 if(NOT r EQUAL 69 OR NOT unsupported MATCHES "not implemented")
   message(FATAL_ERROR "send-file did not fail safely")
 endif()
+execute_process(COMMAND "${NOMAD_CHAT}" nodes --json "${tmp}/missing.nodes" RESULT_VARIABLE r ERROR_VARIABLE nodes_error)
+if(NOT r EQUAL 65 OR NOT nodes_error MATCHES "cannot open node registry")
+  message(FATAL_ERROR "nodes missing-store handling failed: ${r} ${nodes_error}")
+endif()
 file(REMOVE_RECURSE "${tmp}")
