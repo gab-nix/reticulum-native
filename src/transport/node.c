@@ -71,6 +71,19 @@ static int announce_ingress(rns_node *node, const rns_packet *packet, const uint
                                              interface_id, interface_gravity, received_hops,
                                              announce.random_blob, packet_hash);
     if (update == RNS_PATH_REJECTED) { result->reason = RNS_NODE_REASON_STALE_ANNOUNCE; return 1; }
+    result->has_verified_announce = 1;
+    result->received_interface_id = interface_id;
+    result->path_update = update;
+    result->announce_app_data = announce.app_data;
+    result->announce_app_data_length = announce.app_data_length;
+    result->announce_timebase = announce.timestamp;
+    result->announce_has_ratchet = announce.has_ratchet;
+    result->received_at = node->transport.config.clock(node->transport.config.clock_context);
+    if (!rns_identity_from_public(&result->announce_identity, announce.public_key)) {
+        result->has_verified_announce = 0;
+        result->reason = RNS_NODE_REASON_INVALID_ANNOUNCE;
+        return 1;
+    }
     memcpy(result->next_hop, next_hop, 16);
     if (packet->context == RNS_NODE_PATH_RESPONSE_CONTEXT) { result->action = RNS_NODE_DELIVER; return 1; }
     if (!rewrite_packet(packet, received_hops, node->transport_id, output, output_capacity, &result->output_length)) {

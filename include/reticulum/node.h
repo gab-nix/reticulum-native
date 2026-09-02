@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "reticulum/transport.h"
+#include "reticulum/identity.h"
 
 #define RNS_NODE_PATH_REQUEST_CONTEXT 0x00u
 #define RNS_NODE_PATH_RESPONSE_CONTEXT 0x0bu
@@ -58,6 +59,15 @@ typedef struct {
     size_t output_length;
     rns_path_request path_request;
     int has_path_request;
+    int has_verified_announce;
+    uint64_t received_interface_id;
+    rns_path_update_result path_update;
+    rns_identity announce_identity;
+    const uint8_t *announce_app_data;
+    size_t announce_app_data_length;
+    uint64_t announce_timebase;
+    int announce_has_ratchet;
+    double received_at;
 } rns_node_result;
 
 int rns_node_init(rns_node *node, const rns_node_config *config);

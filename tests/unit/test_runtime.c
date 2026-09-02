@@ -35,6 +35,8 @@ int main(void) {
     assert(rns_runtime_register_destination(runtime, destination) == RNS_OK);
     assert(rns_runtime_unregister_destination(runtime, destination) == RNS_OK);
     assert(rns_runtime_unregister_destination(runtime, destination) == RNS_ERROR_NOT_FOUND);
+    assert(rns_runtime_path_lookup(runtime, destination, &(rns_path_entry){0}) == RNS_ERROR_NOT_FOUND);
+    assert(rns_runtime_path_snapshot(runtime, NULL, 0U) == 0U);
     assert(rns_runtime_poll(runtime, 0U, &processed) == RNS_OK);
     assert(processed == 0U);
     /* A disabled interface has no startup error, but it cannot send. */

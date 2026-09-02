@@ -34,6 +34,10 @@ int main(void) {
     assert(rns_packet_encode(&packet, raw, sizeof(raw), &raw_length));
     assert(rns_node_ingress(&node, raw, raw_length, 42, 1, output, sizeof(output), &result));
     assert(result.action == RNS_NODE_REBROADCAST && result.hops == 1 && result.output_length > raw_length);
+    assert(result.has_verified_announce && result.received_interface_id == 42U);
+    assert(result.path_update == RNS_PATH_INSERTED && result.announce_timebase == 1234U);
+    assert(result.announce_app_data_length == 0U && !result.announce_has_ratchet);
+    assert(memcmp(result.announce_identity.hash, identity.hash, 16U) == 0);
     assert(rns_packet_decode(&decoded, output, result.output_length));
     assert(decoded.header_type == 1 && decoded.transport_type == 1 && decoded.hops == 1);
     assert(memcmp(decoded.transport_id, config.transport_id, 16) == 0);

@@ -41,9 +41,13 @@ typedef void (*rns_runtime_packet_callback_t)(rns_runtime_t *runtime,
                                                size_t packet_length,
                                                const rns_node_result *result,
                                                void *context);
+typedef void (*rns_runtime_announce_callback_t)(rns_runtime_t *runtime,
+                                                const rns_node_result *announce,
+                                                void *context);
 
 typedef struct rns_runtime_options {
     rns_runtime_packet_callback_t packet_callback;
+    rns_runtime_announce_callback_t announce_callback;
     void *callback_context;
     size_t path_capacity;
     size_t dedupe_capacity;
@@ -72,6 +76,11 @@ rns_status_t rns_runtime_register_destination(rns_runtime_t *runtime,
                                               const uint8_t destination_hash[16]);
 rns_status_t rns_runtime_unregister_destination(rns_runtime_t *runtime,
                                                 const uint8_t destination_hash[16]);
+rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime,
+                                     const uint8_t destination_hash[16],
+                                     rns_path_entry *path);
+size_t rns_runtime_path_snapshot(const rns_runtime_t *runtime,
+                                 rns_path_entry *paths, size_t capacity);
 
 #ifdef __cplusplus
 }

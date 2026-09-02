@@ -26,6 +26,7 @@ struct rns_runtime {
     runtime_interface_t interfaces[RNS_CONFIG_MAX_INTERFACES];
     size_t interface_count;
     rns_runtime_packet_callback_t packet_callback;
+    rns_runtime_announce_callback_t announce_callback;
     void *callback_context;
 };
 
@@ -80,6 +81,8 @@ static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, s
     if (runtime->packet_callback != NULL &&
         (result.action == RNS_NODE_DELIVER || result.action == RNS_NODE_PATH_RESPONSE))
         runtime->packet_callback(runtime, packet, length, &result, runtime->callback_context);
+    if (result.has_verified_announce && runtime->announce_callback != NULL)
+        runtime->announce_callback(runtime, &result, runtime->callback_context);
     if (runtime->config.enable_transport &&
         (result.action == RNS_NODE_FORWARD || result.action == RNS_NODE_REBROADCAST)) {
         for (size_t i = 0U; i < runtime->interface_count; ++i)
@@ -144,6 +147,7 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
     runtime->interface_count = config->interface_count;
     if (options != NULL) {
         runtime->packet_callback = options->packet_callback;
+        runtime->announce_callback = options->announce_callback;
         runtime->callback_context = options->callback_context;
     }
     memset(&node_config, 0, sizeof(node_config));
@@ -255,4 +259,24 @@ rns_status_t rns_runtime_register_destination(rns_runtime_t *runtime, const uint
 rns_status_t rns_runtime_unregister_destination(rns_runtime_t *runtime, const uint8_t hash[16]) {
     if (runtime == NULL || hash == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     return rns_node_unregister_destination(&runtime->node, hash) ? RNS_OK : RNS_ERROR_NOT_FOUND;
+}
+
+rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime, const uint8_t hash[16],
+                                     rns_path_entry *path) {
+    if (runtime == NULL || hash == NULL || path == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    const rns_path_entry *found = rns_transport_lookup((rns_transport *)&runtime->node.transport, hash);
+    if (found == NULL) return RNS_ERROR_NOT_FOUND;
+    *path = *found;
+    return RNS_OK;
+}
+
+size_t rns_runtime_path_snapshot(const rns_runtime_t *runtime, rns_path_entry *paths,
+                                 size_t capacity) {
+    if (runtime == NULL || (paths == NULL && capacity != 0U)) return 0U;
+    size_t count = 0U;
+    for (size_t i = 0U; i < runtime->node.transport.config.path_capacity && count < capacity; ++i) {
+        if (!runtime->node.transport.paths[i].occupied) continue;
+        paths[count++] = runtime->node.transport.paths[i];
+    }
+    return count;
 }
