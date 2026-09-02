@@ -1,6 +1,7 @@
 #include "tui.h"
 
 #include "reticulum/destination.h"
+#include "reticulum/browser.h"
 #include "reticulum/identity.h"
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_router.h"
@@ -91,6 +92,8 @@ typedef struct {
     rns_identity resolved_identity;
     char node_store_path[1024];
     rns_micron_page page;
+    rns_browser_t *browser;
+    rns_browser_state_t browser_last_state;
     rns_micron_history browser_history;
     size_t browser_selected;
     char browser_url[RNS_MICRON_TEXT_MAX];
@@ -277,6 +280,10 @@ static int state_open(tui_state *state, const char *identity_path,
         (void)rns_node_registry_load(&state->nodes,state->node_store_path,3600.0);
     else state->node_store_path[0] = '\0';
     if(config_path){size_t length=0;char *text=read_text_file(config_path,&length);rns_config_t config;rns_config_diagnostic_t diagnostic={0};rns_config_init(&config);if(text&&rns_config_parse(text,length,&config,&diagnostic)==RNS_OK){rns_runtime_options_t options={0};options.packet_callback=packet_received;options.announce_callback=announce_received;options.callback_context=state;rns_status_t rs=rns_runtime_create(&state->runtime,&config,&options);if(rs==RNS_OK){lxmf_router_config_t rc={.identity=&state->identity,.store=&state->store,.resolve_identity=resolve_peer,.resolve_context=state,.send_packet=send_via_runtime,.send_context=state,.message_callback=message_received,.message_context=state};state->router_ready=lxmf_router_init(&state->router,&rc)==LXMF_OK;if(state->router_ready&&rns_runtime_register_destination(state->runtime,state->local)!=RNS_OK)state->router_ready=false;}snprintf(state->status,sizeof state->status,rs==RNS_OK&&state->router_ready?"Network runtime active":"Network startup failed; conversations remain available");}else snprintf(state->status,sizeof state->status,"Invalid network configuration; conversations remain available");free(text);}
+    if (state->runtime != NULL &&
+        rns_browser_create(&state->browser, state->runtime, NULL) != RNS_OK)
+        snprintf(state->status, sizeof state->status,
+                 "Page browser unavailable; messaging remains active");
     rns_micron_history_init(&state->browser_history);
     snprintf(state->browser_url, sizeof state->browser_url, "nomad://local/home");
     static const uint8_t home[] =
@@ -289,6 +296,7 @@ static int state_open(tui_state *state, const char *identity_path,
         goto fail;
     return 0;
 fail:
+    rns_browser_destroy(state->browser);
     rns_runtime_destroy(state->runtime);
     lxmf_peer_store_close(&state->peer_store);
     lxmf_store_close(&state->store);
@@ -300,6 +308,7 @@ fail:
 static void state_close(tui_state *state) {
     if (state->node_store_path[0])
         (void)rns_node_registry_save(&state->nodes,state->node_store_path);
+    rns_browser_destroy(state->browser);
     rns_runtime_destroy(state->runtime);
     persist_contacts(state);
     lxmf_peer_store_close(&state->peer_store);
@@ -487,6 +496,22 @@ static const rns_micron_item *browser_link_at(const tui_state *state,size_t targ
 static void draw_browser(tui_state *state, int rows, int columns) {
     char title[600]; snprintf(title,sizeof title,"Browser  %s",state->browser_url);
     attron(A_BOLD); clipped(stdscr,3,1,columns-2,title); attroff(A_BOLD);
+    if (state->browser != NULL) {
+        rns_browser_state_t browser_state = rns_browser_state(state->browser);
+        if (browser_state == RNS_BROWSER_PATH_DISCOVERY ||
+            browser_state == RNS_BROWSER_LINK_ESTABLISHMENT ||
+            browser_state == RNS_BROWSER_REQUEST_TRANSMISSION) {
+            char transfer[96];
+            snprintf(transfer, sizeof transfer, "Loading remote page... %.0f%%",
+                     rns_browser_progress(state->browser) * 100.0);
+            clipped(stdscr,4,2,columns-4,transfer);
+        } else if (browser_state == RNS_BROWSER_FAILED) {
+            char failure[160];
+            snprintf(failure, sizeof failure, "Page load failed: %s",
+                     rns_status_string(rns_browser_error(state->browser)));
+            clipped(stdscr,4,2,columns-4,failure);
+        }
+    }
     size_t link=0;
     for(size_t i=0;i<state->page.count&&(int)i<rows-8;i++){
         const rns_micron_item *item=&state->page.items[i]; char line[1100];
@@ -495,7 +520,7 @@ static void draw_browser(tui_state *state, int rows, int columns) {
         else snprintf(line,sizeof line,"%s",item->text);
         if(item->kind==RNS_MICRON_HEADING)attron(A_BOLD);clipped(stdscr,5+(int)i,2,columns-4,line);if(item->kind==RNS_MICRON_HEADING)attroff(A_BOLD);
     }
-    clipped(stdscr,rows-2,0,columns,"j/k select  Enter open  Backspace back  N network  C conversations");
+    clipped(stdscr,rows-2,0,columns,"j/k select  Enter open  Backspace back  R reload  Esc cancel  N network");
 }
 
 static void draw(tui_state *state) {
@@ -711,16 +736,81 @@ static void unavailable_screen(tui_state *state, tui_screen screen,
     state->screen = SCREEN_CONVERSATIONS;
 }
 
-static void browser_open_selected(tui_state *state){const rns_micron_item *item=browser_link_at(state,state->browser_selected);if(!item)return;char url[RNS_MICRON_TEXT_MAX];if(!rns_micron_normalize_url(state->browser_url,item->target,url,sizeof url)||!rns_micron_history_push(&state->browser_history,url)){snprintf(state->status,sizeof state->status,"Invalid or oversized link");return;}snprintf(state->browser_url,sizeof state->browser_url,"%s",url);char page[RNS_MICRON_TEXT_MAX+80];snprintf(page,sizeof page,"# %s\nPage request transport is not connected yet.\n[Back to home](/home)\n",url);(void)rns_micron_parse(&state->page,(const uint8_t*)page,strlen(page));state->browser_selected=0;}
+static bool browser_start_url(tui_state *state, const char *url,
+                              bool push_history) {
+    uint8_t destination[16];
+    char requested_url[RNS_MICRON_TEXT_MAX];
+    if (url == NULL || snprintf(requested_url, sizeof requested_url, "%s", url) < 0 ||
+        strlen(url) >= sizeof requested_url) {
+        snprintf(state->status, sizeof state->status, "Invalid or oversized link");
+        return false;
+    }
+    url = requested_url;
+    if (state->browser == NULL) {
+        snprintf(state->status, sizeof state->status,
+                 "Configure a network interface before browsing remote pages");
+        return false;
+    }
+    if (strlen(url) < 33u) {
+        snprintf(state->status, sizeof state->status, "Unsupported browser URL");
+        return false;
+    }
+    char destination_text[33];
+    memcpy(destination_text, url, 32u);
+    destination_text[32] = '\0';
+    if (!hex_parse_16(destination_text, destination)) {
+        snprintf(state->status, sizeof state->status, "Invalid Nomad destination");
+        return false;
+    }
+    const rns_node_record *node = rns_node_registry_get(&state->nodes, destination);
+    rns_identity identity;
+    if (node == NULL || !rns_identity_from_public(&identity, node->public_key)) {
+        snprintf(state->status, sizeof state->status,
+                 "No verified identity for this Nomad node");
+        return false;
+    }
+    rns_status_t status = rns_browser_open(state->browser, url, &identity, NULL, 0U);
+    if (status != RNS_OK) {
+        snprintf(state->status, sizeof state->status, "Page request failed: %s",
+                 rns_status_string(status));
+        return false;
+    }
+    if (push_history && !rns_micron_history_push(&state->browser_history, url)) {
+        rns_browser_cancel(state->browser);
+        snprintf(state->status, sizeof state->status, "Browser history is full");
+        return false;
+    }
+    snprintf(state->browser_url, sizeof state->browser_url, "%s", url);
+    state->browser_selected = 0u;
+    state->browser_last_state = rns_browser_state(state->browser);
+    snprintf(state->status, sizeof state->status, "Discovering route to Nomad page");
+    return true;
+}
+
+static void browser_open_selected(tui_state *state) {
+    const rns_micron_item *item = browser_link_at(state, state->browser_selected);
+    if (item == NULL) return;
+    if (!strncmp(item->target, "lxmf:", 5u)) {
+        snprintf(state->status, sizeof state->status,
+                 "LXMF browser links require a destination handoff");
+        return;
+    }
+    char url[RNS_MICRON_TEXT_MAX];
+    if (!rns_micron_normalize_url(state->browser_url, item->target, url,
+                                  sizeof url)) {
+        snprintf(state->status, sizeof state->status, "Invalid or oversized link");
+        return;
+    }
+    (void)browser_start_url(state, url, true);
+}
 
 static void open_node_browser(tui_state *state, const rns_node_record *node) {
     char hash[33]; hex_format(node->destination, 16u, hash);
-    snprintf(state->browser_url, sizeof state->browser_url, "%s:/page/index.mu", hash);
-    (void)rns_micron_history_push(&state->browser_history, state->browser_url);
-    char page[256]; snprintf(page, sizeof page,
-        "# %s\nRemote page request is queued for browser transport wiring.\n", node->name[0] ? node->name : hash);
-    (void)rns_micron_parse(&state->page, (const uint8_t *)page, strlen(page));
-    state->browser_selected = 0u; state->screen = SCREEN_BROWSER; state->node_actions = false;
+    char url[RNS_MICRON_TEXT_MAX];
+    snprintf(url, sizeof url, "%s:/page/index.mu", hash);
+    (void)browser_start_url(state, url, true);
+    state->screen = SCREEN_BROWSER;
+    state->node_actions = false;
 }
 
 static void open_peer_conversation(tui_state *state, const uint8_t destination[16]) {
@@ -744,7 +834,7 @@ static int run_loop(tui_state *state) {
     int result = 0;
     bool running = true;
     while (running) {
-        if(state->runtime){size_t processed=0;uint64_t now=0;(void)rns_runtime_poll(state->runtime,32u,&processed);if(rns_hal_monotonic_ms(&now)==RNS_OK){(void)rns_node_registry_expire(&state->nodes,(double)now/1000.0);if(state->router_ready&&now-state->last_router_poll_ms>=1000u){lxmf_router_poll_result_t delivery={0};if(lxmf_router_poll(&state->router,2u,&delivery)==LXMF_OK)state->last_router_poll_ms=now;}}if(state->nodes.count==0u)state->network_selected=0u;else if(state->network_selected>=state->nodes.count)state->network_selected=state->nodes.count-1u;}
+        if(state->runtime){size_t processed=0;uint64_t now=0;(void)rns_runtime_poll(state->runtime,32u,&processed);if(state->browser!=NULL){(void)rns_browser_poll(state->browser);rns_browser_state_t browser_state=rns_browser_state(state->browser);if(browser_state!=state->browser_last_state){state->browser_last_state=browser_state;if(browser_state==RNS_BROWSER_COMPLETE){const rns_micron_page *page=rns_browser_page(state->browser);if(page!=NULL)state->page=*page;state->browser_selected=0u;snprintf(state->status,sizeof state->status,"Remote Nomad page loaded");}else if(browser_state==RNS_BROWSER_FAILED)snprintf(state->status,sizeof state->status,"Page load failed: %s",rns_status_string(rns_browser_error(state->browser)));}}if(rns_hal_monotonic_ms(&now)==RNS_OK){(void)rns_node_registry_expire(&state->nodes,(double)now/1000.0);if(state->router_ready&&now-state->last_router_poll_ms>=1000u){lxmf_router_poll_result_t delivery={0};if(lxmf_router_poll(&state->router,2u,&delivery)==LXMF_OK)state->last_router_poll_ms=now;}}if(state->nodes.count==0u)state->network_selected=0u;else if(state->network_selected>=state->nodes.count)state->network_selected=state->nodes.count-1u;}
         draw(state);
         int key = getch();
         if(key==ERR)continue;
@@ -853,7 +943,17 @@ static int run_loop(tui_state *state) {
             continue;
         }
         switch (key) {
-            case 'q': case 'Q': case 27: running = false; break;
+            case 'q': case 'Q': running = false; break;
+            case 27:
+                if (state->screen == SCREEN_BROWSER && state->browser != NULL &&
+                    rns_browser_state(state->browser) != RNS_BROWSER_COMPLETE &&
+                    rns_browser_state(state->browser) != RNS_BROWSER_FAILED) {
+                    rns_browser_cancel(state->browser);
+                    state->browser_last_state = RNS_BROWSER_CANCELLED;
+                    snprintf(state->status, sizeof state->status,
+                             "Page request cancelled");
+                } else running = false;
+                break;
             case '?': state->help = true; break;
             case '1': set_tab(state, TRUST_TRUSTED); break;
             case '2': set_tab(state, TRUST_UNKNOWN); break;
@@ -933,6 +1033,8 @@ static int run_loop(tui_state *state) {
             case 'l': case 'L': unavailable_screen(state, SCREEN_LOGS, "Logs"); break;
             case 'r': case 'R':
                 if (state->screen == SCREEN_NETWORK) refresh_selected_node_path(state);
+                else if (state->screen == SCREEN_BROWSER)
+                    (void)browser_start_url(state, state->browser_url, false);
                 else unavailable_screen(state, SCREEN_RRC, "RRC");
                 break;
             case '\n': case KEY_ENTER:
@@ -948,7 +1050,7 @@ static int run_loop(tui_state *state) {
                 }
                 break;
             case KEY_BACKSPACE: case 127: case 8:
-                if(state->screen==SCREEN_BROWSER){const char *url=rns_micron_history_back(&state->browser_history);if(url){snprintf(state->browser_url,sizeof state->browser_url,"%s",url);static const uint8_t home[]="# Nomad Browser\n[Network nodes](/network)\n[Guide](/guide)\n";(void)rns_micron_parse(&state->page,home,sizeof home-1u);state->browser_selected=0;}}
+                if(state->screen==SCREEN_BROWSER){const char *url=rns_micron_history_back(&state->browser_history);if(url)(void)browser_start_url(state,url,false);}
                 break;
             case KEY_RESIZE: break;
             default: break;
