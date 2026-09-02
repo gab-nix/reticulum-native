@@ -25,7 +25,10 @@ typedef struct rns_request_receipt rns_request_receipt_t;
 /* Resource transfer contexts, advertised by peers that answer with a Resource. */
 #define RNS_LINK_CONTEXT_RESOURCE 0x01u
 #define RNS_LINK_CONTEXT_RESOURCE_ADV 0x02u
+#define RNS_LINK_CONTEXT_RESOURCE_REQ 0x03u
+#define RNS_LINK_CONTEXT_RESOURCE_PRF 0x05u
 #define RNS_LINK_CONTEXT_RESOURCE_ICL 0x06u
+#define RNS_LINK_CONTEXT_CACHE_REQUEST 0x08u
 #define RNS_LINK_CONTEXT_REQUEST 0x09u
 #define RNS_LINK_CONTEXT_RESPONSE 0x0au
 #define RNS_LINK_CONTEXT_KEEPALIVE 0xfau

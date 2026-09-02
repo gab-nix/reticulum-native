@@ -1,8 +1,18 @@
 # Compatibility baseline
 
-This project is a clean-room C implementation. Protocol behaviour is verified
-against released upstream software, but upstream implementation source is not
+This project is an independent C implementation. Protocol behaviour is verified
+against released upstream software, and no upstream implementation source is
 copied into this repository.
+
+Most of the stack was derived from observed wire behaviour and the published
+documentation. The Resource sub-protocol is the exception: no byte-level
+specification for it is published, and the upstream manual states that the
+Python reference implementation is the only complete authority. Its wire format
+(advertisement fields, part-request layout, map hash derivation, assembly order
+and proof) was therefore read from the pinned reference implementation and
+reimplemented in original C. This project is consequently not clean-room with
+respect to the Resource sub-protocol, and the earlier clean-room claim has been
+withdrawn rather than left inaccurate.
 
 The initial interoperability baseline, resolved on 2026-09-01, is:
 

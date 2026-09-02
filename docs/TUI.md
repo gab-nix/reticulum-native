@@ -69,16 +69,20 @@ resize prompt instead of drawing an unusable layout.
 For automated checks and accessibility, `nomad-chat tui --dump-ui IDENTITY
 STORE [DESTINATION]` prints the same essential state without starting curses.
 
-## Page loading limitation
+## Page loading
 
 Nomad Network sends any page larger than the link MDU as a Reticulum
-**Resource**. Resource transfer is not implemented, so those pages cannot be
-retrieved: the node advertises the resource, the client cannot accept it, and
-the browser reports `page is sent as a Reticulum Resource, which is not
-supported yet`. Only pages small enough to fit in a single response packet can
-load today. While a request is in flight the browser shows the progress line
-alone; a retained page from a previous URL is only redisplayed after a failure
-and is labelled as such.
+**Resource**, which is how nearly every real page arrives. Both packet-backed
+and resource-backed pages now load. While a request is in flight the browser
+shows the progress line alone; a retained page from a previous URL is only
+redisplayed after a failure and is labelled as such.
+
+Two limits remain. Resources spanning more than one segment, or more than the
+74 parts a single advertisement hashmap carries, are refused with
+`page is sent as a Reticulum Resource, which is not supported yet`. And the
+Micron renderer understands only a minimal markup subset, so real Micron
+formatting and `` `[label`target] `` links currently render as raw text rather
+than as selectable links.
 
 Use `nomad-chat tui --config CONFIG IDENTITY STORE [DESTINATION]` to start the
 caller-polled UDP/TCP runtime. Verified announces populate the Network screen;

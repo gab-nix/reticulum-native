@@ -14,6 +14,9 @@ set(RETICULUM_SANITIZERS "" CACHE STRING
 
 find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
 find_package(Threads REQUIRED)
+# Resource payloads are bz2 compressed. Without it, compressed resources are
+# rejected with RNS_ERROR_UNSUPPORTED rather than failing the build.
+find_package(BZip2)
 
 file(GLOB_RECURSE RETICULUM_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
@@ -36,6 +39,13 @@ target_include_directories(reticulum
 target_link_libraries(reticulum
     PUBLIC OpenSSL::Crypto
     PRIVATE Threads::Threads)
+
+if(BZip2_FOUND)
+    target_link_libraries(reticulum PRIVATE BZip2::BZip2)
+    target_compile_definitions(reticulum PRIVATE RETICULUM_HAVE_BZIP2=1)
+else()
+    message(WARNING "libbz2 not found: compressed Reticulum resources will be rejected")
+endif()
 
 include(cmake/CompilerWarnings.cmake)
 reticulum_set_project_warnings(reticulum)
