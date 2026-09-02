@@ -32,7 +32,7 @@ typedef enum { TRUST_TRUSTED, TRUST_UNKNOWN, TRUST_UNTRUSTED } trust_group;
 typedef enum { SCREEN_CONVERSATIONS, SCREEN_NETWORK, SCREEN_BROWSER,
                SCREEN_NODE, SCREEN_CONFIG, SCREEN_GUIDE, SCREEN_LOGS,
                SCREEN_RRC, SCREEN_COUNT } tui_screen;
-typedef enum { INPUT_NONE, INPUT_COMPOSE, INPUT_SEARCH } input_mode;
+typedef enum { INPUT_NONE, INPUT_COMPOSE, INPUT_SEARCH, INPUT_ADDRESS } input_mode;
 
 typedef struct {
     uint8_t peer[16];
@@ -72,6 +72,11 @@ typedef struct {
     size_t selected_message;
     bool help;
     bool peer_info;
+    bool node_actions;
+    size_t network_selected;
+    char address_input[33];
+    size_t address_length;
+    size_t address_cursor;
     rns_node_registry nodes;
     rns_runtime_t *runtime;
     char node_store_path[1024];
@@ -330,6 +335,15 @@ static void centered_box(const char *title, const char *const *lines, size_t cou
     delwin(popup);
 }
 
+static bool selected_network_node(const tui_state *state, rns_node_record *record) {
+    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
+    size_t count = rns_node_registry_sorted(&state->nodes, sorted,
+                                             RNS_NODE_REGISTRY_MAX);
+    if (!record || state->network_selected >= count) return false;
+    *record = sorted[state->network_selected];
+    return true;
+}
+
 static void draw_network(tui_state *state, int rows, int columns) {
     attron(A_BOLD); clipped(stdscr, 3, 1, columns - 2, "Active and known nodes"); attroff(A_BOLD);
     if (state->nodes.count == 0u) {
@@ -341,13 +355,22 @@ static void draw_network(tui_state *state, int rows, int columns) {
                                                   RNS_NODE_REGISTRY_MAX);
     for (size_t i = 0; i < node_count && (int)i < rows - 8; ++i) {
         char address[33], line[160]; hex_format(sorted[i].destination, 16u, address);
-        snprintf(line, sizeof line, "%s  %u hops  if:%llu  %s", address,
-                 (unsigned)sorted[i].hops,
+        if (i == state->network_selected) attron(A_REVERSE);
+        snprintf(line, sizeof line, "%s%s%s  %u hops  if:%llu  %s",
+                 sorted[i].name[0] ? sorted[i].name : "",
+                 sorted[i].name[0] ? "  " : "", address, (unsigned)sorted[i].hops,
                  (unsigned long long)sorted[i].interface_id,
                  sorted[i].reachable ? "reachable" : "stale");
         clipped(stdscr, 5 + (int)i, 2, columns - 4, line);
+        if (i == state->network_selected) attroff(A_REVERSE);
     }
-    clipped(stdscr, rows - 2, 0, columns, "B browser  C conversations  q quit");
+    clipped(stdscr, rows - 2, 0, columns, "j/k select  Enter actions  B browser  C conversations  q quit");
+    if (state->node_actions && node_count > 0u) {
+        static const char *const actions[] = {
+            "B: browse Nomad page", "M: message associated LXMF inbox", "Esc: cancel"
+        };
+        centered_box("Known node actions", actions, sizeof actions / sizeof actions[0]);
+    }
 }
 
 static size_t browser_link_count(const tui_state *state) {
@@ -460,11 +483,14 @@ static void draw(tui_state *state) {
 
     mvhline(rows - 4, 0, ACS_HLINE, columns);
     const bool entering = state->input != INPUT_NONE;
-    const char *prompt = state->input == INPUT_COMPOSE ? "Message: " : "Search: ";
+    const char *prompt = state->input == INPUT_COMPOSE ? "Message: " :
+                         state->input == INPUT_ADDRESS ? "Address: " : "Search: ";
     clipped(stdscr, rows - 3, 0, columns, entering ? prompt : state->status);
     if (entering) {
-        const char *value = state->input == INPUT_COMPOSE ? state->composer : state->search;
-        size_t cursor = state->input == INPUT_COMPOSE ? state->composer_cursor : state->search_cursor;
+        const char *value = state->input == INPUT_COMPOSE ? state->composer :
+                            state->input == INPUT_ADDRESS ? state->address_input : state->search;
+        size_t cursor = state->input == INPUT_COMPOSE ? state->composer_cursor :
+                        state->input == INPUT_ADDRESS ? state->address_cursor : state->search_cursor;
         clipped(stdscr, rows - 3, 9, columns - 9, value);
         int cursor_x = 9 + (int)cursor;
         move(rows - 3, cursor_x < columns ? cursor_x : columns - 1);
@@ -566,6 +592,26 @@ static void unavailable_screen(tui_state *state, tui_screen screen,
 
 static void browser_open_selected(tui_state *state){const rns_micron_item *item=browser_link_at(state,state->browser_selected);if(!item)return;char url[RNS_MICRON_TEXT_MAX];if(!rns_micron_normalize_url(state->browser_url,item->target,url,sizeof url)||!rns_micron_history_push(&state->browser_history,url)){snprintf(state->status,sizeof state->status,"Invalid or oversized link");return;}snprintf(state->browser_url,sizeof state->browser_url,"%s",url);char page[RNS_MICRON_TEXT_MAX+80];snprintf(page,sizeof page,"# %s\nPage request transport is not connected yet.\n[Back to home](/home)\n",url);(void)rns_micron_parse(&state->page,(const uint8_t*)page,strlen(page));state->browser_selected=0;}
 
+static void open_node_browser(tui_state *state, const rns_node_record *node) {
+    char hash[33]; hex_format(node->destination, 16u, hash);
+    snprintf(state->browser_url, sizeof state->browser_url, "%s:/page/index.mu", hash);
+    (void)rns_micron_history_push(&state->browser_history, state->browser_url);
+    char page[256]; snprintf(page, sizeof page,
+        "# %s\nRemote page request is queued for browser transport wiring.\n", node->name[0] ? node->name : hash);
+    (void)rns_micron_parse(&state->page, (const uint8_t *)page, strlen(page));
+    state->browser_selected = 0u; state->screen = SCREEN_BROWSER; state->node_actions = false;
+}
+
+static void open_peer_conversation(tui_state *state, const uint8_t destination[16]) {
+    add_contact(state, destination);
+    size_t found=state->contact_count;
+    for (size_t i=0;i<state->contact_count;i++) if (!memcmp(state->contacts[i].peer,destination,16u)) { found=i; break; }
+    if(found==state->contact_count){snprintf(state->status,sizeof state->status,"Conversation limit reached");state->node_actions=false;return;}
+    state->selected=found;
+    state->contacts[state->selected].trust=TRUST_UNKNOWN; state->tab=TRUST_UNKNOWN;
+    state->screen=SCREEN_CONVERSATIONS; state->node_actions=false; state->input=INPUT_COMPOSE; curs_set(1);
+}
+
 static int run_loop(tui_state *state) {
     if (!setlocale(LC_ALL, "")) return -1;
     if (!initscr()) return -1;
@@ -577,10 +623,24 @@ static int run_loop(tui_state *state) {
     int result = 0;
     bool running = true;
     while (running) {
-        if(state->runtime){size_t processed=0;uint64_t now=0;(void)rns_runtime_poll(state->runtime,32u,&processed);if(rns_hal_monotonic_ms(&now)==RNS_OK)(void)rns_node_registry_expire(&state->nodes,(double)now/1000.0);}
+        if(state->runtime){size_t processed=0;uint64_t now=0;(void)rns_runtime_poll(state->runtime,32u,&processed);if(rns_hal_monotonic_ms(&now)==RNS_OK)(void)rns_node_registry_expire(&state->nodes,(double)now/1000.0);if(state->nodes.count==0u)state->network_selected=0u;else if(state->network_selected>=state->nodes.count)state->network_selected=state->nodes.count-1u;}
         draw(state);
         int key = getch();
         if(key==ERR)continue;
+        if (state->node_actions) {
+            rns_node_record node;
+            bool selected_node = selected_network_node(state, &node);
+            if (key == 27) state->node_actions = false;
+            else if ((key == 'b' || key == 'B') && selected_node)
+                open_node_browser(state, &node);
+            else if ((key == 'm' || key == 'M') && selected_node) {
+                if (node.has_message_destination)
+                    open_peer_conversation(state, node.message_destination);
+                else snprintf(state->status, sizeof state->status,
+                              "This announce has no associated LXMF inbox");
+            }
+            continue;
+        }
         if (state->help || state->peer_info) {
             if (key == 27 || key == '?' || key == 'i') {
                 state->help = false;
@@ -589,15 +649,27 @@ static int run_loop(tui_state *state) {
             continue;
         }
         if (state->input != INPUT_NONE) {
-            char *buffer = state->input == INPUT_COMPOSE ? state->composer : state->search;
-            size_t *length = state->input == INPUT_COMPOSE ? &state->composer_length : &state->search_length;
-            size_t *cursor = state->input == INPUT_COMPOSE ? &state->composer_cursor : &state->search_cursor;
-            size_t capacity = state->input == INPUT_COMPOSE ? TUI_COMPOSER_MAX : TUI_SEARCH_MAX;
+            char *buffer = state->input == INPUT_COMPOSE ? state->composer :
+                           state->input == INPUT_ADDRESS ? state->address_input : state->search;
+            size_t *length = state->input == INPUT_COMPOSE ? &state->composer_length :
+                             state->input == INPUT_ADDRESS ? &state->address_length : &state->search_length;
+            size_t *cursor = state->input == INPUT_COMPOSE ? &state->composer_cursor :
+                             state->input == INPUT_ADDRESS ? &state->address_cursor : &state->search_cursor;
+            size_t capacity = state->input == INPUT_COMPOSE ? TUI_COMPOSER_MAX :
+                              state->input == INPUT_ADDRESS ? 32u : TUI_SEARCH_MAX;
             if (key == 27) {
                 state->input = INPUT_NONE;
                 curs_set(0);
             } else if (key == '\n' || key == KEY_ENTER) {
-                if (state->input == INPUT_SEARCH) {
+                if (state->input == INPUT_ADDRESS) {
+                    uint8_t destination[16];
+                    if (hex_parse_16(state->address_input, destination)) {
+                        state->address_length = state->address_cursor = 0u;
+                        state->address_input[0] = '\0';
+                        open_peer_conversation(state, destination);
+                    } else snprintf(state->status, sizeof state->status,
+                                    "Address must be exactly 32 hexadecimal characters");
+                } else if (state->input == INPUT_SEARCH) {
                     state->input = INPUT_NONE;
                     size_t first = visible_at(state, 0u);
                     if (first < state->contact_count) state->selected = first;
@@ -664,15 +736,26 @@ static int run_loop(tui_state *state) {
             case '2': set_tab(state, TRUST_UNKNOWN); break;
             case '3': set_tab(state, TRUST_UNTRUSTED); break;
             case KEY_UP: case 'k':
-                if(state->screen==SCREEN_BROWSER){if(state->browser_selected>0)state->browser_selected--;}else select_delta(state, -1); break;
+                if(state->screen==SCREEN_BROWSER){if(state->browser_selected>0)state->browser_selected--;}
+                else if(state->screen==SCREEN_NETWORK){if(state->network_selected>0)state->network_selected--;}
+                else select_delta(state, -1); break;
             case KEY_DOWN: case 'j': case '\t':
-                if(state->screen==SCREEN_BROWSER){size_t n=browser_link_count(state);if(n)state->browser_selected=(state->browser_selected+1u)%n;}else select_delta(state, 1); break;
+                if(state->screen==SCREEN_BROWSER){size_t n=browser_link_count(state);if(n)state->browser_selected=(state->browser_selected+1u)%n;}
+                else if(state->screen==SCREEN_NETWORK){if(state->network_selected+1u<state->nodes.count)state->network_selected++;}
+                else select_delta(state, 1); break;
             case KEY_PPAGE: state->scroll += 5u; break;
             case KEY_NPAGE: state->scroll = state->scroll > 5u ? state->scroll - 5u : 0u; break;
             case '/':
                 state->input = INPUT_SEARCH;
                 state->search_cursor = state->search_length;
                 curs_set(1);
+                break;
+            case 'a': case 'A':
+                if (state->screen == SCREEN_CONVERSATIONS) {
+                    state->input = INPUT_ADDRESS;
+                    state->address_length = state->address_cursor = 0u;
+                    state->address_input[0] = '\0'; curs_set(1);
+                }
                 break;
             case 'i': if (state->selected < state->contact_count) state->peer_info = true; break;
             case 'p':
@@ -726,6 +809,8 @@ static int run_loop(tui_state *state) {
             case 'r': case 'R': unavailable_screen(state, SCREEN_RRC, "RRC"); break;
             case '\n': case KEY_ENTER:
                 if(state->screen==SCREEN_BROWSER) browser_open_selected(state);
+                else if(state->screen==SCREEN_NETWORK && state->nodes.count>0u)
+                    state->node_actions=true;
                 else if (state->contact_count > 0u) {
                     state->input = INPUT_COMPOSE;
                     curs_set(1);

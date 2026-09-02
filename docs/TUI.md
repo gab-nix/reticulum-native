@@ -20,6 +20,8 @@ transport. Queued messages are not claimed as sent.
 - `Page Up`/`Page Down`: scroll conversation history.
 - `/`: search addresses, local notes, and message text in the current trust tab.
 - `Enter`: open the composer; in the composer, queue the message locally.
+- `a`: enter a 32-hex LXMF address, select or create that conversation, and
+  open its composer.
 - `Left`/`Right`, `Home`/`End`, `Delete`, and `Backspace`: edit input.
 - `Ctrl-A`/`Ctrl-E`, `Ctrl-B`/`Ctrl-F`, `Ctrl-U`/`Ctrl-K`, and `Ctrl-W`:
   move to line boundaries, move by one character, erase around the cursor, or
@@ -41,6 +43,12 @@ the bounded active-node registry, and Browser renders parsed Micron content with
 link selection plus bounded back history. Live announce ingestion and remote
 page requests are still explicitly labelled disconnected. The other screens
 report an explicit “not implemented” status.
+
+In Network, use `j`/`k` or the arrow keys to select a verified announce and
+press Enter. The action popup offers `B` to open the node's Nomad address or
+`M` to open a conversation with the `lxmf.delivery` address derived from the
+same verified identity. An unrelated announce without an associated inbox
+cannot be messaged through this shortcut.
 
 Delivery markers are `[.]` queued, `[>]` sending, `[+]` sent, `[x]` delivered,
 and `[!]` failed. Incoming messages have no delivery marker. On narrow terminals
