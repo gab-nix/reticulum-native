@@ -3,6 +3,7 @@
 
 #include "reticulum/announce.h"
 #include "reticulum/buffer.h"
+#include "reticulum/config.h"
 #include "reticulum/crypto.h"
 #include "reticulum/destination.h"
 #include "reticulum/framing.h"
