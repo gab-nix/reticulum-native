@@ -9,3 +9,5 @@
 *.gcno
 *.profraw
 *.profdata
+*.identity
+*.lxms

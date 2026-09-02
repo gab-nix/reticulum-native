@@ -1,8 +1,7 @@
 # Implementation status
 
-This file deliberately distinguishes implemented, tested behaviour from planned
-compatibility. Passing local tests is not a claim of full Reticulum or Nomad
-Network interoperability.
+The detailed source of truth is [FEATURE_STATUS.md](FEATURE_STATUS.md). Passing
+local tests is not a claim of full Reticulum or Nomad Network interoperability.
 
 ## Implemented
 
