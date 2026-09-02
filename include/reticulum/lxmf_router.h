@@ -2,6 +2,7 @@
 #define RETICULUM_LXMF_ROUTER_H
 
 #include "reticulum/lxmf.h"
+#include "reticulum/lxmf_store.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,6 +47,26 @@ typedef struct {
     lxmf_clock_fn clock;
     void *clock_context;
 } lxmf_contact_book_t;
+
+typedef const rns_identity *(*lxmf_router_identity_resolver_fn)(
+    void *context, const uint8_t destination[LXMF_DESTINATION_LENGTH]);
+typedef lxmf_status_t (*lxmf_router_send_fn)(void *context,
+                                             const uint8_t *packet,
+                                             size_t packet_length);
+typedef struct {
+    rns_identity *identity;
+    lxmf_store_t *store;
+    lxmf_router_identity_resolver_fn resolve_identity;
+    void *resolve_context;
+    lxmf_router_send_fn send_packet;
+    void *send_context;
+} lxmf_router_config_t;
+typedef struct { lxmf_router_config_t config; } lxmf_router_t;
+
+lxmf_status_t lxmf_router_init(lxmf_router_t *router,
+                               const lxmf_router_config_t *config);
+lxmf_status_t lxmf_router_send_message(lxmf_router_t *router,
+                                       const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]);
 
 lxmf_status_t lxmf_contact_book_init(lxmf_contact_book_t *book,
                                      lxmf_contact_t *storage, size_t capacity,
