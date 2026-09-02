@@ -24,6 +24,7 @@ reticulum_add_test(test_link unit/test_link.c)
 reticulum_add_test(test_lxmf_delivery unit/test_lxmf_delivery.c)
 reticulum_add_test(test_udp integration/test_udp.c)
 reticulum_add_test(test_tcp integration/test_tcp.c)
+reticulum_add_test(test_udp_lxmf integration/test_udp_lxmf.c)
 
 if(TARGET rnid)
     add_test(NAME test_rnid
