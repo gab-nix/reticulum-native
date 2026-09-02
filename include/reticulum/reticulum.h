@@ -12,6 +12,7 @@
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_router.h"
 #include "reticulum/lxmf_store.h"
+#include "reticulum/link.h"
 #include "reticulum/node.h"
 #include "reticulum/packet.h"
 #include "reticulum/status.h"

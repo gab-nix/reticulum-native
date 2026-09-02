@@ -20,6 +20,7 @@ reticulum_add_test(test_lxmf_router unit/test_lxmf_router.c)
 reticulum_add_test(test_node unit/test_node.c)
 reticulum_add_test(test_lxmf_store unit/test_lxmf_store.c)
 reticulum_add_test(test_config unit/test_config.c)
+reticulum_add_test(test_link unit/test_link.c)
 reticulum_add_test(test_udp integration/test_udp.c)
 reticulum_add_test(test_tcp integration/test_tcp.c)
 
