@@ -480,9 +480,6 @@ void tui_state_poll(tui_state_t *state) {
                 state->router_polled_ms = now;
         }
     }
-    if (state->nodes.count == 0u) state->node_selected = 0u;
-    else if (state->node_selected >= state->nodes.count)
-        state->node_selected = state->nodes.count - 1u;
 }
 
 /* ---------------------------------------------------------------- selection */
@@ -636,20 +633,63 @@ size_t tui_state_node_count(const tui_state_t *state) {
     return state != NULL ? state->nodes.count : 0u;
 }
 
+size_t tui_state_node_list(const tui_state_t *state, rns_node_record *out,
+                           size_t capacity) {
+    if (state == NULL || out == NULL || capacity == 0u) return 0u;
+    return rns_node_registry_sorted(&state->nodes, out, capacity);
+}
+
+bool tui_state_node_serves_pages(const rns_node_record *node) {
+    return node != NULL && node->kind == RNS_NODE_KIND_NOMAD;
+}
+
 bool tui_state_selected_node(const tui_state_t *state, rns_node_record *record) {
-    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
-    if (state == NULL || record == NULL) return false;
-    size_t count = rns_node_registry_sorted(&state->nodes, sorted, RNS_NODE_REGISTRY_MAX);
-    if (state->node_selected >= count) return false;
-    *record = sorted[state->node_selected];
+    if (state == NULL || record == NULL || !state->has_node_selection) return false;
+    const rns_node_record *found = rns_node_registry_get(&state->nodes,
+                                                         state->node_selection);
+    if (found == NULL) return false;
+    *record = *found;
     return true;
+}
+
+size_t tui_state_node_position(const tui_state_t *state) {
+    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
+    if (state == NULL || !state->has_node_selection) return 0u;
+    size_t count = rns_node_registry_sorted(&state->nodes, sorted, RNS_NODE_REGISTRY_MAX);
+    for (size_t i = 0u; i < count; ++i)
+        if (memcmp(sorted[i].destination, state->node_selection,
+                   LXMF_DESTINATION_LENGTH) == 0) return i;
+    return 0u;
+}
+
+void tui_state_node_move(tui_state_t *state, int delta) {
+    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
+    if (state == NULL) return;
+    size_t count = rns_node_registry_sorted(&state->nodes, sorted, RNS_NODE_REGISTRY_MAX);
+    if (count == 0u) {
+        state->has_node_selection = false;
+        return;
+    }
+    size_t position = tui_state_node_position(state);
+    if (!state->has_node_selection) position = 0u;
+    else if (delta < 0) {
+        size_t back = (size_t)(-delta);
+        position = position > back ? position - back : 0u;
+    } else {
+        position += (size_t)delta;
+        if (position >= count) position = count - 1u;
+    }
+    memcpy(state->node_selection, sorted[position].destination,
+           LXMF_DESTINATION_LENGTH);
+    state->has_node_selection = true;
 }
 
 void tui_state_request_path(tui_state_t *state) {
     rns_node_record node;
     if (state == NULL) return;
-    if (state->runtime == NULL || !tui_state_selected_node(state, &node))
-        tui_state_set_status(state, "No runtime or selected node");
+    if (state->runtime == NULL) tui_state_set_status(state, "No network runtime");
+    else if (!tui_state_selected_node(state, &node))
+        tui_state_set_status(state, "No node selected");
     else if (rns_runtime_request_path(state->runtime, node.destination) == RNS_OK)
         tui_state_set_status(state, "Path refresh requested");
     else tui_state_set_status(state, "Path refresh could not be sent");
@@ -749,6 +789,16 @@ void tui_state_browse_node(tui_state_t *state, const rns_node_record *node) {
     char hash[TUI_ADDRESS_DIGITS + 1u];
     char url[RNS_MICRON_TEXT_MAX];
     if (state == NULL || node == NULL) return;
+    /*
+     * Most announces are LXMF inboxes or transport nodes that serve no pages;
+     * requesting one just times out, so say so instead.
+     */
+    if (!tui_state_node_serves_pages(node)) {
+        tui_state_set_status(state,
+                             "This announce is not a Nomad Network node and serves no pages");
+        state->overlay = TUI_OVERLAY_NONE;
+        return;
+    }
     tui_hex_format(node->destination, LXMF_DESTINATION_LENGTH, hash);
     (void)snprintf(url, sizeof url, "%s:/page/index.mu", hash);
     (void)tui_state_browse(state, url, true);

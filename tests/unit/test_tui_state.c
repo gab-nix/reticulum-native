@@ -178,7 +178,95 @@ static void test_contact_table_bound(void) {
     destroy_state(state);
 }
 
+static void add_node(tui_state_t *state, uint8_t tag, uint8_t hops,
+                     rns_node_kind kind, double seen) {
+    rns_node_record r;
+    memset(&r, 0, sizeof r);
+    r.destination[0] = tag;
+    r.hops = hops;
+    r.kind = kind;
+    r.seen_at = seen;
+    r.expires_at = seen + 3600.0;
+    r.reachable = true;
+    assert(rns_node_registry_upsert(&state->nodes, &r) != 0);
+}
+
+static void test_node_selection_survives_resort(void) {
+    tui_state_t *state = make_state();
+    rns_node_registry_init(&state->nodes, 3600.0);
+    add_node(state, 0xa1u, 5u, RNS_NODE_KIND_OTHER, 100.0);
+    add_node(state, 0xa2u, 3u, RNS_NODE_KIND_NOMAD, 100.0);
+    add_node(state, 0xa3u, 9u, RNS_NODE_KIND_LXMF, 100.0);
+
+    tui_state_node_move(state, 0);
+    assert(state->has_node_selection);
+    tui_state_node_move(state, 1);
+    rns_node_record chosen;
+    assert(tui_state_selected_node(state, &chosen));
+    uint8_t tag = chosen.destination[0];
+
+    /*
+     * A closer node arriving re-sorts the list. The cursor must stay on the
+     * node the user picked, not on whatever now occupies that row.
+     */
+    add_node(state, 0xb9u, 1u, RNS_NODE_KIND_NOMAD, 200.0);
+    rns_node_record after;
+    assert(tui_state_selected_node(state, &after));
+    assert(after.destination[0] == tag);
+    destroy_state(state);
+}
+
+static void test_node_move_clamps(void) {
+    tui_state_t *state = make_state();
+    rns_node_registry_init(&state->nodes, 3600.0);
+    add_node(state, 0xa1u, 1u, RNS_NODE_KIND_NOMAD, 100.0);
+    add_node(state, 0xa2u, 2u, RNS_NODE_KIND_NOMAD, 100.0);
+    add_node(state, 0xa3u, 3u, RNS_NODE_KIND_NOMAD, 100.0);
+    tui_state_node_move(state, 0);
+    assert(tui_state_node_position(state) == 0u);
+    tui_state_node_move(state, -5);
+    assert(tui_state_node_position(state) == 0u);
+    tui_state_node_move(state, 99);
+    assert(tui_state_node_position(state) == 2u);
+    tui_state_node_move(state, 1);
+    assert(tui_state_node_position(state) == 2u);
+    destroy_state(state);
+}
+
+static void test_only_nomad_nodes_serve_pages(void) {
+    rns_node_record nomad = {0}, lxmf = {0}, other = {0};
+    nomad.kind = RNS_NODE_KIND_NOMAD;
+    lxmf.kind = RNS_NODE_KIND_LXMF;
+    other.kind = RNS_NODE_KIND_OTHER;
+    assert(tui_state_node_serves_pages(&nomad));
+    assert(!tui_state_node_serves_pages(&lxmf));
+    assert(!tui_state_node_serves_pages(&other));
+    assert(!tui_state_node_serves_pages(NULL));
+
+    /* Browsing a destination that serves no pages is refused up front. */
+    tui_state_t *state = make_state();
+    rns_node_registry_init(&state->nodes, 3600.0);
+    tui_state_browse_node(state, &lxmf);
+    assert(strstr(state->status, "serves no pages") != NULL);
+    destroy_state(state);
+}
+
+static void test_empty_registry_has_no_selection(void) {
+    tui_state_t *state = make_state();
+    rns_node_registry_init(&state->nodes, 3600.0);
+    rns_node_record record;
+    tui_state_node_move(state, 1);
+    assert(!state->has_node_selection);
+    assert(!tui_state_selected_node(state, &record));
+    assert(tui_state_node_position(state) == 0u);
+    destroy_state(state);
+}
+
 int main(void) {
+    test_node_selection_survives_resort();
+    test_node_move_clamps();
+    test_only_nomad_nodes_serve_pages();
+    test_empty_registry_has_no_selection();
     test_trust_tabs();
     test_thread_and_search();
     test_selection_cycles();

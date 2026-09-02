@@ -22,6 +22,10 @@ typedef struct rns_request_receipt rns_request_receipt_t;
 #define RNS_RUNTIME_MAX_LINKS 16u
 #define RNS_RUNTIME_MAX_REQUESTS 8u
 #define RNS_REQUEST_DEFAULT_MAX_RESPONSE (8u * 1024u * 1024u)
+/* Resource transfer contexts, advertised by peers that answer with a Resource. */
+#define RNS_LINK_CONTEXT_RESOURCE 0x01u
+#define RNS_LINK_CONTEXT_RESOURCE_ADV 0x02u
+#define RNS_LINK_CONTEXT_RESOURCE_ICL 0x06u
 #define RNS_LINK_CONTEXT_REQUEST 0x09u
 #define RNS_LINK_CONTEXT_RESPONSE 0x0au
 #define RNS_LINK_CONTEXT_KEEPALIVE 0xfau

@@ -94,15 +94,20 @@ static void handle_field_key(tui_state_t *state, int key) {
 
 static void handle_node_actions_key(tui_state_t *state, int key) {
     rns_node_record node;
-    bool has_node = tui_state_selected_node(state, &node);
     if (key == 27) {
         state->overlay = TUI_OVERLAY_NONE;
-    } else if ((key == 'b' || key == 'B') && has_node) {
+        return;
+    }
+    if (!tui_state_selected_node(state, &node)) return;
+    if (key == 'b' || key == 'B') {
         tui_state_browse_node(state, &node);
-    } else if ((key == 'm' || key == 'M') && has_node) {
+    } else if (key == 'm' || key == 'M') {
         if (node.has_message_destination)
             (void)tui_state_open_conversation(state, node.message_destination);
         else tui_state_set_status(state, "This announce has no associated LXMF inbox");
+    } else if (key == 'r' || key == 'R') {
+        tui_state_request_path(state);
+        state->overlay = TUI_OVERLAY_NONE;
     }
 }
 
@@ -110,7 +115,7 @@ static void select_previous(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_BROWSER) {
         if (state->link_selected > 0u) --state->link_selected;
     } else if (state->screen == TUI_SCREEN_NETWORK) {
-        if (state->node_selected > 0u) --state->node_selected;
+        tui_state_node_move(state, -1);
     } else tui_state_select_offset(state, -1);
 }
 
@@ -119,8 +124,7 @@ static void select_next(tui_state_t *state) {
         size_t links = tui_state_link_count(state);
         if (links > 0u) state->link_selected = (state->link_selected + 1u) % links;
     } else if (state->screen == TUI_SCREEN_NETWORK) {
-        if (state->node_selected + 1u < tui_state_node_count(state))
-            ++state->node_selected;
+        tui_state_node_move(state, 1);
     } else tui_state_select_offset(state, 1);
 }
 
@@ -128,6 +132,7 @@ static void activate(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_BROWSER) {
         tui_state_browse_selected(state);
     } else if (state->screen == TUI_SCREEN_NETWORK && tui_state_node_count(state) > 0u) {
+        if (!state->has_node_selection) tui_state_node_move(state, 0);
         state->overlay = TUI_OVERLAY_NODE_ACTIONS;
     } else if (state->contact_count > 0u) {
         state->field = TUI_FIELD_COMPOSE;

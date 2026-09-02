@@ -49,11 +49,17 @@ the browser performs real path discovery, link establishment and page requests,
 and reports loading, failure and cancellation states. The other screens report
 an explicit “not implemented” status.
 
-In Network, use `j`/`k` or the arrow keys to select a verified announce and
-press Enter. The action popup offers `B` to open the node's Nomad address or
-`M` to open a conversation with the `lxmf.delivery` address derived from the
-same verified identity. An unrelated announce without an associated inbox
-cannot be messaged through this shortcut.
+In Network, use `j`/`k` or the arrow keys to select a verified announce. The
+list scrolls around the selection, and the selection is held by destination
+address rather than by row, so it stays on the same node as new announces
+re-sort the list. Rows that serve Micron pages are marked `PAGE`.
+
+Enter opens a details popup showing the address, announced name, node type,
+route, and associated LXMF inbox, followed by the actions that apply to that
+node: `b` to browse its pages, `m` to open a conversation with its
+`lxmf.delivery` address, `r` to refresh its path, and `Esc` to close. Actions
+that cannot apply are listed with the reason, because most announces are LXMF
+inboxes or transport nodes that serve no pages at all.
 
 Delivery markers are `[.]` queued, `[>]` sending, `[+]` sent, `[x]` delivered,
 and `[!]` failed. Incoming messages have no delivery marker. On narrow terminals
@@ -62,6 +68,17 @@ resize prompt instead of drawing an unusable layout.
 
 For automated checks and accessibility, `nomad-chat tui --dump-ui IDENTITY
 STORE [DESTINATION]` prints the same essential state without starting curses.
+
+## Page loading limitation
+
+Nomad Network sends any page larger than the link MDU as a Reticulum
+**Resource**. Resource transfer is not implemented, so those pages cannot be
+retrieved: the node advertises the resource, the client cannot accept it, and
+the browser reports `page is sent as a Reticulum Resource, which is not
+supported yet`. Only pages small enough to fit in a single response packet can
+load today. While a request is in flight the browser shows the progress line
+alone; a retained page from a previous URL is only redisplayed after a failure
+and is labelled as such.
 
 Use `nomad-chat tui --config CONFIG IDENTITY STORE [DESTINATION]` to start the
 caller-polled UDP/TCP runtime. Verified announces populate the Network screen;

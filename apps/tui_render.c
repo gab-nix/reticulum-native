@@ -51,23 +51,38 @@ static void clipped(WINDOW *window, int y, int x, int width, const char *text) {
     if (width > 0) (void)mvwaddnstr(window, y, x, text, width);
 }
 
+/*
+ * Overlays are drawn straight into stdscr and painted by the single refresh at
+ * the end of the frame. A separate window would be erased and repainted by
+ * every stdscr refresh, which flickers at the redraw interval.
+ */
 static void centered_box(const char *title, const char *const *lines, size_t count) {
     int rows, columns;
     getmaxyx(stdscr, rows, columns);
     int width = columns > 70 ? 68 : columns - 4;
     int height = (int)count + 4;
     if (width < 20 || rows < height + 2) return;
-    WINDOW *popup = newwin(height, width, (rows - height) / 2, (columns - width) / 2);
-    if (popup == NULL) return;
-    (void)wbkgd(popup, A_REVERSE);
-    (void)box(popup, 0, 0);
-    (void)wattron(popup, A_BOLD);
-    clipped(popup, 1, 2, width - 4, title);
-    (void)wattroff(popup, A_BOLD);
+    int top = (rows - height) / 2;
+    int left = (columns - width) / 2;
+    (void)attron(A_REVERSE);
+    for (int y = 0; y < height; ++y) {
+        (void)move(top + y, left);
+        for (int x = 0; x < width; ++x) (void)addch(' ');
+    }
+    (void)mvhline(top, left, ACS_HLINE, width);
+    (void)mvhline(top + height - 1, left, ACS_HLINE, width);
+    (void)mvvline(top, left, ACS_VLINE, height);
+    (void)mvvline(top, left + width - 1, ACS_VLINE, height);
+    (void)mvaddch(top, left, ACS_ULCORNER);
+    (void)mvaddch(top, left + width - 1, ACS_URCORNER);
+    (void)mvaddch(top + height - 1, left, ACS_LLCORNER);
+    (void)mvaddch(top + height - 1, left + width - 1, ACS_LRCORNER);
+    (void)attron(A_BOLD);
+    clipped(stdscr, top + 1, left + 2, width - 4, title);
+    (void)attroff(A_BOLD);
     for (size_t i = 0u; i < count; ++i)
-        clipped(popup, 2 + (int)i, 2, width - 4, lines[i]);
-    (void)wrefresh(popup);
-    (void)delwin(popup);
+        clipped(stdscr, top + 2 + (int)i, left + 2, width - 4, lines[i]);
+    (void)attroff(A_REVERSE);
 }
 
 static const char *delivery_marker(lxmf_delivery_status_t status) {
@@ -234,38 +249,110 @@ static void draw_conversation_overlay(const tui_state_t *state) {
     centered_box("Peer information", lines, sizeof lines / sizeof lines[0]);
 }
 
+/*
+ * RNS_ERROR_UNSUPPORTED from the browser means the node answered with a
+ * Resource, which the stack cannot receive yet. "unsupported operation" does
+ * not tell anyone that, so name the real reason.
+ */
+static const char *tui_browser_error_text(const rns_browser_t *browser) {
+    rns_status_t error = rns_browser_error(browser);
+    if (error == RNS_ERROR_UNSUPPORTED)
+        return "page is sent as a Reticulum Resource, which is not supported yet";
+    if (error == RNS_ERROR_TIMEOUT)
+        return "no response (the node may not serve this page)";
+    return rns_status_string(error);
+}
+
+static const char *node_kind_name(const rns_node_record *node) {
+    switch (node->kind) {
+        case RNS_NODE_KIND_NOMAD: return "Nomad node";
+        case RNS_NODE_KIND_LXMF: return "LXMF inbox";
+        case RNS_NODE_KIND_OTHER: break;
+    }
+    return "transport";
+}
+
+/* Renders the node details and the actions that apply to this node. */
+static void draw_node_popup(const tui_state_t *state) {
+    rns_node_record node;
+    char address[TUI_ADDRESS_DIGITS + 1u];
+    char inbox[TUI_ADDRESS_DIGITS + 1u];
+    char lines[10][96];
+    const char *pointers[10];
+    size_t count = 0u;
+    if (!tui_state_selected_node(state, &node)) return;
+    tui_hex_format(node.destination, LXMF_DESTINATION_LENGTH, address);
+    bool pages = tui_state_node_serves_pages(&node);
+    bool messageable = node.has_message_destination;
+
+    (void)snprintf(lines[count++], sizeof lines[0], "Address:  %s", address);
+    (void)snprintf(lines[count++], sizeof lines[0], "Name:     %s",
+                   node.name[0] != '\0' ? node.name : "(none announced)");
+    (void)snprintf(lines[count++], sizeof lines[0], "Type:     %s%s",
+                   node_kind_name(&node),
+                   pages ? " - serves pages" : " - serves no pages");
+    (void)snprintf(lines[count++], sizeof lines[0],
+                   "Route:    %u hops on interface %llu, %s%s",
+                   (unsigned)node.hops, (unsigned long long)node.interface_id,
+                   node.reachable ? "reachable" : "stale",
+                   node.propagation ? ", propagation node" : "");
+    if (messageable) {
+        tui_hex_format(node.message_destination, LXMF_DESTINATION_LENGTH, inbox);
+        (void)snprintf(lines[count++], sizeof lines[0], "Inbox:    %s", inbox);
+    } else {
+        (void)snprintf(lines[count++], sizeof lines[0],
+                       "Inbox:    none announced");
+    }
+    (void)snprintf(lines[count++], sizeof lines[0], "%s", "");
+    (void)snprintf(lines[count++], sizeof lines[0], "b  Browse pages%s",
+                   pages ? "" : "   (unavailable: not a Nomad node)");
+    (void)snprintf(lines[count++], sizeof lines[0], "m  Send a message%s",
+                   messageable ? "" : "   (unavailable: no LXMF inbox announced)");
+    (void)snprintf(lines[count++], sizeof lines[0], "r  Refresh path");
+    (void)snprintf(lines[count++], sizeof lines[0], "Esc  Close");
+    for (size_t i = 0u; i < count; ++i) pointers[i] = lines[i];
+    centered_box("Node details", pointers, count);
+}
+
 static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
     rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
+    char heading[96];
+    size_t count = tui_state_node_list(state, sorted, RNS_NODE_REGISTRY_MAX);
+    size_t position = tui_state_node_position(state);
+    size_t rows = layout->rows > 8 ? (size_t)(layout->rows - 8) : 1u;
+    /*
+     * Scroll the window around the selection rather than the selection around
+     * the window, so the cursor stays on the chosen node.
+     */
+    size_t first = position >= rows ? position - rows + 1u : 0u;
+    if (first + rows > count) first = count > rows ? count - rows : 0u;
+
+    (void)snprintf(heading, sizeof heading, "Active and known nodes  (%zu of %zu)",
+                   count == 0u ? 0u : position + 1u, count);
     (void)attron(A_BOLD);
-    clipped(stdscr, 3, 1, layout->columns - 2, "Active and known nodes");
+    clipped(stdscr, 3, 1, layout->columns - 2, heading);
     (void)attroff(A_BOLD);
-    if (state->nodes.count == 0u)
+    if (count == 0u)
         clipped(stdscr, 5, 2, layout->columns - 4,
                 "No live announces received yet. Check interface status and wait for announces.");
-    size_t count = rns_node_registry_sorted(&state->nodes, sorted, RNS_NODE_REGISTRY_MAX);
-    for (size_t i = 0u; i < count && (int)i < layout->rows - 8; ++i) {
+    for (size_t i = first; i < count && i - first < rows; ++i) {
         char address[TUI_ADDRESS_DIGITS + 1u];
         char line[160];
-        bool selected = i == state->node_selected;
+        bool selected = state->has_node_selection && i == position;
         tui_hex_format(sorted[i].destination, LXMF_DESTINATION_LENGTH, address);
-        (void)snprintf(line, sizeof line, "%s%s%s  %u hops  if:%llu  %s",
+        (void)snprintf(line, sizeof line, "%-4s %s%s%s  %u hops  if:%llu  %s",
+                       tui_state_node_serves_pages(&sorted[i]) ? "PAGE" : "",
                        sorted[i].name[0] != '\0' ? sorted[i].name : "",
                        sorted[i].name[0] != '\0' ? "  " : "", address,
                        (unsigned)sorted[i].hops,
                        (unsigned long long)sorted[i].interface_id,
                        sorted[i].reachable ? "reachable" : "stale");
         if (selected) (void)attron(A_REVERSE);
-        clipped(stdscr, 5 + (int)i, 2, layout->columns - 4, line);
+        clipped(stdscr, 5 + (int)(i - first), 2, layout->columns - 4, line);
         if (selected) (void)attroff(A_REVERSE);
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
-            "j/k select  Enter actions  R refresh path  B browser  C conversations  q quit");
-    if (state->overlay == TUI_OVERLAY_NODE_ACTIONS && count > 0u) {
-        static const char *const actions[] = {
-            "B: browse Nomad page", "M: message associated LXMF inbox", "Esc: cancel"
-        };
-        centered_box("Known node actions", actions, sizeof actions / sizeof actions[0]);
-    }
+            "j/k select  Enter details  R refresh path  B browser  C conversations  q quit");
 }
 
 static void draw_browser(const tui_state_t *state, const tui_layout_t *layout) {
@@ -274,21 +361,36 @@ static void draw_browser(const tui_state_t *state, const tui_layout_t *layout) {
     (void)attron(A_BOLD);
     clipped(stdscr, 3, 1, layout->columns - 2, title);
     (void)attroff(A_BOLD);
+    bool loading = false;
     if (state->browser != NULL) {
         rns_browser_state_t browser_state = rns_browser_state(state->browser);
         char notice[TUI_STATUS_MAX];
-        if (browser_state == RNS_BROWSER_PATH_DISCOVERY ||
-            browser_state == RNS_BROWSER_LINK_ESTABLISHMENT ||
-            browser_state == RNS_BROWSER_REQUEST_TRANSMISSION) {
+        loading = browser_state == RNS_BROWSER_PATH_DISCOVERY ||
+                  browser_state == RNS_BROWSER_LINK_ESTABLISHMENT ||
+                  browser_state == RNS_BROWSER_REQUEST_TRANSMISSION;
+        if (loading) {
             (void)snprintf(notice, sizeof notice, "Loading remote page... %.0f%%",
                            rns_browser_progress(state->browser) * 100.0);
             clipped(stdscr, 4, 2, layout->columns - 4, notice);
         } else if (browser_state == RNS_BROWSER_FAILED) {
             (void)snprintf(notice, sizeof notice, "Page load failed: %s",
-                           rns_status_string(rns_browser_error(state->browser)));
+                           tui_browser_error_text(state->browser));
             clipped(stdscr, 4, 2, layout->columns - 4, notice);
+            clipped(stdscr, 5, 2, layout->columns - 4,
+                    "Showing the previously loaded page:");
         }
     }
+    /*
+     * The retained page belongs to the previous URL. Showing it under a
+     * progress line reads as though the new page had already arrived.
+     */
+    if (loading) {
+        clipped(stdscr, layout->hint_row, 0, layout->columns,
+                "Esc cancel  Backspace back  N network  q quit");
+        return;
+    }
+    int body_top = state->browser != NULL &&
+                   rns_browser_state(state->browser) == RNS_BROWSER_FAILED ? 7 : 5;
     size_t link = 0u;
     for (size_t i = 0u; i < state->page.count && (int)i < layout->rows - 8; ++i) {
         const rns_micron_item *item = &state->page.items[i];
@@ -305,7 +407,7 @@ static void draw_browser(const tui_state_t *state, const tui_layout_t *layout) {
         }
         bool heading = item->kind == RNS_MICRON_HEADING;
         if (heading) (void)attron(A_BOLD);
-        clipped(stdscr, 5 + (int)i, 2, layout->columns - 4, line);
+        clipped(stdscr, body_top + (int)i, 2, layout->columns - 4, line);
         if (heading) (void)attroff(A_BOLD);
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
@@ -326,6 +428,7 @@ void tui_render_draw(const tui_state_t *state) {
     draw_chrome(state, &layout);
     if (state->screen == TUI_SCREEN_NETWORK) {
         draw_network(state, &layout);
+        if (state->overlay == TUI_OVERLAY_NODE_ACTIONS) draw_node_popup(state);
         (void)refresh();
         return;
     }
@@ -337,8 +440,8 @@ void tui_render_draw(const tui_state_t *state) {
     if (!layout.narrow) draw_sidebar(state, &layout);
     draw_thread(state, &layout);
     draw_input(state, &layout);
-    (void)refresh();
     draw_conversation_overlay(state);
+    (void)refresh();
 }
 
 int tui_render_dump(const tui_state_t *state, FILE *output) {

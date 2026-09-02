@@ -106,7 +106,13 @@ typedef struct {
     tui_trust_t tab;
 
     rns_node_registry nodes;
-    size_t node_selected;
+    /*
+     * The Network selection is held by destination, not by list position: the
+     * registry re-sorts as announces arrive, so an index would silently move
+     * the cursor onto a different node.
+     */
+    uint8_t node_selection[LXMF_DESTINATION_LENGTH];
+    bool has_node_selection;
 
     rns_runtime_t *runtime;
     lxmf_router_t router;
@@ -158,7 +164,16 @@ void tui_state_toggle_block(tui_state_t *state);
 void tui_state_toggle_note(tui_state_t *state);
 
 size_t tui_state_node_count(const tui_state_t *state);
+/* Copies the sorted node list. Returns the number written. */
+size_t tui_state_node_list(const tui_state_t *state, rns_node_record *out,
+                           size_t capacity);
 bool tui_state_selected_node(const tui_state_t *state, rns_node_record *record);
+/* Position of the selection in the sorted list, or 0 when there is none. */
+size_t tui_state_node_position(const tui_state_t *state);
+/* Moves the selection by delta entries, clamped to the list. */
+void tui_state_node_move(tui_state_t *state, int delta);
+/* Only Nomad Network nodes serve pages. */
+bool tui_state_node_serves_pages(const rns_node_record *node);
 void tui_state_request_path(tui_state_t *state);
 
 size_t tui_state_link_count(const tui_state_t *state);
