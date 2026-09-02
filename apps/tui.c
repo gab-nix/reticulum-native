@@ -6,6 +6,9 @@
 #include "reticulum/lxmf_store.h"
 #include "reticulum/micron.h"
 #include "reticulum/node_registry.h"
+#include "reticulum/config.h"
+#include "reticulum/runtime.h"
+#include "reticulum/hal.h"
 
 #include <curses.h>
 #include <ctype.h>
@@ -70,12 +73,18 @@ typedef struct {
     bool help;
     bool peer_info;
     rns_node_registry nodes;
+    rns_runtime_t *runtime;
+    char node_store_path[1024];
     rns_micron_page page;
     rns_micron_history browser_history;
     size_t browser_selected;
     char browser_url[RNS_MICRON_TEXT_MAX];
     char status[160];
 } tui_state;
+
+static char *read_text_file(const char *path,size_t *length){FILE *f=fopen(path,"rb");if(!f)return NULL;if(fseek(f,0,SEEK_END)!=0){fclose(f);return NULL;}long n=ftell(f);if(n<0||fseek(f,0,SEEK_SET)!=0){fclose(f);return NULL;}char *s=malloc((size_t)n+1u);if(!s){fclose(f);return NULL;}if(fread(s,1,(size_t)n,f)!=(size_t)n){free(s);fclose(f);return NULL;}s[n]=0;fclose(f);*length=(size_t)n;return s;}
+
+static void announce_received(rns_runtime_t *runtime,const rns_node_result *announce,void *context){(void)runtime;tui_state *state=context;(void)rns_node_registry_consider_announce(&state->nodes,announce);}
 
 static void hex_format(const uint8_t *bytes, size_t length, char *out) {
     static const char digits[] = "0123456789abcdef";
@@ -145,7 +154,8 @@ static void add_contact(tui_state *state, const uint8_t peer[16]) {
 }
 
 static int state_open(tui_state *state, const char *identity_path,
-                      const char *store_path, const char *destination_hex) {
+                      const char *store_path, const char *destination_hex,
+                      const char *config_path) {
     memset(state, 0, sizeof *state);
     state->messages = calloc(TUI_MAX_MESSAGES, sizeof *state->messages);
     if (!state->messages) return -1;
@@ -165,6 +175,12 @@ static int state_open(tui_state *state, const char *identity_path,
     state->tab = TRUST_UNKNOWN;
     state->screen = SCREEN_CONVERSATIONS;
     rns_node_registry_init(&state->nodes, 3600.0);
+    int node_path_length = snprintf(state->node_store_path,sizeof state->node_store_path,
+                                    "%s.nodes",store_path);
+    if (node_path_length > 0 && (size_t)node_path_length < sizeof state->node_store_path)
+        (void)rns_node_registry_load(&state->nodes,state->node_store_path,3600.0);
+    else state->node_store_path[0] = '\0';
+    if(config_path){size_t length=0;char *text=read_text_file(config_path,&length);rns_config_t config;rns_config_diagnostic_t diagnostic={0};rns_config_init(&config);if(text&&rns_config_parse(text,length,&config,&diagnostic)==RNS_OK){rns_runtime_options_t options={0};options.announce_callback=announce_received;options.callback_context=state;rns_status_t rs=rns_runtime_create(&state->runtime,&config,&options);snprintf(state->status,sizeof state->status,rs==RNS_OK?"Network runtime active":"Network startup failed; conversations remain available");}else snprintf(state->status,sizeof state->status,"Invalid network configuration; conversations remain available");free(text);}
     rns_micron_history_init(&state->browser_history);
     snprintf(state->browser_url, sizeof state->browser_url, "nomad://local/home");
     static const uint8_t home[] =
@@ -177,6 +193,7 @@ static int state_open(tui_state *state, const char *identity_path,
         goto fail;
     return 0;
 fail:
+    rns_runtime_destroy(state->runtime);
     lxmf_store_close(&state->store);
     free(state->messages);
     state->messages = NULL;
@@ -184,6 +201,9 @@ fail:
 }
 
 static void state_close(tui_state *state) {
+    if (state->node_store_path[0])
+        (void)rns_node_registry_save(&state->nodes,state->node_store_path);
+    rns_runtime_destroy(state->runtime);
     lxmf_store_close(&state->store);
     free(state->messages);
 }
@@ -316,12 +336,15 @@ static void draw_network(tui_state *state, int rows, int columns) {
         clipped(stdscr, 5, 2, columns - 4,
                 "No live announces received. Runtime announce wiring is the next milestone.");
     }
-    for (size_t i = 0; i < state->nodes.count && (int)i < rows - 8; ++i) {
-        char address[33], line[160]; hex_format(state->nodes.records[i].destination, 16u, address);
+    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
+    size_t node_count = rns_node_registry_sorted(&state->nodes, sorted,
+                                                  RNS_NODE_REGISTRY_MAX);
+    for (size_t i = 0; i < node_count && (int)i < rows - 8; ++i) {
+        char address[33], line[160]; hex_format(sorted[i].destination, 16u, address);
         snprintf(line, sizeof line, "%s  %u hops  if:%llu  %s", address,
-                 (unsigned)state->nodes.records[i].hops,
-                 (unsigned long long)state->nodes.records[i].interface_id,
-                 state->nodes.records[i].reachable ? "reachable" : "stale");
+                 (unsigned)sorted[i].hops,
+                 (unsigned long long)sorted[i].interface_id,
+                 sorted[i].reachable ? "reachable" : "stale");
         clipped(stdscr, 5 + (int)i, 2, columns - 4, line);
     }
     clipped(stdscr, rows - 2, 0, columns, "B browser  C conversations  q quit");
@@ -366,7 +389,8 @@ static void draw(tui_state *state) {
     hex_format(state->local, 16u, address);
     attron(A_REVERSE | A_BOLD);
     char header[160];
-    snprintf(header, sizeof header, " Nomad Chat  %.32s  OFFLINE ", address);
+    snprintf(header, sizeof header, " Nomad Chat  %.32s  %s ", address,
+             state->runtime ? "ONLINE" : "OFFLINE");
     clipped(stdscr, 0, 0, columns, header);
     for (int x = (int)strlen(header); x < columns; ++x) addch(' ');
     attroff(A_REVERSE | A_BOLD);
@@ -548,12 +572,15 @@ static int run_loop(tui_state *state) {
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
+    timeout(50);
     curs_set(0);
     int result = 0;
     bool running = true;
     while (running) {
+        if(state->runtime){size_t processed=0;uint64_t now=0;(void)rns_runtime_poll(state->runtime,32u,&processed);if(rns_hal_monotonic_ms(&now)==RNS_OK)(void)rns_node_registry_expire(&state->nodes,(double)now/1000.0);}
         draw(state);
         int key = getch();
+        if(key==ERR)continue;
         if (state->help || state->peer_info) {
             if (key == 27 || key == '?' || key == 'i') {
                 state->help = false;
@@ -722,11 +749,13 @@ int nomad_tui_run_destination(const char *identity_path, const char *store_path,
                               const char *destination_hex) {
     tui_state state;
     if (!identity_path || !store_path ||
-        state_open(&state, identity_path, store_path, destination_hex) != 0) return -1;
+        state_open(&state, identity_path, store_path, destination_hex, NULL) != 0) return -1;
     int result = run_loop(&state);
     state_close(&state);
     return result;
 }
+
+int nomad_tui_run_config(const char *config_path,const char *identity_path,const char *store_path,const char *destination_hex){tui_state state;if(!config_path||!identity_path||!store_path||state_open(&state,identity_path,store_path,destination_hex,config_path)!=0)return -1;int result=run_loop(&state);state_close(&state);return result;}
 
 int nomad_tui_run(const char *identity_path, const char *store_path) {
     return nomad_tui_run_destination(identity_path, store_path, NULL);
@@ -737,7 +766,7 @@ int nomad_tui_dump(const char *identity_path, const char *store_path,
     if (!output) return -1;
     tui_state state;
     if (!identity_path || !store_path ||
-        state_open(&state, identity_path, store_path, destination_hex) != 0) return -1;
+        state_open(&state, identity_path, store_path, destination_hex, NULL) != 0) return -1;
     char local[33];
     hex_format(state.local, 16u, local);
     fprintf(output, "Nomad Chat\nIdentity: %s\n", local);

@@ -50,6 +50,10 @@ resize prompt instead of drawing an unusable layout.
 For automated checks and accessibility, `nomad-chat tui --dump-ui IDENTITY
 STORE [DESTINATION]` prints the same essential state without starting curses.
 
+Use `nomad-chat tui --config CONFIG IDENTITY STORE [DESTINATION]` to start the
+caller-polled UDP/TCP runtime. Verified announces populate the Network screen;
+an invalid or unavailable network configuration leaves local conversations usable.
+
 ## Current persistence boundary
 
 Messages and delivery states use the durable LXMF store. Drafts, read markers,
