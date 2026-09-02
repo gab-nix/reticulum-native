@@ -410,7 +410,15 @@ int nomad_tui_dump(const char *identity_path, const char *store_path,
         state_open(&state, identity_path, store_path, destination_hex) != 0) return -1;
     char local[33];
     hex_format(state.local, 16u, local);
-    fprintf(output, "Nomad Chat\nAddress: %s\nNetwork: OFFLINE (local outbox only)\n", local);
+    fprintf(output, "Nomad Chat\nIdentity: %s\n", local);
+    if (state.selected < state.contact_count) {
+        char peer[33];
+        hex_format(state.contacts[state.selected].peer, 16u, peer);
+        fprintf(output, "Conversation: %s\n", peer);
+    } else {
+        fprintf(output, "Conversation: none\n");
+    }
+    fprintf(output, "Network: OFFLINE (local outbox only)\n");
     fprintf(output, "Conversations: %zu\n", state.contact_count);
     for (size_t i = 0; i < state.contact_count; ++i) {
         char peer[33];
@@ -418,14 +426,22 @@ int nomad_tui_dump(const char *identity_path, const char *store_path,
         fprintf(output, "%c %s (%zu messages)\n", i == state.selected ? '>' : ' ',
                 peer, state.contacts[i].messages);
     }
-    fprintf(output, "Messages:\n");
     size_t count = selected_count(&state);
+    fprintf(output, "Messages: %zu\n", count);
     for (size_t i = 0; i < count; ++i) {
         const tui_message *message = selected_at(&state, i);
         bool outgoing = memcmp(message->value.source, state.local, 16u) == 0;
         fprintf(output, "%s %s ", outgoing ? ">" : "<",
                 outgoing ? marker(message->value.status) : "   ");
-        fwrite(message->value.content.data, 1u, message->value.content.len, output);
+        for (size_t j = 0; j < message->value.content.len; ++j) {
+            unsigned char byte = message->value.content.data[j];
+            if (byte == '\n') fputs("\\n", output);
+            else if (byte == '\r') fputs("\\r", output);
+            else if (byte == '\t') fputs("\\t", output);
+            else if (byte == '\\') fputs("\\\\", output);
+            else if (byte >= 32u && byte <= 126u) fputc((int)byte, output);
+            else fprintf(output, "\\x%02x", (unsigned)byte);
+        }
         fputc('\n', output);
     }
     fprintf(output, "Status: %s\n", state.status);
