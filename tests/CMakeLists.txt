@@ -26,6 +26,9 @@ reticulum_add_test(test_ifac unit/test_ifac.c)
 reticulum_add_test(test_proof unit/test_proof.c)
 reticulum_add_test(test_channel unit/test_channel.c)
 reticulum_add_test(test_runtime unit/test_runtime.c)
+reticulum_add_test(test_tui_model unit/test_tui_model.c)
+target_sources(test_tui_model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_model.c)
+target_include_directories(test_tui_model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
 reticulum_add_test(test_udp integration/test_udp.c)
 reticulum_add_test(test_tcp integration/test_tcp.c)
 reticulum_add_test(test_udp_lxmf integration/test_udp_lxmf.c)
@@ -43,4 +46,11 @@ if(TARGET nomad-chat)
         COMMAND ${CMAKE_COMMAND}
             -DNOMAD_CHAT=$<TARGET_FILE:nomad-chat>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/test_nomad_chat.cmake)
+endif()
+
+if(TARGET nomad-chat)
+    add_test(NAME test_tui_cli
+        COMMAND ${CMAKE_COMMAND}
+            -DNOMAD_CHAT=$<TARGET_FILE:nomad-chat>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/test_tui_cli.cmake)
 endif()

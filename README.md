@@ -34,3 +34,16 @@ ctest --test-dir build-sanitize --output-on-failure
 ```
 
 Set `RETICULUM_WARNINGS_AS_ERRORS=ON` for strict local and CI builds.
+
+## Try the terminal chat UI
+
+```sh
+./build/apps/nomad-chat init my.identity
+./build/apps/nomad-chat tui my.identity history.lxms 0123456789abcdef0123456789abcdef
+```
+
+The optional final value is a peer LXMF delivery address. Press `Enter` to
+compose, `Esc` to cancel, arrow keys or `j`/`k` to select conversations, and
+`q` to exit. The current TUI truthfully reports `OFFLINE`: it persists signed
+messages to the outbox, while automatic Reticulum delivery is still being
+wired into the runtime.

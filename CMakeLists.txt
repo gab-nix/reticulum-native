@@ -46,6 +46,7 @@ if(RETICULUM_SANITIZERS)
 endif()
 
 if(RETICULUM_BUILD_APPS)
+    find_package(Curses REQUIRED)
     add_subdirectory(apps)
 endif()
 

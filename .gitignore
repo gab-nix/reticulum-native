@@ -1,5 +1,6 @@
 /build/
 /build-*/
+/CMakeFiles/
 /.cache/
 /compile_commands.json
 /.clangd/
@@ -8,4 +9,3 @@
 *.gcno
 *.profraw
 *.profdata
-
