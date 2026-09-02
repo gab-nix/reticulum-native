@@ -6,6 +6,8 @@
 #include <stdint.h>
 
 #include "reticulum/config.h"
+#include "reticulum/identity.h"
+#include "reticulum/link.h"
 #include "reticulum/node.h"
 #include "reticulum/status.h"
 
@@ -14,6 +16,28 @@ extern "C" {
 #endif
 
 typedef struct rns_runtime rns_runtime_t;
+typedef struct rns_runtime_link rns_runtime_link_t;
+
+#define RNS_RUNTIME_MAX_LINKS 16u
+#define RNS_LINK_CONTEXT_KEEPALIVE 0xfau
+#define RNS_LINK_CONTEXT_CLOSE 0xfcu
+#define RNS_LINK_CONTEXT_RTT 0xfeu
+#define RNS_LINK_CONTEXT_PROOF 0xffu
+
+typedef void (*rns_runtime_link_state_callback_t)(
+    rns_runtime_link_t *link, rns_link_state state, rns_status_t reason,
+    void *context);
+typedef void (*rns_runtime_link_packet_callback_t)(
+    rns_runtime_link_t *link, uint8_t packet_context,
+    const uint8_t *plaintext, size_t plaintext_length, void *context);
+
+typedef struct rns_runtime_link_options {
+    double timeout_seconds;
+    uint32_t mtu;
+    rns_runtime_link_state_callback_t state_callback;
+    rns_runtime_link_packet_callback_t packet_callback;
+    void *callback_context;
+} rns_runtime_link_options_t;
 
 typedef enum rns_runtime_interface_state {
     RNS_RUNTIME_INTERFACE_DISABLED = 0,
@@ -85,6 +109,19 @@ rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime,
                                      rns_path_entry *path);
 size_t rns_runtime_path_snapshot(const rns_runtime_t *runtime,
                                  rns_path_entry *paths, size_t capacity);
+
+/* The returned link is runtime-attached and must be destroyed before or with
+ * the runtime. Callbacks run synchronously from rns_runtime_poll(). */
+rns_status_t rns_runtime_link_open(
+    rns_runtime_t *runtime, const uint8_t destination_hash[16],
+    const rns_identity *destination_identity,
+    const rns_runtime_link_options_t *options, rns_runtime_link_t **link);
+rns_status_t rns_runtime_link_send(rns_runtime_link_t *link, uint8_t context,
+                                   const uint8_t *plaintext,
+                                   size_t plaintext_length);
+rns_link_state rns_runtime_link_state(const rns_runtime_link_t *link);
+const uint8_t *rns_runtime_link_id(const rns_runtime_link_t *link);
+void rns_runtime_link_destroy(rns_runtime_link_t *link);
 
 #ifdef __cplusplus
 }

@@ -10,7 +10,7 @@ This is the source of truth for implementation progress. `IMPLEMENTED` means cod
 | UDP and TCP interfaces | IMPLEMENTED | Loopback tests, setup guide and a reachability-checked public uplink configuration. Protocol-level upstream testing remains. |
 | AutoInterface, shared IPC, serial KISS, RNode | PLANNED | Framing primitives exist; interface drivers do not. |
 | Transport forwarding | WIP | Basic ingress, forwarding and dedupe exist. Reverse/proof/link/tunnel tables and persistent paths remain. |
-| Links and channels | WIP | Handshake crypto and bounded channel state tested. Receipts, keepalives, identification and runtime wiring remain. |
+| Links and channels | WIP | Handshake crypto, bounded channel state, and the outbound runtime link lifecycle exist with proof validation, RTT confirmation, encrypted packet dispatch, keepalives and timeouts. Request/resource interoperability and upstream link fixtures remain. |
 | Resources | PLANNED | Segmentation, compression, retries, resume and cancellation remain. |
 | LXMF codec, signatures, stamps, tickets | WIP | Core codec and unit tests exist. Full ticket lifecycle and upstream fixtures remain. |
 | LXMF delivery and propagation | WIP | Caller-polled router retains messages pending a recipient announce, requests missing paths from the TUI, retries queued/failed opportunistic sends, reports state transitions, and persists status transitions; direct links/resources, receipt handling, retry backoff and propagation sync remain. |

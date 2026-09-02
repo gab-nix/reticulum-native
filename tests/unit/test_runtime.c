@@ -7,6 +7,8 @@ int main(void) {
     rns_config_t config;
     rns_runtime_t *runtime = NULL;
     rns_runtime_interface_info_t info;
+    rns_runtime_link_t *link = (rns_runtime_link_t *)1;
+    rns_identity remote;
     uint8_t destination[16] = {1U};
     size_t processed = 99U;
 
@@ -22,6 +24,12 @@ int main(void) {
 
     assert(rns_runtime_create(NULL, &config, NULL) == RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_runtime_create(&runtime, &config, NULL) == RNS_OK);
+    assert(rns_identity_generate(&remote));
+    assert(rns_runtime_link_open(runtime, destination, &remote, NULL, &link) ==
+           RNS_ERROR_NOT_FOUND);
+    assert(link == NULL);
+    assert(rns_runtime_link_state(NULL) == RNS_LINK_CLOSED);
+    assert(rns_runtime_link_id(NULL) == NULL);
     assert(runtime != NULL);
     assert(rns_runtime_interface_count(runtime) == 2U);
     assert(rns_runtime_interface_info(runtime, 0U, &info) == RNS_OK);
