@@ -82,6 +82,7 @@ typedef struct {
     rns_runtime_t *runtime;
     lxmf_router_t router;
     bool router_ready;
+    uint64_t last_router_poll_ms;
     bool last_send_attempted;
     bool last_send_ok;
     rns_identity resolved_identity;
@@ -193,7 +194,7 @@ static int state_open(tui_state *state, const char *identity_path,
     if (node_path_length > 0 && (size_t)node_path_length < sizeof state->node_store_path)
         (void)rns_node_registry_load(&state->nodes,state->node_store_path,3600.0);
     else state->node_store_path[0] = '\0';
-    if(config_path){size_t length=0;char *text=read_text_file(config_path,&length);rns_config_t config;rns_config_diagnostic_t diagnostic={0};rns_config_init(&config);if(text&&rns_config_parse(text,length,&config,&diagnostic)==RNS_OK){rns_runtime_options_t options={0};options.announce_callback=announce_received;options.callback_context=state;rns_status_t rs=rns_runtime_create(&state->runtime,&config,&options);if(rs==RNS_OK){lxmf_router_config_t rc={&state->identity,&state->store,resolve_peer,state,send_via_runtime,state};state->router_ready=lxmf_router_init(&state->router,&rc)==LXMF_OK;}snprintf(state->status,sizeof state->status,rs==RNS_OK?"Network runtime active":"Network startup failed; conversations remain available");}else snprintf(state->status,sizeof state->status,"Invalid network configuration; conversations remain available");free(text);}
+    if(config_path){size_t length=0;char *text=read_text_file(config_path,&length);rns_config_t config;rns_config_diagnostic_t diagnostic={0};rns_config_init(&config);if(text&&rns_config_parse(text,length,&config,&diagnostic)==RNS_OK){rns_runtime_options_t options={0};options.announce_callback=announce_received;options.callback_context=state;rns_status_t rs=rns_runtime_create(&state->runtime,&config,&options);if(rs==RNS_OK){lxmf_router_config_t rc={.identity=&state->identity,.store=&state->store,.resolve_identity=resolve_peer,.resolve_context=state,.send_packet=send_via_runtime,.send_context=state};state->router_ready=lxmf_router_init(&state->router,&rc)==LXMF_OK;}snprintf(state->status,sizeof state->status,rs==RNS_OK?"Network runtime active":"Network startup failed; conversations remain available");}else snprintf(state->status,sizeof state->status,"Invalid network configuration; conversations remain available");free(text);}
     rns_micron_history_init(&state->browser_history);
     snprintf(state->browser_url, sizeof state->browser_url, "nomad://local/home");
     static const uint8_t home[] =
@@ -639,7 +640,7 @@ static int run_loop(tui_state *state) {
     int result = 0;
     bool running = true;
     while (running) {
-        if(state->runtime){size_t processed=0;uint64_t now=0;(void)rns_runtime_poll(state->runtime,32u,&processed);if(rns_hal_monotonic_ms(&now)==RNS_OK)(void)rns_node_registry_expire(&state->nodes,(double)now/1000.0);if(state->nodes.count==0u)state->network_selected=0u;else if(state->network_selected>=state->nodes.count)state->network_selected=state->nodes.count-1u;}
+        if(state->runtime){size_t processed=0;uint64_t now=0;(void)rns_runtime_poll(state->runtime,32u,&processed);if(rns_hal_monotonic_ms(&now)==RNS_OK){(void)rns_node_registry_expire(&state->nodes,(double)now/1000.0);if(state->router_ready&&now-state->last_router_poll_ms>=1000u){lxmf_router_poll_result_t delivery={0};if(lxmf_router_poll(&state->router,2u,&delivery)==LXMF_OK)state->last_router_poll_ms=now;}}if(state->nodes.count==0u)state->network_selected=0u;else if(state->network_selected>=state->nodes.count)state->network_selected=state->nodes.count-1u;}
         draw(state);
         int key = getch();
         if(key==ERR)continue;

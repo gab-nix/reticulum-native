@@ -53,6 +53,10 @@ typedef const rns_identity *(*lxmf_router_identity_resolver_fn)(
 typedef lxmf_status_t (*lxmf_router_send_fn)(void *context,
                                              const uint8_t *packet,
                                              size_t packet_length);
+/* Called after a durable delivery-state change performed by the router. */
+typedef void (*lxmf_router_delivery_callback_fn)(
+    void *context, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+    lxmf_delivery_status_t status, lxmf_status_t result);
 typedef struct {
     rns_identity *identity;
     lxmf_store_t *store;
@@ -60,13 +64,25 @@ typedef struct {
     void *resolve_context;
     lxmf_router_send_fn send_packet;
     void *send_context;
+    lxmf_router_delivery_callback_fn delivery_callback;
+    void *delivery_context;
 } lxmf_router_config_t;
 typedef struct { lxmf_router_config_t config; } lxmf_router_t;
+
+typedef struct {
+    size_t attempted;
+    size_t sent;
+    size_t failed;
+} lxmf_router_poll_result_t;
 
 lxmf_status_t lxmf_router_init(lxmf_router_t *router,
                                const lxmf_router_config_t *config);
 lxmf_status_t lxmf_router_send_message(lxmf_router_t *router,
                                        const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]);
+/* Attempts queued or failed messages without blocking. Individual failures are
+ * persisted in the store and counted in result; they do not fail the poll. */
+lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
+                               lxmf_router_poll_result_t *result);
 
 lxmf_status_t lxmf_contact_book_init(lxmf_contact_book_t *book,
                                      lxmf_contact_t *storage, size_t capacity,

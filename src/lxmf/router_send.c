@@ -1,7 +1,106 @@
 #include "reticulum/lxmf_router.h"
 #include "reticulum/lxmf_delivery.h"
 #include "reticulum/packet.h"
+
 #include <string.h>
 
-lxmf_status_t lxmf_router_init(lxmf_router_t *r,const lxmf_router_config_t *c){if(!r||!c||!c->identity||!c->identity->has_private||!c->store||!c->resolve_identity||!c->send_packet)return LXMF_ERR_ARGUMENT;r->config=*c;return LXMF_OK;}
-lxmf_status_t lxmf_router_send_message(lxmf_router_t *r,const uint8_t id[32]){if(!r||!id)return LXMF_ERR_ARGUMENT;uint8_t content[LXMF_STORE_MAX_CONTENT],packet[RNS_MTU];lxmf_store_message_t stored;const rns_identity *destination;size_t packet_length=0;lxmf_message_t message={0};if(lxmf_store_read(r->config.store,id,&stored,content,sizeof content)!=LXMF_OK)return LXMF_ERR_FORMAT;if(stored.status!=LXMF_DELIVERY_QUEUED&&stored.status!=LXMF_DELIVERY_FAILED)return LXMF_ERR_ARGUMENT;destination=r->config.resolve_identity(r->config.resolve_context,stored.destination);if(!destination)return LXMF_ERR_FORMAT;message.content.data=content;message.content.len=stored.content.len;memcpy(message.destination,stored.destination,16);memcpy(message.source,stored.source,16);message.timestamp=stored.timestamp;memcpy(message.message_id,stored.message_id,32);if(lxmf_store_update_status(r->config.store,id,LXMF_DELIVERY_SENDING)!=LXMF_OK)return LXMF_ERR_CRYPTO;lxmf_status_t status=lxmf_opportunistic_packet_pack(&message,r->config.identity,destination,packet,sizeof packet,&packet_length);if(status==LXMF_OK)status=r->config.send_packet(r->config.send_context,packet,packet_length);if(status==LXMF_OK){if(lxmf_store_update_status(r->config.store,id,LXMF_DELIVERY_SENT)!=LXMF_OK)status=LXMF_ERR_CRYPTO;}else(void)lxmf_store_update_status(r->config.store,id,LXMF_DELIVERY_FAILED);return status;}
+static void report(lxmf_router_t *router,
+                   const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
+                   lxmf_delivery_status_t state, lxmf_status_t result) {
+    if (router->config.delivery_callback != NULL)
+        router->config.delivery_callback(router->config.delivery_context, id,
+                                         state, result);
+}
+
+lxmf_status_t lxmf_router_init(lxmf_router_t *router,
+                               const lxmf_router_config_t *config) {
+    if (router == NULL || config == NULL || config->identity == NULL ||
+        !config->identity->has_private || config->store == NULL ||
+        config->resolve_identity == NULL || config->send_packet == NULL)
+        return LXMF_ERR_ARGUMENT;
+    router->config = *config;
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_router_send_message(
+    lxmf_router_t *router, const uint8_t id[LXMF_MESSAGE_ID_LENGTH]) {
+    if (router == NULL || id == NULL) return LXMF_ERR_ARGUMENT;
+    uint8_t content[LXMF_STORE_MAX_CONTENT], packet[RNS_MTU];
+    lxmf_store_message_t stored;
+    if (lxmf_store_read(router->config.store, id, &stored, content,
+                        sizeof content) != LXMF_OK)
+        return LXMF_ERR_FORMAT;
+    if (stored.status != LXMF_DELIVERY_QUEUED &&
+        stored.status != LXMF_DELIVERY_FAILED)
+        return LXMF_ERR_ARGUMENT;
+    const rns_identity *destination = router->config.resolve_identity(
+        router->config.resolve_context, stored.destination);
+    if (destination == NULL) {
+        (void)lxmf_store_update_status(router->config.store, id,
+                                       LXMF_DELIVERY_FAILED);
+        report(router, id, LXMF_DELIVERY_FAILED, LXMF_ERR_FORMAT);
+        return LXMF_ERR_FORMAT;
+    }
+    lxmf_message_t message = {0};
+    message.content = (lxmf_slice_t){content, stored.content.len};
+    memcpy(message.destination, stored.destination, sizeof message.destination);
+    memcpy(message.source, stored.source, sizeof message.source);
+    message.timestamp = stored.timestamp;
+    memcpy(message.message_id, stored.message_id, sizeof message.message_id);
+    if (lxmf_store_update_status(router->config.store, id,
+                                 LXMF_DELIVERY_SENDING) != LXMF_OK)
+        return LXMF_ERR_CRYPTO;
+    report(router, id, LXMF_DELIVERY_SENDING, LXMF_OK);
+    size_t packet_length = 0;
+    lxmf_status_t status = lxmf_opportunistic_packet_pack(
+        &message, router->config.identity, destination, packet, sizeof packet,
+        &packet_length);
+    if (status == LXMF_OK)
+        status = router->config.send_packet(router->config.send_context, packet,
+                                            packet_length);
+    if (status == LXMF_OK && lxmf_store_update_status(router->config.store, id,
+                                                       LXMF_DELIVERY_SENT) != LXMF_OK)
+        status = LXMF_ERR_CRYPTO;
+    if (status == LXMF_OK) {
+        report(router, id, LXMF_DELIVERY_SENT, LXMF_OK);
+    } else {
+        (void)lxmf_store_update_status(router->config.store, id,
+                                       LXMF_DELIVERY_FAILED);
+        report(router, id, LXMF_DELIVERY_FAILED, status);
+    }
+    return status;
+}
+
+typedef struct {
+    uint8_t ids[LXMF_STORE_MAX_MESSAGES][LXMF_MESSAGE_ID_LENGTH];
+    size_t count;
+    size_t limit;
+} pending_messages_t;
+
+static bool collect_pending(void *context, const lxmf_store_message_t *message) {
+    pending_messages_t *pending = context;
+    if ((message->status == LXMF_DELIVERY_QUEUED ||
+         message->status == LXMF_DELIVERY_FAILED) && pending->count < pending->limit)
+        memcpy(pending->ids[pending->count++], message->message_id,
+               LXMF_MESSAGE_ID_LENGTH);
+    return pending->count < pending->limit;
+}
+
+lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
+                               lxmf_router_poll_result_t *result) {
+    if (router == NULL || result == NULL || max_messages > LXMF_STORE_MAX_MESSAGES)
+        return LXMF_ERR_ARGUMENT;
+    memset(result, 0, sizeof *result);
+    if (max_messages == 0u) return LXMF_OK;
+    pending_messages_t pending = {.limit = max_messages};
+    lxmf_status_t status = lxmf_store_list(router->config.store, collect_pending,
+                                           &pending);
+    if (status != LXMF_OK) return status;
+    for (size_t i = 0; i < pending.count; i++) {
+        status = lxmf_router_send_message(router, pending.ids[i]);
+        result->attempted++;
+        if (status == LXMF_OK) result->sent++;
+        else result->failed++;
+    }
+    return LXMF_OK;
+}
