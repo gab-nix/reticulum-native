@@ -3,6 +3,7 @@
 
 #include "reticulum/announce.h"
 #include "reticulum/buffer.h"
+#include "reticulum/browser.h"
 #include "reticulum/channel.h"
 #include "reticulum/config.h"
 #include "reticulum/crypto.h"
