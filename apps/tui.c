@@ -3,6 +3,7 @@
 #include "reticulum/destination.h"
 #include "reticulum/identity.h"
 #include "reticulum/lxmf.h"
+#include "reticulum/lxmf_router.h"
 #include "reticulum/lxmf_store.h"
 #include "reticulum/micron.h"
 #include "reticulum/node_registry.h"
@@ -79,6 +80,11 @@ typedef struct {
     size_t address_cursor;
     rns_node_registry nodes;
     rns_runtime_t *runtime;
+    lxmf_router_t router;
+    bool router_ready;
+    bool last_send_attempted;
+    bool last_send_ok;
+    rns_identity resolved_identity;
     char node_store_path[1024];
     rns_micron_page page;
     rns_micron_history browser_history;
@@ -90,6 +96,8 @@ typedef struct {
 static char *read_text_file(const char *path,size_t *length){FILE *f=fopen(path,"rb");if(!f)return NULL;if(fseek(f,0,SEEK_END)!=0){fclose(f);return NULL;}long n=ftell(f);if(n<0||fseek(f,0,SEEK_SET)!=0){fclose(f);return NULL;}char *s=malloc((size_t)n+1u);if(!s){fclose(f);return NULL;}if(fread(s,1,(size_t)n,f)!=(size_t)n){free(s);fclose(f);return NULL;}s[n]=0;fclose(f);*length=(size_t)n;return s;}
 
 static void announce_received(rns_runtime_t *runtime,const rns_node_result *announce,void *context){(void)runtime;tui_state *state=context;(void)rns_node_registry_consider_announce(&state->nodes,announce);}
+static const rns_identity *resolve_peer(void *context,const uint8_t destination[16]){tui_state *state=context;for(size_t i=0;i<state->nodes.count;i++){const rns_node_record *n=&state->nodes.records[i];if(n->has_message_destination&&!memcmp(n->message_destination,destination,16)&&rns_identity_from_public(&state->resolved_identity,n->public_key))return &state->resolved_identity;}return NULL;}
+static lxmf_status_t send_via_runtime(void *context,const uint8_t *packet,size_t length){tui_state *state=context;if(!state->runtime)return LXMF_ERR_ARGUMENT;for(size_t i=0;i<rns_runtime_interface_count(state->runtime);i++)if(rns_runtime_send(state->runtime,i,packet,length)==RNS_OK)return LXMF_OK;return LXMF_ERR_CRYPTO;}
 
 static void hex_format(const uint8_t *bytes, size_t length, char *out) {
     static const char digits[] = "0123456789abcdef";
@@ -185,7 +193,7 @@ static int state_open(tui_state *state, const char *identity_path,
     if (node_path_length > 0 && (size_t)node_path_length < sizeof state->node_store_path)
         (void)rns_node_registry_load(&state->nodes,state->node_store_path,3600.0);
     else state->node_store_path[0] = '\0';
-    if(config_path){size_t length=0;char *text=read_text_file(config_path,&length);rns_config_t config;rns_config_diagnostic_t diagnostic={0};rns_config_init(&config);if(text&&rns_config_parse(text,length,&config,&diagnostic)==RNS_OK){rns_runtime_options_t options={0};options.announce_callback=announce_received;options.callback_context=state;rns_status_t rs=rns_runtime_create(&state->runtime,&config,&options);snprintf(state->status,sizeof state->status,rs==RNS_OK?"Network runtime active":"Network startup failed; conversations remain available");}else snprintf(state->status,sizeof state->status,"Invalid network configuration; conversations remain available");free(text);}
+    if(config_path){size_t length=0;char *text=read_text_file(config_path,&length);rns_config_t config;rns_config_diagnostic_t diagnostic={0};rns_config_init(&config);if(text&&rns_config_parse(text,length,&config,&diagnostic)==RNS_OK){rns_runtime_options_t options={0};options.announce_callback=announce_received;options.callback_context=state;rns_status_t rs=rns_runtime_create(&state->runtime,&config,&options);if(rs==RNS_OK){lxmf_router_config_t rc={&state->identity,&state->store,resolve_peer,state,send_via_runtime,state};state->router_ready=lxmf_router_init(&state->router,&rc)==LXMF_OK;}snprintf(state->status,sizeof state->status,rs==RNS_OK?"Network runtime active":"Network startup failed; conversations remain available");}else snprintf(state->status,sizeof state->status,"Invalid network configuration; conversations remain available");free(text);}
     rns_micron_history_init(&state->browser_history);
     snprintf(state->browser_url, sizeof state->browser_url, "nomad://local/home");
     static const uint8_t home[] =
@@ -551,9 +559,17 @@ static lxmf_status_t queue_message(tui_state *state) {
     stored.content = source.content;
     bool inserted = false;
     status = lxmf_store_put(&state->store, &stored, &inserted);
+    state->last_send_attempted = false; state->last_send_ok = false;
+    if (status == LXMF_OK && inserted && state->router_ready) {
+        state->last_send_attempted = true;
+        state->last_send_ok = lxmf_router_send_message(&state->router,
+                                                       decoded.message_id) == LXMF_OK;
+    }
     if (status == LXMF_OK && inserted && state->message_count < TUI_MAX_MESSAGES) {
         tui_message *copy = &state->messages[state->message_count++];
         copy->value = stored;
+        (void)lxmf_store_read(&state->store, decoded.message_id, &copy->value,
+                              copy->content, sizeof copy->content);
         memcpy(copy->content, stored.content.data, stored.content.len);
         copy->value.content.data = copy->content;
         state->contacts[state->selected].messages++;
@@ -678,7 +694,9 @@ static int run_loop(tui_state *state) {
                     lxmf_status_t status = queue_message(state);
                     if (status == LXMF_OK)
                         snprintf(state->status, sizeof state->status,
-                                 "Queued locally; network delivery is offline");
+                                 state->last_send_ok ? "Sent opportunistically" :
+                                 state->last_send_attempted ? "Delivery failed; retained in store" :
+                                 "Queued locally; network delivery is pending");
                     else
                         snprintf(state->status, sizeof state->status,
                                  "Could not queue message (%d)", status);
