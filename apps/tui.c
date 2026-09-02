@@ -4,6 +4,7 @@
 #include "reticulum/identity.h"
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_router.h"
+#include "reticulum/lxmf_peer_store.h"
 #include "reticulum/lxmf_store.h"
 #include "reticulum/micron.h"
 #include "reticulum/node_registry.h"
@@ -55,6 +56,8 @@ typedef struct {
     rns_identity identity;
     uint8_t local[16];
     lxmf_store_t store;
+    lxmf_peer_store_t peer_store;
+    char peer_store_path[LXMF_PEER_STORE_PATH_MAX + 1u];
     tui_contact contacts[TUI_MAX_CONTACTS];
     size_t contact_count;
     tui_message *messages;
@@ -187,6 +190,57 @@ static void add_contact(tui_state *state, const uint8_t peer[16]) {
     }
 }
 
+static lxmf_peer_trust_t store_trust(trust_group trust) {
+    if (trust == TRUST_TRUSTED) return LXMF_PEER_TRUST_TRUSTED;
+    if (trust == TRUST_UNTRUSTED) return LXMF_PEER_TRUST_UNTRUSTED;
+    return LXMF_PEER_TRUST_UNKNOWN;
+}
+
+static trust_group tui_trust(lxmf_peer_trust_t trust) {
+    if (trust == LXMF_PEER_TRUST_TRUSTED) return TRUST_TRUSTED;
+    if (trust == LXMF_PEER_TRUST_UNTRUSTED) return TRUST_UNTRUSTED;
+    return TRUST_UNKNOWN;
+}
+
+static bool load_peer(void *context, const lxmf_peer_t *peer) {
+    tui_state *state = context;
+    add_contact(state, peer->address);
+    for (size_t i = 0; i < state->contact_count; i++) {
+        tui_contact *contact = &state->contacts[i];
+        if (memcmp(contact->peer, peer->address, sizeof contact->peer) != 0) continue;
+        contact->trust = tui_trust(peer->trust);
+        contact->pinned = peer->pinned;
+        contact->blocked = peer->blocked;
+        contact->unread = peer->unread_count;
+        size_t note_length = peer->note_len;
+        if (note_length >= sizeof contact->note) note_length = sizeof contact->note - 1u;
+        memcpy(contact->note, peer->note, note_length);
+        contact->note[note_length] = '\0';
+        break;
+    }
+    return true;
+}
+
+static void persist_contacts(tui_state *state) {
+    if (state->peer_store.implementation == NULL) return;
+    for (size_t i = 0; i < state->contact_count; i++) {
+        const tui_contact *contact = &state->contacts[i];
+        lxmf_peer_t peer = {0};
+        memcpy(peer.address, contact->peer, sizeof peer.address);
+        peer.trust = store_trust(contact->trust);
+        peer.blocked = contact->blocked;
+        peer.pinned = contact->pinned;
+        peer.unread_count = contact->unread > UINT32_MAX ? UINT32_MAX :
+                            (uint32_t)contact->unread;
+        peer.note_len = strlen(contact->note);
+        memcpy(peer.note, contact->note, peer.note_len);
+        bool inserted;
+        if (lxmf_peer_store_put(&state->peer_store, &peer, &inserted) != LXMF_OK)
+            return;
+    }
+    (void)lxmf_peer_store_save(&state->peer_store);
+}
+
 static int state_open(tui_state *state, const char *identity_path,
                       const char *store_path, const char *destination_hex,
                       const char *config_path) {
@@ -199,6 +253,14 @@ static int state_open(tui_state *state, const char *identity_path,
         goto fail;
     if (lxmf_store_open(&state->store, store_path) != LXMF_OK) goto fail;
     if (lxmf_store_list(&state->store, message_loader, state) != LXMF_OK) goto fail;
+    int peer_path_length = snprintf(state->peer_store_path,
+                                    sizeof state->peer_store_path, "%s.peers",
+                                    store_path);
+    if (peer_path_length <= 0 ||
+        (size_t)peer_path_length >= sizeof state->peer_store_path ||
+        lxmf_peer_store_open(&state->peer_store, state->peer_store_path) != LXMF_OK ||
+        lxmf_peer_store_list(&state->peer_store, load_peer, state) != LXMF_OK)
+        goto fail;
     if (destination_hex) {
         uint8_t peer[16];
         if (!hex_parse_16(destination_hex, peer)) goto fail;
@@ -228,6 +290,7 @@ static int state_open(tui_state *state, const char *identity_path,
     return 0;
 fail:
     rns_runtime_destroy(state->runtime);
+    lxmf_peer_store_close(&state->peer_store);
     lxmf_store_close(&state->store);
     free(state->messages);
     state->messages = NULL;
@@ -238,6 +301,8 @@ static void state_close(tui_state *state) {
     if (state->node_store_path[0])
         (void)rns_node_registry_save(&state->nodes,state->node_store_path);
     rns_runtime_destroy(state->runtime);
+    persist_contacts(state);
+    lxmf_peer_store_close(&state->peer_store);
     lxmf_store_close(&state->store);
     free(state->messages);
 }
@@ -537,20 +602,20 @@ static void draw(tui_state *state) {
             "Enter: compose    i: peer info    p: pin    x: block",
             "t/u: trust/untrust    n: local note    y: copy fallback",
             "Composer: arrows Home End Del Backspace Ctrl-A/E/U/K/W",
-            "Network actions remain OFFLINE. Press ? or Esc to close."
+            "Configured networks send and receive opportunistic LXMF. Press ? or Esc to close."
         };
         centered_box("Help", help, sizeof help / sizeof help[0]);
     } else if (state->peer_info && state->selected < state->contact_count) {
         char peer[33], trust[64], note[80], flags[80];
         hex_format(state->contacts[state->selected].peer, 16u, peer);
         snprintf(trust, sizeof trust, "Trust: %s", trust_name(state->contacts[state->selected].trust));
-        snprintf(note, sizeof note, "Note: %s", state->contacts[state->selected].note[0] ? state->contacts[state->selected].note : "none (n toggles a local placeholder)");
+        snprintf(note, sizeof note, "Note: %s", state->contacts[state->selected].note[0] ? state->contacts[state->selected].note : "none");
         snprintf(flags, sizeof flags, "Pinned: %s  Blocked: %s  Unread: %zu",
                  state->contacts[state->selected].pinned ? "yes" : "no",
                  state->contacts[state->selected].blocked ? "yes" : "no",
                  state->contacts[state->selected].unread);
         const char *lines[] = {peer, "[ QR display unavailable in text-only build ]", trust, note, flags,
-                               "Session metadata is not persisted yet. Esc/i closes."};
+                               "Contact preferences are persisted. Esc/i closes."};
         centered_box("Peer information", lines, sizeof lines / sizeof lines[0]);
     }
 }
@@ -800,38 +865,40 @@ static int run_loop(tui_state *state) {
             case 'p':
                 if (state->selected < state->contact_count) {
                     state->contacts[state->selected].pinned = !state->contacts[state->selected].pinned;
-                    snprintf(state->status, sizeof state->status,
-                             "Pin is session-only until contact storage is available");
+                    persist_contacts(state);
+                    snprintf(state->status, sizeof state->status, "Pin saved");
                 }
                 break;
             case 'x':
                 if (state->selected < state->contact_count) {
                     state->contacts[state->selected].blocked = !state->contacts[state->selected].blocked;
-                    snprintf(state->status, sizeof state->status,
-                             "Block is session-only; offline outbox has no receive filter");
+                    persist_contacts(state);
+                    snprintf(state->status, sizeof state->status, "Block preference saved");
                 }
                 break;
             case 't':
                 if (state->selected < state->contact_count) {
                     state->contacts[state->selected].trust = TRUST_TRUSTED;
                     set_tab(state, TRUST_TRUSTED);
-                    snprintf(state->status, sizeof state->status, "Trust change is session-only");
+                    persist_contacts(state);
+                    snprintf(state->status, sizeof state->status, "Trusted contact saved");
                 }
                 break;
             case 'u':
                 if (state->selected < state->contact_count) {
                     state->contacts[state->selected].trust = TRUST_UNTRUSTED;
                     set_tab(state, TRUST_UNTRUSTED);
-                    snprintf(state->status, sizeof state->status, "Trust change is session-only");
+                    persist_contacts(state);
+                    snprintf(state->status, sizeof state->status, "Untrusted contact saved");
                 }
                 break;
             case 'n':
                 if (state->selected < state->contact_count) {
                     tui_contact *contact = &state->contacts[state->selected];
                     snprintf(contact->note, sizeof contact->note, "%s",
-                             contact->note[0] ? "" : "Local note (session only)");
-                    snprintf(state->status, sizeof state->status,
-                             "Contact note placeholder is session-only");
+                             contact->note[0] ? "" : "Local note");
+                    persist_contacts(state);
+                    snprintf(state->status, sizeof state->status, "Contact note saved");
                 }
                 break;
             case 'y':
