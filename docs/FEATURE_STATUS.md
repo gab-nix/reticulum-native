@@ -7,7 +7,7 @@ This is the source of truth for implementation progress. `IMPLEMENTED` means cod
 | C17 build, HAL, buffers, status API | IMPLEMENTED | Warning-as-error builds and unit tests. Embedded adapters remain planned. |
 | Crypto, identities, destinations, packets | IMPLEMENTED | Known-answer and unit tests; full upstream vector matrix remains WIP. |
 | Signed announces and paths | WIP | Build/parse/verification, verified runtime callbacks and path snapshots tested. Persistent discovery and upstream bidirectional capture remain. |
-| UDP and TCP interfaces | IMPLEMENTED | Loopback integration tests and operator setup guide. Live upstream testing remains. |
+| UDP and TCP interfaces | IMPLEMENTED | Loopback tests, setup guide and a reachability-checked public uplink configuration. Protocol-level upstream testing remains. |
 | AutoInterface, shared IPC, serial KISS, RNode | PLANNED | Framing primitives exist; interface drivers do not. |
 | Transport forwarding | WIP | Basic ingress, forwarding and dedupe exist. Reverse/proof/link/tunnel tables and persistent paths remain. |
 | Links and channels | WIP | Handshake crypto and bounded channel state tested. Receipts, keepalives, identification and runtime wiring remain. |

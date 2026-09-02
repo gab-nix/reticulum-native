@@ -80,6 +80,27 @@ nc -vz 192.168.1.20 4242
 Configure one end as the server and the other as the client. If startup reports
 an interface error, verify the address, firewall and port, then restart it.
 
+## Ready-made public uplinks
+
+The repository includes `config/public-tcp.conf` with two community-published
+entrypoints that were reachable when checked on 2026-09-02:
+
+- `node.reticulumnet.nl:4242`
+- `rmap.world:4242`
+
+Run it directly with:
+
+```sh
+./build/apps/rnsd --check config/public-tcp.conf
+./build/apps/nomad-chat tui --config config/public-tcp.conf \
+  my.identity history.lxms
+```
+
+Public community infrastructure has no availability guarantee. The config uses
+`panic_on_interface_error = No`, so one unavailable uplink does not prevent the
+other one from starting. TCP exposes endpoint IP addresses and packet timing;
+use I2P or a trusted tunnel when that metadata matters.
+
 ## Run the Nomad TUI
 
 Shared-instance IPC is not implemented, so the TUI cannot reuse a separately
@@ -124,4 +145,3 @@ but live bidirectional interoperability is not yet release-certified.
   `panic_on_interface_error = Yes` while diagnosing.
 - An empty Network screen means no valid peer announce has arrived yet.
 - `cannot open node registry` means no registry has been persisted at that path.
-
