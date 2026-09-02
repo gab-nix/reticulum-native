@@ -43,6 +43,15 @@ static void delivery(void *context, const uint8_t id[32],
     state->last_status = status;
 }
 
+typedef struct { size_t count; uint8_t id[32]; } incoming_state_t;
+
+static void incoming(void *context, const lxmf_store_message_t *message) {
+    incoming_state_t *state = context;
+    assert(message->status == LXMF_DELIVERY_DELIVERED);
+    memcpy(state->id, message->message_id, sizeof state->id);
+    state->count++;
+}
+
 int main(void) {
     char path[] = "/tmp/lxmf-router-XXXXXX";
     int fd = mkstemp(path);
@@ -89,6 +98,30 @@ int main(void) {
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_SENT);
 
+    char receive_path[] = "/tmp/lxmf-router-receive-XXXXXX";
+    fd = mkstemp(receive_path);
+    assert(fd >= 0);
+    close(fd);
+    unlink(receive_path);
+    lxmf_store_t received_store = {0};
+    assert(lxmf_store_open(&received_store, receive_path) == LXMF_OK);
+    send_state_t receiver_state = {.peer = &alice};
+    incoming_state_t incoming_state = {0};
+    lxmf_router_t receiver;
+    lxmf_router_config_t receiver_config = {
+        .identity = &bob, .store = &received_store, .resolve_identity = resolve,
+        .resolve_context = &receiver_state, .send_packet = send_packet,
+        .send_context = &receiver_state, .message_callback = incoming,
+        .message_context = &incoming_state};
+    assert(lxmf_router_init(&receiver, &receiver_config) == LXMF_OK);
+    assert(lxmf_router_receive_packet(&receiver, state.packet, state.length) == LXMF_OK);
+    assert(incoming_state.count == 1u);
+    assert(lxmf_store_read(&received_store, incoming_state.id, &got, body,
+                           sizeof body) == LXMF_OK);
+    assert(got.status == LXMF_DELIVERY_DELIVERED && got.content.len == 5u);
+    assert(lxmf_router_receive_packet(&receiver, state.packet, state.length) == LXMF_OK);
+    assert(incoming_state.count == 1u);
+
     message.message_id[0] = 2u;
     assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
     state.fail = true;
@@ -106,6 +139,8 @@ int main(void) {
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_SENT);
+    lxmf_store_close(&received_store);
+    unlink(receive_path);
     lxmf_store_close(&store);
     unlink(path);
     return 0;

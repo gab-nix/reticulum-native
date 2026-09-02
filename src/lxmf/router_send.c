@@ -104,3 +104,35 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
     }
     return LXMF_OK;
 }
+
+lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
+                                         const uint8_t *packet,
+                                         size_t packet_length) {
+    if (router == NULL || packet == NULL || packet_length == 0u ||
+        packet_length > RNS_MTU)
+        return LXMF_ERR_ARGUMENT;
+    uint8_t plaintext[RNS_MTU];
+    size_t plaintext_length = 0;
+    lxmf_message_t message;
+    lxmf_identity_verifier_context_t verifier = {
+        .resolve = router->config.resolve_identity,
+        .resolve_context = router->config.resolve_context};
+    lxmf_status_t status = lxmf_opportunistic_packet_unpack(
+        packet, packet_length, router->config.identity, lxmf_identity_verifier,
+        &verifier, plaintext, sizeof plaintext, &plaintext_length, &message);
+    if (status != LXMF_OK) return status;
+
+    lxmf_store_message_t stored = {0};
+    memcpy(stored.message_id, message.message_id, sizeof stored.message_id);
+    memcpy(stored.destination, message.destination, sizeof stored.destination);
+    memcpy(stored.source, message.source, sizeof stored.source);
+    stored.timestamp = message.timestamp;
+    stored.status = LXMF_DELIVERY_DELIVERED;
+    stored.content = message.content;
+    bool inserted = false;
+    status = lxmf_store_put(router->config.store, &stored, &inserted);
+    if (status != LXMF_OK) return status;
+    if (inserted && router->config.message_callback != NULL)
+        router->config.message_callback(router->config.message_context, &stored);
+    return LXMF_OK;
+}

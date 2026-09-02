@@ -57,6 +57,9 @@ typedef lxmf_status_t (*lxmf_router_send_fn)(void *context,
 typedef void (*lxmf_router_delivery_callback_fn)(
     void *context, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     lxmf_delivery_status_t status, lxmf_status_t result);
+/* The message and its borrowed slices are valid only for the callback. */
+typedef void (*lxmf_router_message_callback_fn)(
+    void *context, const lxmf_store_message_t *message);
 typedef struct {
     rns_identity *identity;
     lxmf_store_t *store;
@@ -66,6 +69,8 @@ typedef struct {
     void *send_context;
     lxmf_router_delivery_callback_fn delivery_callback;
     void *delivery_context;
+    lxmf_router_message_callback_fn message_callback;
+    void *message_context;
 } lxmf_router_config_t;
 typedef struct { lxmf_router_config_t config; } lxmf_router_t;
 
@@ -83,6 +88,11 @@ lxmf_status_t lxmf_router_send_message(lxmf_router_t *router,
  * persisted in the store and counted in result; they do not fail the poll. */
 lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
                                lxmf_router_poll_result_t *result);
+/* Accepts a single encrypted opportunistic LXMF packet for the local identity.
+ * Valid new messages are persisted as DELIVERED before message_callback runs. */
+lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
+                                         const uint8_t *packet,
+                                         size_t packet_length);
 
 lxmf_status_t lxmf_contact_book_init(lxmf_contact_book_t *book,
                                      lxmf_contact_t *storage, size_t capacity,
