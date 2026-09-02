@@ -4,6 +4,10 @@ A portable C17 implementation of the Reticulum networking stack and LXMF client.
 The project is under active development; protocol interoperability is validated
 against the reference Python implementations.
 
+See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for the exact
+implemented feature set and remaining interoperability work. The current CLI is
+an early integration tool, not yet a replacement for Nomad Network.
+
 ## Requirements
 
 - A C17 compiler (Clang or GCC)
@@ -30,4 +34,3 @@ ctest --test-dir build-sanitize --output-on-failure
 ```
 
 Set `RETICULUM_WARNINGS_AS_ERRORS=ON` for strict local and CI builds.
-
