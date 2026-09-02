@@ -26,5 +26,12 @@ int rns_identity_sign(const rns_identity *identity, const uint8_t *message, size
                       uint8_t signature[64]);
 int rns_identity_verify(const rns_identity *identity, const uint8_t *message, size_t message_length,
                         const uint8_t signature[64]);
+size_t rns_identity_encrypt_bound(size_t plaintext_length);
+int rns_identity_encrypt(const rns_identity *identity, const uint8_t ratchet_public[32],
+                         const uint8_t *plaintext, size_t plaintext_length,
+                         uint8_t *out, size_t out_capacity, size_t *out_length);
+int rns_identity_decrypt(const rns_identity *identity,
+                         const uint8_t *ciphertext, size_t ciphertext_length,
+                         uint8_t *out, size_t out_capacity, size_t *out_length);
 
 #endif

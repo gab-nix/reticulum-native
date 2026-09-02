@@ -2,6 +2,7 @@
 #include "reticulum/crypto.h"
 
 #include <string.h>
+#include <openssl/crypto.h>
 
 static int update_hash(rns_identity *identity) {
     uint8_t pub[64], digest[32];
@@ -51,4 +52,58 @@ int rns_identity_sign(const rns_identity *identity, const uint8_t *message, size
 
 int rns_identity_verify(const rns_identity *identity, const uint8_t *message, size_t message_length, const uint8_t signature[64]) {
     return identity && rns_ed25519_verify(identity->signing_public, message, message_length, signature);
+}
+
+size_t rns_identity_encrypt_bound(size_t plaintext_length) {
+    size_t blocks;
+    if (plaintext_length > SIZE_MAX - 16u) return 0;
+    blocks = (plaintext_length / 16u) + 1u;
+    if (blocks > (SIZE_MAX - 80u) / 16u) return 0;
+    return 80u + blocks * 16u;
+}
+
+int rns_identity_encrypt(const rns_identity *identity, const uint8_t ratchet_public[32],
+                         const uint8_t *plaintext, size_t plaintext_length,
+                         uint8_t *out, size_t out_capacity, size_t *out_length) {
+    uint8_t ephemeral_private[32], ephemeral_public[32], shared[32], derived[64];
+    const uint8_t *target;
+    size_t token_length = 0;
+    size_t bound;
+    int ok = 0;
+    if (!identity || (!plaintext && plaintext_length) || !out || !out_length) return 0;
+    bound = rns_identity_encrypt_bound(plaintext_length);
+    if (bound == 0 || out_capacity < bound) return 0;
+    target = ratchet_public ? ratchet_public : identity->encryption_public;
+    if (!rns_x25519_generate(ephemeral_private, ephemeral_public) ||
+        !rns_x25519_exchange(ephemeral_private, target, shared) ||
+        !rns_hkdf_sha256(shared, sizeof(shared), identity->hash, sizeof(identity->hash),
+                         NULL, 0, derived, sizeof(derived))) goto done;
+    memcpy(out, ephemeral_public, sizeof(ephemeral_public));
+    if (!rns_token_encrypt(derived, plaintext, plaintext_length, out + 32u,
+                           out_capacity - 32u, &token_length)) goto done;
+    *out_length = 32u + token_length;
+    ok = 1;
+done:
+    OPENSSL_cleanse(ephemeral_private, sizeof(ephemeral_private));
+    OPENSSL_cleanse(shared, sizeof(shared));
+    OPENSSL_cleanse(derived, sizeof(derived));
+    return ok;
+}
+
+int rns_identity_decrypt(const rns_identity *identity,
+                         const uint8_t *ciphertext, size_t ciphertext_length,
+                         uint8_t *out, size_t out_capacity, size_t *out_length) {
+    uint8_t shared[32], derived[64];
+    int ok = 0;
+    if (!identity || !identity->has_private || !ciphertext || ciphertext_length <= 32u ||
+        !out || !out_length) return 0;
+    if (!rns_x25519_exchange(identity->encryption_private, ciphertext, shared) ||
+        !rns_hkdf_sha256(shared, sizeof(shared), identity->hash, sizeof(identity->hash),
+                         NULL, 0, derived, sizeof(derived))) goto done;
+    ok = rns_token_decrypt(derived, ciphertext + 32u, ciphertext_length - 32u,
+                           out, out_capacity, out_length);
+done:
+    OPENSSL_cleanse(shared, sizeof(shared));
+    OPENSSL_cleanse(derived, sizeof(derived));
+    return ok;
 }
