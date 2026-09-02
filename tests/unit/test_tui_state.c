@@ -1,0 +1,189 @@
+#include "tui_state.h"
+
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+
+static const uint8_t local_address[LXMF_DESTINATION_LENGTH] = {0x11u};
+
+/*
+ * Builds a state without touching the store or the network so the pure
+ * selection, filtering and scrolling rules can be exercised directly.
+ */
+static tui_state_t *make_state(void) {
+    tui_state_t *state = calloc(1u, sizeof *state);
+    assert(state != NULL);
+    state->messages = calloc(TUI_MAX_MESSAGES, sizeof *state->messages);
+    assert(state->messages != NULL);
+    memcpy(state->local, local_address, sizeof state->local);
+    tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
+    tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
+    tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
+    state->tab = TUI_TRUST_UNKNOWN;
+    state->filter_dirty = true;
+    return state;
+}
+
+static void destroy_state(tui_state_t *state) {
+    free(state->messages);
+    free(state);
+}
+
+static void add_contact(tui_state_t *state, uint8_t tag, tui_trust_t trust) {
+    tui_contact_t *contact = &state->contacts[state->contact_count++];
+    memset(contact, 0, sizeof *contact);
+    contact->peer[0] = tag;
+    contact->trust = trust;
+    state->filter_dirty = true;
+}
+
+static void add_message(tui_state_t *state, uint8_t peer_tag, bool outgoing,
+                        const char *content) {
+    tui_message_t *message = &state->messages[state->message_count++];
+    memset(message, 0, sizeof *message);
+    size_t length = strlen(content);
+    memcpy(message->content, content, length);
+    message->value.content.data = message->content;
+    message->value.content.len = length;
+    message->value.status = LXMF_DELIVERY_QUEUED;
+    if (outgoing) {
+        memcpy(message->value.source, local_address, LXMF_DESTINATION_LENGTH);
+        message->value.destination[0] = peer_tag;
+    } else {
+        message->value.source[0] = peer_tag;
+        memcpy(message->value.destination, local_address, LXMF_DESTINATION_LENGTH);
+    }
+    size_t index = 0u;
+    while (index < state->contact_count && state->contacts[index].peer[0] != peer_tag)
+        ++index;
+    assert(index < state->contact_count);
+    state->contacts[index].messages++;
+    state->filter_dirty = true;
+}
+
+static void test_trust_tabs(void) {
+    tui_state_t *state = make_state();
+    add_contact(state, 0xa1u, TUI_TRUST_UNKNOWN);
+    add_contact(state, 0xa2u, TUI_TRUST_TRUSTED);
+    add_contact(state, 0xa3u, TUI_TRUST_UNKNOWN);
+    tui_state_refresh(state);
+    /* Only the current tab is listed. */
+    assert(state->visible_count == 2u);
+    assert(state->visible[0] == 0u && state->visible[1] == 2u);
+    tui_state_set_tab(state, TUI_TRUST_TRUSTED);
+    tui_state_refresh(state);
+    assert(state->visible_count == 1u);
+    assert(state->selected == 1u);
+    tui_state_set_tab(state, TUI_TRUST_UNTRUSTED);
+    tui_state_refresh(state);
+    assert(state->visible_count == 0u);
+    destroy_state(state);
+}
+
+static void test_thread_and_search(void) {
+    tui_state_t *state = make_state();
+    add_contact(state, 0xa1u, TUI_TRUST_UNKNOWN);
+    add_contact(state, 0xa2u, TUI_TRUST_UNKNOWN);
+    add_message(state, 0xa1u, true, "hello from me");
+    add_message(state, 0xa1u, false, "reply about reticulum");
+    add_message(state, 0xa2u, true, "unrelated thread");
+    state->selected = 0u;
+    tui_state_refresh(state);
+    /* The thread holds only the selected conversation. */
+    assert(tui_state_thread_count(state) == 2u);
+    assert(tui_state_outgoing(state, tui_state_thread_message(state, 0u)));
+    assert(!tui_state_outgoing(state, tui_state_thread_message(state, 1u)));
+
+    /* Search narrows both the contact list and the visible thread. */
+    assert(tui_editor_insert(&state->search, "RETICULUM", 9u));
+    state->filter_dirty = true;
+    tui_state_refresh(state);
+    assert(state->visible_count == 1u && state->visible[0] == 0u);
+    assert(tui_state_thread_count(state) == 1u);
+    assert(tui_state_thread_message(state, 1u) == NULL);
+
+    tui_editor_clear(&state->search);
+    state->filter_dirty = true;
+    tui_state_refresh(state);
+    assert(state->visible_count == 2u);
+    destroy_state(state);
+}
+
+static void test_selection_cycles(void) {
+    tui_state_t *state = make_state();
+    add_contact(state, 0xa1u, TUI_TRUST_UNKNOWN);
+    add_contact(state, 0xa2u, TUI_TRUST_UNKNOWN);
+    state->contacts[1].unread = 3u;
+    state->selected = 0u;
+    tui_state_refresh(state);
+    tui_state_select_offset(state, 1);
+    assert(state->selected == 1u);
+    /* Selecting a conversation clears its unread marker. */
+    assert(state->contacts[1].unread == 0u);
+    tui_state_select_offset(state, 1);
+    assert(state->selected == 0u);
+    tui_state_select_offset(state, -1);
+    assert(state->selected == 1u);
+    destroy_state(state);
+}
+
+static void test_scroll_is_clamped(void) {
+    tui_state_t *state = make_state();
+    add_contact(state, 0xa1u, TUI_TRUST_UNKNOWN);
+    add_message(state, 0xa1u, true, "one");
+    add_message(state, 0xa1u, true, "two");
+    state->selected = 0u;
+    tui_state_refresh(state);
+    /* Scrolling back never exceeds the thread length. */
+    tui_state_scroll_by(state, 100);
+    assert(state->scroll == tui_state_thread_count(state));
+    tui_state_scroll_by(state, 100);
+    assert(state->scroll == 2u);
+    /* Scrolling forward never underflows. */
+    tui_state_scroll_by(state, -100);
+    assert(state->scroll == 0u);
+    tui_state_scroll_by(state, -1);
+    assert(state->scroll == 0u);
+    destroy_state(state);
+}
+
+static void test_open_conversation(void) {
+    tui_state_t *state = make_state();
+    uint8_t peer[LXMF_DESTINATION_LENGTH] = {0xb7u};
+    add_contact(state, 0xa1u, TUI_TRUST_TRUSTED);
+    state->tab = TUI_TRUST_TRUSTED;
+    assert(tui_state_open_conversation(state, peer));
+    /* A new conversation is created, selected, and opens the composer. */
+    assert(state->contact_count == 2u);
+    assert(state->selected == 1u);
+    assert(state->tab == TUI_TRUST_UNKNOWN);
+    assert(state->screen == TUI_SCREEN_CONVERSATIONS);
+    assert(state->field == TUI_FIELD_COMPOSE);
+    /* Reopening the same peer reuses the existing conversation. */
+    assert(tui_state_open_conversation(state, peer));
+    assert(state->contact_count == 2u);
+    destroy_state(state);
+}
+
+static void test_contact_table_bound(void) {
+    tui_state_t *state = make_state();
+    uint8_t peer[LXMF_DESTINATION_LENGTH] = {0};
+    for (size_t i = 0u; i < TUI_MAX_CONTACTS; ++i)
+        add_contact(state, (uint8_t)(i + 1u), TUI_TRUST_UNKNOWN);
+    peer[0] = 0xffu;
+    peer[1] = 0xffu;
+    assert(!tui_state_open_conversation(state, peer));
+    assert(state->contact_count == TUI_MAX_CONTACTS);
+    assert(strstr(state->status, "limit") != NULL);
+    destroy_state(state);
+}
+
+int main(void) {
+    test_trust_tabs();
+    test_thread_and_search();
+    test_selection_cycles();
+    test_scroll_is_clamped();
+    test_open_conversation();
+    test_contact_table_bound();
+    return 0;
+}

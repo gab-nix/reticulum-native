@@ -44,6 +44,15 @@ Set `RETICULUM_WARNINGS_AS_ERRORS=ON` for strict local and CI builds.
 
 The optional final value is a peer LXMF delivery address. Press `Enter` to
 compose, `Esc` to cancel, arrow keys or `j`/`k` to select conversations, and
-`q` to exit. The current TUI truthfully reports `OFFLINE`: it persists signed
-messages to the outbox, while automatic Reticulum delivery is still being
-wired into the runtime.
+`q` to exit. Started this way the TUI reports `OFFLINE` and only persists
+signed messages to the local outbox.
+
+To run it against a real network, pass an interface configuration:
+
+```sh
+./build/apps/nomad-chat tui --config config/public-tcp.conf my.identity history.lxms
+```
+
+That form reports `ONLINE`, ingests verified announces into the Network screen,
+and attempts opportunistic LXMF delivery. See [docs/TUI.md](docs/TUI.md) for the
+full key map and the persistence boundary.

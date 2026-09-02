@@ -30,12 +30,20 @@ reticulum_add_test(test_ifac unit/test_ifac.c)
 reticulum_add_test(test_proof unit/test_proof.c)
 reticulum_add_test(test_channel unit/test_channel.c)
 reticulum_add_test(test_runtime unit/test_runtime.c)
-reticulum_add_test(test_tui_model unit/test_tui_model.c)
-target_sources(test_tui_model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_model.c)
-target_include_directories(test_tui_model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
-reticulum_add_test(test_tui_shell unit/test_tui_shell.c)
-target_sources(test_tui_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_shell.c)
-target_include_directories(test_tui_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
+reticulum_add_test(test_tui_text unit/test_tui_text.c)
+target_sources(test_tui_text PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
+target_include_directories(test_tui_text PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
+reticulum_add_test(test_tui_editor unit/test_tui_editor.c)
+target_sources(test_tui_editor PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
+target_include_directories(test_tui_editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
+reticulum_add_test(test_tui_state unit/test_tui_state.c)
+target_sources(test_tui_state PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
+target_include_directories(test_tui_state PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
 reticulum_add_test(test_node_registry unit/test_node_registry.c)
 reticulum_add_test(test_micron unit/test_micron.c)
 reticulum_add_test(test_udp integration/test_udp.c)

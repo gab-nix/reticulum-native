@@ -12,3 +12,4 @@
 *.identity
 *.lxms
 *.lxms.nodes
+*.lxms.peers
