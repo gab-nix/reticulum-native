@@ -27,6 +27,9 @@ is available. TCP and UDP address/port fields and KISS/RNode serial metadata are
 stored as typed values. RNode radio metadata includes frequency, bandwidth,
 transmit power, spreading factor, and coding rate.
 
+For end-to-end TCP examples, TUI commands, firewall notes and current runtime
+limitations, see [TCP_SETUP.md](TCP_SETUP.md).
+
 Unknown sections, keys, and interface types are rejected with a status, source
 line, and human-readable diagnostic. Enabled interfaces are also checked for
 their required connection fields. Disabled interfaces may intentionally retain
