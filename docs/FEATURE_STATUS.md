@@ -13,10 +13,10 @@ This is the source of truth for implementation progress. `IMPLEMENTED` means cod
 | Links and channels | WIP | Handshake crypto and bounded channel state tested. Receipts, keepalives, identification and runtime wiring remain. |
 | Resources | PLANNED | Segmentation, compression, retries, resume and cancellation remain. |
 | LXMF codec, signatures, stamps, tickets | WIP | Core codec and unit tests exist. Full ticket lifecycle and upstream fixtures remain. |
-| LXMF delivery and propagation | WIP | Caller-polled router durably retries queued/failed opportunistic sends, reports state transitions, and persists status transitions; direct links/resources, receipt handling, retry backoff and propagation sync remain. |
+| LXMF delivery and propagation | WIP | Caller-polled router retains messages pending a recipient announce, requests missing paths from the TUI, retries queued/failed opportunistic sends, reports state transitions, and persists status transitions; direct links/resources, receipt handling, retry backoff and propagation sync remain. |
 | Peer and message persistence | IMPLEMENTED | Crash-recovering message journal and durable peer settings tests. |
 | Nomad conversations | WIP | Verified-peer opportunistic send and receive, persistent trust/pin/note and block-preference state, search, address entry, known-node inbox handoff, composer, history and offline queue exist. Enforced blocking, attachments, replies, reactions, receipts and non-opportunistic delivery remain. |
-| Network screen and active nodes | WIP | Configured TUI runtime consumes verified announces, associates Nomad nodes with LXMF inboxes, and renders sorted persistent records. Search, path refresh, details and upstream verification remain. |
+| Network screen and active nodes | WIP | Configured TUI runtime consumes verified announces, associates Nomad nodes with LXMF inboxes, renders sorted persistent records, and can broadcast a path-refresh request for the selected node. Search, detailed diagnostics and upstream verification remain. |
 | Native Micron browser | WIP | Bounded parser, links and history exist. Remote fetch, forms, complete markup and upstream page tests remain. |
 | Channels/RRC, Interfaces, Config, Guide, Logs, hosted node | PLANNED | Shell navigation seams exist; working screens do not. |
 | CLI utilities | WIP | `rnid`, `rnsd`, and `nomad-chat` history/node diagnostics exist, including JSON node output. Core utility parity remains. |

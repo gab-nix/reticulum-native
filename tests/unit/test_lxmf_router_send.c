@@ -122,6 +122,17 @@ int main(void) {
     assert(lxmf_router_receive_packet(&receiver, state.packet, state.length) == LXMF_OK);
     assert(incoming_state.count == 1u);
 
+    message.message_id[0] = 3u;
+    assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
+    state.peer = NULL;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_FORMAT);
+    assert(lxmf_store_read(&store, message.message_id, &got, body,
+                           sizeof body) == LXMF_OK);
+    assert(got.status == LXMF_DELIVERY_QUEUED);
+    state.peer = &bob;
+    assert(lxmf_store_update_status(&store, message.message_id,
+                                    LXMF_DELIVERY_SENT) == LXMF_OK);
+
     message.message_id[0] = 2u;
     assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
     state.fail = true;

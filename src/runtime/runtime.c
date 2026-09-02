@@ -1,5 +1,6 @@
 #include "reticulum/runtime.h"
 
+#include "reticulum/destination.h"
 #include "reticulum/hal.h"
 #include "reticulum/packet.h"
 #include "reticulum/tcp.h"
@@ -157,6 +158,14 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
     node_config.transport.path_lifetime = 604800.0;
     node_config.transport.dedupe_lifetime = 60.0;
     node_config.transport.clock = runtime_clock;
+    {
+        static const char *const path_aspects[] = {"path", "request"};
+        if (!rns_destination_hash(NULL, "rnstransport", path_aspects, 2U,
+                                  node_config.path_request_destination)) {
+            free(runtime);
+            return RNS_ERROR_NO_MEMORY;
+        }
+    }
     node_config.max_hops = 128U;
     node_config.local_destination_capacity = options != NULL && options->local_destination_capacity
                                                ? options->local_destination_capacity : 32U;
@@ -259,6 +268,38 @@ rns_status_t rns_runtime_register_destination(rns_runtime_t *runtime, const uint
 rns_status_t rns_runtime_unregister_destination(rns_runtime_t *runtime, const uint8_t hash[16]) {
     if (runtime == NULL || hash == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     return rns_node_unregister_destination(&runtime->node, hash) ? RNS_OK : RNS_ERROR_NOT_FOUND;
+}
+
+rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,
+                                      const uint8_t destination_hash[16]) {
+    if (runtime == NULL || destination_hash == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    uint8_t tag[RNS_PATH_REQUEST_MAX_TAG_SIZE], body[48], raw[RNS_MTU];
+    size_t body_length = 0U, raw_length = 0U;
+    if (rns_hal_random_bytes(tag, sizeof tag) != RNS_OK ||
+        !rns_path_request_build(destination_hash, NULL, tag, sizeof tag, body,
+                                sizeof body, &body_length))
+        return RNS_ERROR_INVALID_STATE;
+    rns_packet request = {0};
+    memcpy(request.destination_hash, runtime->node.path_request_destination,
+           sizeof request.destination_hash);
+    request.transport_type = 1U;
+    request.destination_type = 2U;
+    request.packet_type = 0U;
+    request.context = RNS_NODE_PATH_REQUEST_CONTEXT;
+    request.data = body;
+    request.data_length = body_length;
+    if (!rns_packet_encode(&request, raw, sizeof raw, &raw_length))
+        return RNS_ERROR_INVALID_STATE;
+    rns_status_t last_error = RNS_ERROR_INVALID_STATE;
+    bool sent_on_live_interface = false;
+    for (size_t i = 0U; i < runtime->interface_count; i++) {
+        if (runtime->interfaces[i].info.state != RNS_RUNTIME_INTERFACE_UP) continue;
+        sent_on_live_interface = true;
+        rns_status_t status = send_internal(runtime, i, raw, raw_length);
+        if (status == RNS_OK) return RNS_OK;
+        last_error = status;
+    }
+    return sent_on_live_interface ? last_error : RNS_ERROR_INVALID_STATE;
 }
 
 rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime, const uint8_t hash[16],

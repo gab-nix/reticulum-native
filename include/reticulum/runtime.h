@@ -76,6 +76,10 @@ rns_status_t rns_runtime_register_destination(rns_runtime_t *runtime,
                                               const uint8_t destination_hash[16]);
 rns_status_t rns_runtime_unregister_destination(rns_runtime_t *runtime,
                                                 const uint8_t destination_hash[16]);
+/* Broadcasts an RNS path request. A responding peer will re-announce the
+ * destination, allowing callers to resolve its current route and identity. */
+rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,
+                                      const uint8_t destination_hash[16]);
 rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime,
                                      const uint8_t destination_hash[16],
                                      rns_path_entry *path);

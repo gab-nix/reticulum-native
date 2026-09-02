@@ -438,11 +438,22 @@ static bool selected_network_node(const tui_state *state, rns_node_record *recor
     return true;
 }
 
+static void refresh_selected_node_path(tui_state *state) {
+    rns_node_record node;
+    if (state->runtime == NULL || !selected_network_node(state, &node)) {
+        snprintf(state->status, sizeof state->status, "No runtime or selected node");
+    } else if (rns_runtime_request_path(state->runtime, node.destination) == RNS_OK) {
+        snprintf(state->status, sizeof state->status, "Path refresh requested");
+    } else {
+        snprintf(state->status, sizeof state->status, "Path refresh could not be sent");
+    }
+}
+
 static void draw_network(tui_state *state, int rows, int columns) {
     attron(A_BOLD); clipped(stdscr, 3, 1, columns - 2, "Active and known nodes"); attroff(A_BOLD);
     if (state->nodes.count == 0u) {
         clipped(stdscr, 5, 2, columns - 4,
-                "No live announces received. Runtime announce wiring is the next milestone.");
+                "No live announces received yet. Check interface status and wait for announces.");
     }
     rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
     size_t node_count = rns_node_registry_sorted(&state->nodes, sorted,
@@ -458,7 +469,7 @@ static void draw_network(tui_state *state, int rows, int columns) {
         clipped(stdscr, 5 + (int)i, 2, columns - 4, line);
         if (i == state->network_selected) attroff(A_REVERSE);
     }
-    clipped(stdscr, rows - 2, 0, columns, "j/k select  Enter actions  B browser  C conversations  q quit");
+    clipped(stdscr, rows - 2, 0, columns, "j/k select  Enter actions  R refresh path  B browser  C conversations  q quit");
     if (state->node_actions && node_count > 0u) {
         static const char *const actions[] = {
             "B: browse Nomad page", "M: message associated LXMF inbox", "Esc: cancel"
@@ -647,9 +658,17 @@ static lxmf_status_t queue_message(tui_state *state) {
     status = lxmf_store_put(&state->store, &stored, &inserted);
     state->last_send_attempted = false; state->last_send_ok = false;
     if (status == LXMF_OK && inserted && state->router_ready) {
-        state->last_send_attempted = true;
-        state->last_send_ok = lxmf_router_send_message(&state->router,
-                                                       decoded.message_id) == LXMF_OK;
+        if (resolve_peer(state, stored.destination) == NULL) {
+            state->last_send_attempted = rns_runtime_request_path(
+                state->runtime, stored.destination) == RNS_OK;
+            state->last_send_ok = false;
+            snprintf(state->status, sizeof state->status,
+                     "Queued; requesting a verified path to recipient");
+        } else {
+            state->last_send_attempted = true;
+            state->last_send_ok = lxmf_router_send_message(&state->router,
+                                                           decoded.message_id) == LXMF_OK;
+        }
     }
     if (status == LXMF_OK && inserted && state->message_count < TUI_MAX_MESSAGES) {
         tui_message *copy = &state->messages[state->message_count++];
@@ -912,7 +931,10 @@ static int run_loop(tui_state *state) {
             case 's': case 'S': unavailable_screen(state, SCREEN_CONFIG, "Settings"); break;
             case 'g': case 'G': unavailable_screen(state, SCREEN_GUIDE, "Guide"); break;
             case 'l': case 'L': unavailable_screen(state, SCREEN_LOGS, "Logs"); break;
-            case 'r': case 'R': unavailable_screen(state, SCREEN_RRC, "RRC"); break;
+            case 'r': case 'R':
+                if (state->screen == SCREEN_NETWORK) refresh_selected_node_path(state);
+                else unavailable_screen(state, SCREEN_RRC, "RRC");
+                break;
             case '\n': case KEY_ENTER:
                 if(state->screen==SCREEN_BROWSER) browser_open_selected(state);
                 else if(state->screen==SCREEN_NETWORK && state->nodes.count>0u)

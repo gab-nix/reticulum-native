@@ -35,12 +35,8 @@ lxmf_status_t lxmf_router_send_message(
         return LXMF_ERR_ARGUMENT;
     const rns_identity *destination = router->config.resolve_identity(
         router->config.resolve_context, stored.destination);
-    if (destination == NULL) {
-        (void)lxmf_store_update_status(router->config.store, id,
-                                       LXMF_DELIVERY_FAILED);
-        report(router, id, LXMF_DELIVERY_FAILED, LXMF_ERR_FORMAT);
-        return LXMF_ERR_FORMAT;
-    }
+    /* A missing announce is a normal discovery state, not a delivery failure. */
+    if (destination == NULL) return LXMF_ERR_FORMAT;
     lxmf_message_t message = {0};
     message.content = (lxmf_slice_t){content, stored.content.len};
     memcpy(message.destination, stored.destination, sizeof message.destination);
