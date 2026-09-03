@@ -63,6 +63,114 @@ static bool skip_obj(reader_t *r,unsigned depth){
 static bool get_bin(reader_t *r,lxmf_slice_t *s){const uint8_t *start=r->p;if(!skip_obj(r,0))return false;uint8_t c=*start;size_t h,n;if(c>=0xa0&&c<=0xbf){h=1;n=c&31;}else if(c==0xc4||c==0xd9){h=2;n=start[1];}else if(c==0xc5||c==0xda){h=3;n=((size_t)start[1]<<8)|start[2];}else if(c==0xc6||c==0xdb){h=5;n=load32be(start+1);}else return false;s->data=start+h;s->len=n;return true;}
 static bool get_double(reader_t *r,double *d){if(r->end-r->p<9||*r->p++!=0xcb)return false;uint64_t u=((uint64_t)load32be(r->p)<<32)|load32be(r->p+4);r->p+=8;memcpy(d,&u,8);return true;}
 
+static bool get_container_count(reader_t *r, uint8_t fix_mask,
+                                uint8_t fix_tag, uint8_t code16,
+                                uint8_t code32, size_t *count) {
+    if (r->p >= r->end) return false;
+    uint8_t code = *r->p++;
+    if ((code & fix_mask) == fix_tag) {
+        *count = code & (uint8_t)~fix_mask;
+        return true;
+    }
+    if (code == code16) {
+        if ((size_t)(r->end - r->p) < 2u) return false;
+        *count = ((size_t)r->p[0] << 8u) | r->p[1];
+        r->p += 2;
+        return true;
+    }
+    if (code == code32) {
+        if ((size_t)(r->end - r->p) < 4u) return false;
+        uint32_t value = load32be(r->p);
+        r->p += 4;
+        *count = (size_t)value;
+        if ((uint32_t)*count != value) return false;
+        return true;
+    }
+    return false;
+}
+
+static bool get_unsigned(reader_t *r, uint64_t *value) {
+    if (r->p >= r->end) return false;
+    uint8_t code = *r->p++;
+    if (code <= 0x7fu) { *value = code; return true; }
+    size_t bytes;
+    switch (code) {
+        case 0xcc: bytes = 1u; break;
+        case 0xcd: bytes = 2u; break;
+        case 0xce: bytes = 4u; break;
+        case 0xcf: bytes = 8u; break;
+        default: return false;
+    }
+    if ((size_t)(r->end - r->p) < bytes) return false;
+    uint64_t result = 0u;
+    for (size_t i = 0u; i < bytes; ++i) result = (result << 8u) | r->p[i];
+    r->p += bytes;
+    *value = result;
+    return true;
+}
+
+static bool get_expiry(reader_t *r, uint64_t *expiry) {
+    if (r->p >= r->end) return false;
+    if (*r->p != 0xcau && *r->p != 0xcbu) return get_unsigned(r, expiry);
+    uint8_t code = *r->p++;
+    double value;
+    if (code == 0xcau) {
+        if ((size_t)(r->end - r->p) < 4u) return false;
+        uint32_t bits = load32be(r->p);
+        float decoded;
+        r->p += 4;
+        memcpy(&decoded, &bits, sizeof decoded);
+        value = decoded;
+    } else {
+        if ((size_t)(r->end - r->p) < 8u) return false;
+        uint64_t bits = ((uint64_t)load32be(r->p) << 32u) |
+                        load32be(r->p + 4u);
+        r->p += 8;
+        memcpy(&value, &bits, sizeof value);
+    }
+    /* 2^64 is exactly representable as a double; requiring a smaller value
+     * makes the conversion defined even though UINT64_MAX itself rounds up. */
+    if (!(value >= 0.0) || value >= 18446744073709551616.0) return false;
+    uint64_t converted = (uint64_t)value;
+    if ((double)converted != value) return false;
+    *expiry = converted;
+    return true;
+}
+
+lxmf_status_t lxmf_fields_parse_ticket(const uint8_t *fields,
+                                       size_t fields_length,
+                                       lxmf_ticket_field_t *ticket) {
+    if (fields == NULL || fields_length == 0u || ticket == NULL)
+        return LXMF_ERR_ARGUMENT;
+    memset(ticket, 0, sizeof *ticket);
+    reader_t reader = {fields, fields + fields_length};
+    size_t count = 0u;
+    if (!get_container_count(&reader, 0xf0u, 0x80u, 0xdeu, 0xdfu,
+                             &count)) return LXMF_ERR_FORMAT;
+    for (size_t i = 0u; i < count; ++i) {
+        reader_t key_reader = reader;
+        uint64_t key = UINT64_MAX;
+        bool integer_key = get_unsigned(&key_reader, &key);
+        if (!skip_obj(&reader, 0u)) return LXMF_ERR_FORMAT;
+        if (!integer_key || key != LXMF_FIELD_TICKET) {
+            if (!skip_obj(&reader, 0u)) return LXMF_ERR_FORMAT;
+            continue;
+        }
+        if (ticket->present) return LXMF_ERR_FORMAT;
+        size_t values = 0u;
+        if (!get_container_count(&reader, 0xf0u, 0x90u, 0xdcu, 0xddu,
+                                 &values) || values != 2u ||
+            !get_expiry(&reader, &ticket->expires_at))
+            return LXMF_ERR_FORMAT;
+        lxmf_slice_t bytes;
+        if (!get_bin(&reader, &bytes) || bytes.len != LXMF_TICKET_LENGTH)
+            return LXMF_ERR_FORMAT;
+        memcpy(ticket->ticket, bytes.data, LXMF_TICKET_LENGTH);
+        ticket->present = true;
+    }
+    return reader.p == reader.end ? LXMF_OK : LXMF_ERR_FORMAT;
+}
+
 static size_t bin_bound(size_t n){return n+5;}
 size_t lxmf_pack_bound(const lxmf_message_t *m){if(!m)return 0;size_t stamp_len=m->stamp_len?m->stamp_len:LXMF_STAMP_LENGTH;return LXMF_HEADER_LENGTH+1+9+bin_bound(m->title.len)+bin_bound(m->content.len)+(m->fields_msgpack.len?m->fields_msgpack.len:1)+(m->has_stamp?bin_bound(stamp_len):0);}
 
@@ -103,5 +211,5 @@ static void hash_work_stamp(const uint8_t *wb,const uint8_t stamp[32],uint8_t di
 lxmf_status_t lxmf_pow_stamp_validate(const uint8_t id[32],uint8_t cost,const uint8_t stamp[32],uint8_t *value){if(!id||!stamp||cost<1||cost>255)return LXMF_ERR_ARGUMENT;uint8_t *wb=NULL;lxmf_status_t st=stamp_workblock(id,&wb);if(st!=LXMF_OK)return st;uint8_t d[32];hash_work_stamp(wb,stamp,d);free(wb);if(value)*value=digest_value(d);return digest_meets(d,cost)?LXMF_OK:LXMF_ERR_FORMAT;}
 lxmf_status_t lxmf_pow_stamp_generate(const uint8_t id[32],uint8_t cost,lxmf_stamp_progress_fn progress,void *ctx,uint8_t stamp[32],uint8_t *value,uint64_t *attempts){if(!id||!stamp||cost<1||cost>255)return LXMF_ERR_ARGUMENT;if(progress&&!progress(ctx,0))return LXMF_ERR_CANCELLED;uint8_t *wb=NULL;lxmf_status_t st=stamp_workblock(id,&wb);if(st!=LXMF_OK)return st;if(!rns_random_bytes(stamp,32)){free(wb);return LXMF_ERR_CRYPTO;}uint64_t rounds=0;for(;;){uint8_t d[32];hash_work_stamp(wb,stamp,d);rounds++;if(digest_meets(d,cost)){if(value)*value=digest_value(d);if(attempts)*attempts=rounds;free(wb);return LXMF_OK;}for(int i=31;i>=0;i--){stamp[i]++;if(stamp[i])break;}if((rounds&1023u)==0&&progress&&!progress(ctx,rounds)){if(attempts)*attempts=rounds;free(wb);return LXMF_ERR_CANCELLED;}}}
 
-const char *lxmf_status_string(lxmf_status_t s){switch(s){case LXMF_OK:return "ok";case LXMF_ERR_ARGUMENT:return "invalid argument";case LXMF_ERR_BOUNDS:return "buffer bounds";case LXMF_ERR_FORMAT:return "invalid LXMF/MessagePack format";case LXMF_ERR_CRYPTO:return "cryptographic operation failed";case LXMF_ERR_SIGNATURE:return "signature verification failed";case LXMF_ERR_CANCELLED:return "operation cancelled";case LXMF_ERR_TIMEOUT:return "delivery timed out";case LXMF_ERR_PENDING:return "waiting for delivery prerequisite";case LXMF_ERR_UNKNOWN_SIGNER:return "signer identity not held locally";default:return "unknown LXMF error";}}
+const char *lxmf_status_string(lxmf_status_t s){switch(s){case LXMF_OK:return "ok";case LXMF_ERR_ARGUMENT:return "invalid argument";case LXMF_ERR_BOUNDS:return "buffer bounds";case LXMF_ERR_FORMAT:return "invalid LXMF/MessagePack format";case LXMF_ERR_CRYPTO:return "cryptographic operation failed";case LXMF_ERR_SIGNATURE:return "signature verification failed";case LXMF_ERR_CANCELLED:return "operation cancelled";case LXMF_ERR_TIMEOUT:return "delivery timed out";case LXMF_ERR_PENDING:return "waiting for delivery prerequisite";case LXMF_ERR_UNKNOWN_SIGNER:return "signer identity not held locally";case LXMF_ERR_STAMP:return "stamp validation failed";default:return "unknown LXMF error";}}
 const char *lxmf_signature_state_string(lxmf_signature_state_t s){switch(s){case LXMF_SIGNATURE_VERIFIED:return "verified";case LXMF_SIGNATURE_UNVERIFIED:return "unverified sender";case LXMF_SIGNATURE_FAILED:return "signature invalid";default:return "unknown signature state";}}

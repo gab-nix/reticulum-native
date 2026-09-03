@@ -18,6 +18,7 @@ extern "C" {
 #define LXMF_STAMP_LENGTH 16u
 #define LXMF_POW_STAMP_LENGTH 32u
 #define LXMF_STAMP_WORKBLOCK_ROUNDS 3000u
+#define LXMF_FIELD_TICKET 0x0cu
 
 typedef enum {
     LXMF_OK = 0,
@@ -34,7 +35,9 @@ typedef enum {
     /* The signer's identity is not held locally, so the signature can be
      * neither confirmed nor refuted. Distinct from LXMF_ERR_SIGNATURE, which
      * means a known identity did not sign the message. */
-    LXMF_ERR_UNKNOWN_SIGNER
+    LXMF_ERR_UNKNOWN_SIGNER,
+    /* The message did not satisfy the configured inbound stamp policy. */
+    LXMF_ERR_STAMP
 } lxmf_status_t;
 
 /* Trust carried alongside a retained message. */
@@ -64,6 +67,20 @@ typedef struct {
     size_t stamp_len;
     uint8_t stamp[LXMF_POW_STAMP_LENGTH];
 } lxmf_message_t;
+
+typedef struct {
+    bool present;
+    uint64_t expires_at;
+    uint8_t ticket[LXMF_TICKET_LENGTH];
+} lxmf_ticket_field_t;
+
+/* Extracts the standard FIELD_TICKET value [expiry, ticket] from an LXMF
+ * fields map while leaving every field byte owned by the caller. An absent
+ * field returns OK with present=false; malformed or duplicate ticket fields
+ * return LXMF_ERR_FORMAT. */
+lxmf_status_t lxmf_fields_parse_ticket(const uint8_t *fields,
+                                       size_t fields_length,
+                                       lxmf_ticket_field_t *ticket);
 
 typedef lxmf_status_t (*lxmf_sign_fn)(void *context,
                                       const uint8_t *data, size_t data_len,

@@ -3,6 +3,7 @@
 
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_store.h"
+#include "reticulum/lxmf_tickets.h"
 #include "reticulum/runtime.h"
 
 #ifdef __cplusplus
@@ -99,6 +100,15 @@ typedef struct lxmf_router lxmf_router_t;
 typedef struct {
     rns_identity *identity;
     lxmf_store_t *store;
+    /* Optional durable ticket store and caller-owned wall clock. The router
+     * never assumes monotonic time is Unix time. A wall clock is required when
+     * a ticket store is supplied. */
+    lxmf_ticket_store_t *ticket_store;
+    lxmf_clock_fn wall_clock;
+    void *wall_clock_context;
+    /* Zero disables inbound stamp enforcement. Costs 1..254 accept either a
+     * valid issued-ticket stamp or a proof-of-work stamp. */
+    uint8_t inbound_stamp_cost;
     /* When supplied, opportunistic sends use a Reticulum packet receipt and
      * only become DELIVERED after a valid proof. `send_packet` remains the
      * compatibility transport for callers that do not own a runtime. */

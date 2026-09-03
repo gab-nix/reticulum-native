@@ -55,6 +55,50 @@ static void direct_resource_received(
     rns_status_t status, const uint8_t *data, size_t data_length,
     void *context);
 
+static uint64_t router_wall_time(const lxmf_router_t *router) {
+    return router->config.wall_clock(router->config.wall_clock_context);
+}
+
+static lxmf_status_t validate_inbound_stamp(
+    lxmf_router_t *router, const lxmf_message_t *message) {
+    uint8_t cost = router->config.inbound_stamp_cost;
+    if (cost == 0u) return LXMF_OK;
+    if (!message->has_stamp) return LXMF_ERR_STAMP;
+    lxmf_status_t status;
+    if (message->stamp_len == LXMF_STAMP_LENGTH) {
+        if (router->config.ticket_store == NULL) return LXMF_ERR_STAMP;
+        status = lxmf_ticket_store_validate_inbound(
+            router->config.ticket_store, message->source,
+            router_wall_time(router), message->message_id, message->stamp);
+    } else if (message->stamp_len == LXMF_POW_STAMP_LENGTH) {
+        status = lxmf_pow_stamp_validate(message->message_id, cost,
+                                         message->stamp, NULL);
+    } else {
+        return LXMF_ERR_STAMP;
+    }
+    if (status == LXMF_ERR_FORMAT || status == LXMF_ERR_PENDING)
+        return LXMF_ERR_STAMP;
+    return status;
+}
+
+static void remember_verified_ticket(lxmf_router_t *router,
+                                     const lxmf_message_t *message) {
+    if (router->config.ticket_store == NULL) return;
+    lxmf_ticket_field_t field;
+    if (lxmf_fields_parse_ticket(message->fields_msgpack.data,
+                                 message->fields_msgpack.len,
+                                 &field) != LXMF_OK || !field.present)
+        return;
+    uint64_t now = router_wall_time(router);
+    if (field.expires_at <= now) return;
+    lxmf_ticket_entry_t entry = {.expires_at = field.expires_at};
+    memcpy(entry.ticket, field.ticket, sizeof entry.ticket);
+    /* Ticket persistence must not turn an otherwise valid incoming message
+     * into a delivery failure. The sender can advertise it again later. */
+    (void)lxmf_ticket_store_remember_outbound(
+        router->config.ticket_store, message->source, &entry, now);
+}
+
 typedef struct {
     lxmf_store_t *store;
     lxmf_status_t status;
@@ -119,7 +163,9 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
         config->resolve_identity == NULL ||
         config->preferred_delivery_method < LXMF_DELIVERY_METHOD_UNKNOWN ||
         config->preferred_delivery_method > LXMF_DELIVERY_METHOD_PROPAGATED ||
-        (config->runtime == NULL && config->send_packet == NULL))
+        (config->runtime == NULL && config->send_packet == NULL) ||
+        (config->ticket_store != NULL && config->wall_clock == NULL) ||
+        config->inbound_stamp_cost == UINT8_MAX)
         return LXMF_ERR_ARGUMENT;
     memset(router, 0, sizeof *router);
     router->config = *config;
@@ -131,7 +177,7 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
         static const char *const aspects[] = {"delivery"};
         uint8_t hash[LXMF_DESTINATION_LENGTH];
         rns_runtime_link_options_t options = {
-            .prove_data_packets = true,
+            .prove_data_packets = false,
             .state_callback = direct_link_state_changed,
             .packet_callback = direct_link_packet_received,
             .identified_callback = direct_link_identified,
@@ -411,9 +457,10 @@ static void direct_link_packet_received(rns_runtime_link_t *link,
                                         void *context) {
     lxmf_router_t *router = context;
     if (router == NULL || packet_context != 0U) return;
-    (void)link;
-    (void)receive_representation(router, plaintext, plaintext_length,
-                                 LXMF_DELIVERY_METHOD_DIRECT);
+    lxmf_status_t status = receive_representation(
+        router, plaintext, plaintext_length, LXMF_DELIVERY_METHOD_DIRECT);
+    if (status == LXMF_OK)
+        (void)rns_runtime_link_prove_current_packet(link);
 }
 
 static bool direct_resource_accept(
@@ -500,7 +547,7 @@ static lxmf_status_t ensure_direct_link(
     if (slot == NULL) return LXMF_ERR_PENDING;
     memcpy(slot->destination, destination_hash, LXMF_DESTINATION_LENGTH);
     rns_runtime_link_options_t options = {
-        .prove_data_packets = true,
+        .prove_data_packets = false,
         .state_callback = direct_link_state_changed,
         .packet_callback = direct_link_packet_received,
         .identified_callback = direct_link_identified,
@@ -525,6 +572,70 @@ static lxmf_status_t ensure_direct_link(
     return LXMF_ERR_PENDING;
 }
 
+static lxmf_status_t prepare_outbound_representation(
+    lxmf_router_t *router, const lxmf_store_message_t *stored,
+    const uint8_t id[LXMF_MESSAGE_ID_LENGTH], uint8_t *packed,
+    size_t packed_capacity, size_t *packed_length) {
+    uint8_t retained[LXMF_STORE_MAX_PACKED];
+    size_t retained_length = 0u;
+    lxmf_status_t status = lxmf_store_read_packed(
+        router->config.store, id, retained, sizeof retained, &retained_length);
+    lxmf_message_t message = {0};
+    bool has_retained_wire = status == LXMF_OK;
+    if (status == LXMF_OK) {
+        status = lxmf_unpack(retained, retained_length, NULL, NULL, &message);
+        if (status == LXMF_OK &&
+            (memcmp(message.message_id, id, LXMF_MESSAGE_ID_LENGTH) != 0 ||
+             memcmp(message.destination, stored->destination,
+                    LXMF_DESTINATION_LENGTH) != 0 ||
+             memcmp(message.source, stored->source,
+                    LXMF_SOURCE_LENGTH) != 0))
+            status = LXMF_ERR_FORMAT;
+    } else if (status == LXMF_ERR_FORMAT) {
+        /* Compatibility with stores written before outbound representations
+         * were retained. */
+        message.content = stored->content;
+        memcpy(message.destination, stored->destination,
+               LXMF_DESTINATION_LENGTH);
+        memcpy(message.source, stored->source, LXMF_SOURCE_LENGTH);
+        message.timestamp = stored->timestamp;
+        status = LXMF_OK;
+    }
+    if (status != LXMF_OK) return status;
+
+    bool added_stamp = false;
+    if (has_retained_wire && !message.has_stamp &&
+        router->config.ticket_store != NULL) {
+        status = lxmf_ticket_store_stamp_outbound(
+            router->config.ticket_store, message.destination,
+            router_wall_time(router), id, message.stamp);
+        if (status == LXMF_OK) {
+            message.has_stamp = true;
+            message.stamp_len = LXMF_STAMP_LENGTH;
+            added_stamp = true;
+        } else if (status != LXMF_ERR_PENDING) {
+            return status;
+        }
+    }
+    if (has_retained_wire && !added_stamp) {
+        if (retained_length > packed_capacity) return LXMF_ERR_BOUNDS;
+        memcpy(packed, retained, retained_length);
+        *packed_length = retained_length;
+        return LXMF_OK;
+    }
+    status = lxmf_pack(&message, lxmf_identity_signer,
+                       router->config.identity, packed, packed_capacity,
+                       packed_length);
+    if (status == LXMF_OK) {
+        lxmf_message_t check;
+        status = lxmf_unpack(packed, *packed_length, NULL, NULL, &check);
+        if (status == LXMF_OK && has_retained_wire &&
+            memcmp(check.message_id, id, LXMF_MESSAGE_ID_LENGTH) != 0)
+            status = LXMF_ERR_FORMAT;
+    }
+    return status;
+}
+
 static lxmf_status_t send_direct(
     lxmf_router_t *router, const lxmf_store_message_t *stored,
     const uint8_t id[LXMF_MESSAGE_ID_LENGTH], const rns_identity *destination,
@@ -544,33 +655,8 @@ static lxmf_status_t send_direct(
     }
     uint8_t packed[LXMF_STORE_MAX_PACKED];
     size_t packed_length = 0U;
-    status = lxmf_store_read_packed(router->config.store, id, packed,
-                                    sizeof packed, &packed_length);
-    bool retained_wire = status == LXMF_OK;
-    if (status == LXMF_OK) {
-        lxmf_message_t retained;
-        status = lxmf_unpack(packed, packed_length, NULL, NULL, &retained);
-        if (status == LXMF_OK &&
-            (memcmp(retained.message_id, id, LXMF_MESSAGE_ID_LENGTH) != 0 ||
-             memcmp(retained.destination, stored->destination,
-                    LXMF_DESTINATION_LENGTH) != 0 ||
-             memcmp(retained.source, stored->source,
-                    LXMF_SOURCE_LENGTH) != 0))
-            status = LXMF_ERR_FORMAT;
-    }
-    if (!retained_wire && status == LXMF_ERR_FORMAT) {
-        /* Compatibility with stores written before outbound representations
-         * were retained. New messages always take the exact durable bytes. */
-        lxmf_message_t message = {0};
-        message.content = stored->content;
-        memcpy(message.destination, stored->destination,
-               LXMF_DESTINATION_LENGTH);
-        memcpy(message.source, stored->source, LXMF_SOURCE_LENGTH);
-        message.timestamp = stored->timestamp;
-        status = lxmf_pack(&message, lxmf_identity_signer,
-                           router->config.identity, packed, sizeof packed,
-                           &packed_length);
-    }
+    status = prepare_outbound_representation(
+        router, stored, id, packed, sizeof packed, &packed_length);
     if (status != LXMF_OK) {
         *queue_reason = LXMF_QUEUE_REASON_RESOURCE;
         return status == LXMF_ERR_BOUNDS ? LXMF_ERR_PENDING : status;
@@ -685,12 +771,6 @@ lxmf_status_t lxmf_router_send_message(
                      LXMF_ERR_PENDING, stored.delivery.attempts);
         return LXMF_ERR_PENDING;
     }
-    lxmf_message_t message = {0};
-    message.content = (lxmf_slice_t){content, stored.content.len};
-    memcpy(message.destination, stored.destination, sizeof message.destination);
-    memcpy(message.source, stored.source, sizeof message.source);
-    message.timestamp = stored.timestamp;
-    memcpy(message.message_id, stored.message_id, sizeof message.message_id);
     stored.delivery.actual_method = method;
     if (lxmf_store_update_delivery(router->config.store, id,
                                    &stored.delivery) != LXMF_OK)
@@ -720,9 +800,19 @@ lxmf_status_t lxmf_router_send_message(
                                  &resource_started);
         if (status == LXMF_OK) has_proof_id = true;
     } else {
-        status = lxmf_opportunistic_packet_pack(
-            &message, router->config.identity, destination, packet,
-            sizeof packet, &packet_length);
+        uint8_t representation[LXMF_STORE_MAX_PACKED];
+        size_t representation_length = 0u;
+        lxmf_message_t message;
+        status = prepare_outbound_representation(
+            router, &stored, id, representation, sizeof representation,
+            &representation_length);
+        if (status == LXMF_OK)
+            status = lxmf_unpack(representation, representation_length,
+                                 NULL, NULL, &message);
+        if (status == LXMF_OK)
+            status = lxmf_opportunistic_packet_pack(
+                &message, router->config.identity, destination, packet,
+                sizeof packet, &packet_length);
         if (status == LXMF_OK) {
             if (router->config.runtime != NULL)
                 status = send_with_receipt(router, id, stored.destination,
@@ -914,6 +1004,14 @@ static lxmf_status_t receive_representation(
                LXMF_DESTINATION_LENGTH) != 0)
         return LXMF_ERR_FORMAT;
 
+    status = validate_inbound_stamp(router, &message);
+    if (status != LXMF_OK) {
+        report_event(router, message.message_id, method,
+                     LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_STAMP, status, 0u);
+        return status;
+    }
+    if (!unverified) remember_verified_ticket(router, &message);
+
     lxmf_store_message_t stored = {0};
     memcpy(stored.message_id, message.message_id, sizeof stored.message_id);
     memcpy(stored.destination, message.destination, sizeof stored.destination);
@@ -1000,7 +1098,9 @@ lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
         if (checked == LXMF_OK &&
             memcmp(message.message_id, pending.ids[i], LXMF_MESSAGE_ID_LENGTH) != 0)
             checked = LXMF_ERR_FORMAT;
+        if (checked == LXMF_OK) checked = validate_inbound_stamp(router, &message);
         if (checked == LXMF_OK) {
+            remember_verified_ticket(router, &message);
             if (lxmf_store_update_signature(router->config.store, pending.ids[i],
                                             LXMF_SIGNATURE_VERIFIED) != LXMF_OK)
                 return LXMF_ERR_CRYPTO;
@@ -1011,6 +1111,11 @@ lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
                 return LXMF_ERR_CRYPTO;
             result->rejected++;
             report_signature(router, pending.ids[i], LXMF_SIGNATURE_FAILED);
+            report_event(router, pending.ids[i],
+                         LXMF_DELIVERY_METHOD_UNKNOWN, LXMF_DELIVERY_FAILED,
+                         checked == LXMF_ERR_STAMP ? LXMF_QUEUE_REASON_STAMP
+                                                   : LXMF_QUEUE_REASON_NONE,
+                         checked, 0u);
         }
     }
     return LXMF_OK;
