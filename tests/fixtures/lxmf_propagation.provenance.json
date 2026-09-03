@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "reticulum_commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+  "lxmf_commit": "795fdaa2b0777c13033787d933d1afc94a2377cb",
+  "generator": "tools/generate_lxmf_propagation_fixtures.py",
+  "evidence": "Offline upstream serialization only; not network interoperability",
+  "source_apis": [
+    "LXMRouter.get_propagation_node_app_data",
+    "LXMRouter.message_list_response",
+    "LXMRouter.message_get_response",
+    "LXMRouter.message_get_request"
+  ],
+  "source_expressions": {
+    "upload": "msgpack.packb([time.time(), [lxmf_data]])",
+    "rejection": "msgpack.packb([LXMPeer.ERROR_INVALID_STAMP])"
+  },
+  "fixtures": [
+    {
+      "name": "announce_enabled",
+      "bytes": 33,
+      "sha256": "831a42f9abe8cd1de9fc974174d15490135e1b9ed8cfdd0d61fbd8ef3793d729"
+    },
+    {
+      "name": "announce_static_float_limits",
+      "bytes": 45,
+      "sha256": "e5f0a49e3e76cb94a93b6b783511a1e464d4c4f822b5304d91cb89cd6874d713"
+    },
+    {
+      "name": "announce_unknown_fields",
+      "bytes": 66,
+      "sha256": "0bd71c59b1724bf43b534c02416e0fe31bc226cf3276c403d3cb41de5441d579"
+    },
+    {
+      "name": "upload",
+      "bytes": 169,
+      "sha256": "4d1af01da464f3e221585509dce1aabf0a61f8cef8b150ae3c12be7ed8e2364d"
+    },
+    {
+      "name": "upload_invalid_stamp",
+      "bytes": 3,
+      "sha256": "b4037fd4b62881041fe8a0dfebd141d0e7739919210eec2e481ba23f255b2815"
+    },
+    {
+      "name": "list_request",
+      "bytes": 3,
+      "sha256": "725fe1ad7083cceec29e2ed9bcaaf03130001abeece811ce2808c565be16966c"
+    },
+    {
+      "name": "download_request",
+      "bytes": 74,
+      "sha256": "f377763f3a39314b6f8a25c0404959121402e7bace7200f6584e87101e7f8b4e"
+    },
+    {
+      "name": "acknowledge_request",
+      "bytes": 37,
+      "sha256": "e937504ff1133d6b214d384d3094f4ccb0b89542afba36f489a9c83fcccafe5a"
+    },
+    {
+      "name": "list_response",
+      "bytes": 69,
+      "sha256": "4f445a67622418c47db029b726126e49fbb5309eac59211e767f825b843674a8"
+    },
+    {
+      "name": "download_response",
+      "bytes": 255,
+      "sha256": "f5111236efde05ee627da6697f1ac4dd901907b8b87195cdae895678140e8060"
+    },
+    {
+      "name": "download_limit_empty",
+      "bytes": 1,
+      "sha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd"
+    },
+    {
+      "name": "missing_identity",
+      "bytes": 2,
+      "sha256": "c145b1aa872c082661ed186c5b63e5c0a5057492661b7816eebeb825ba6b8471"
+    },
+    {
+      "name": "access_denied",
+      "bytes": 2,
+      "sha256": "ecc85ab67ce527060f02f861906f4fccc126d7e0d2a97b43006ff4a51b397f81"
+    }
+  ]
+}
