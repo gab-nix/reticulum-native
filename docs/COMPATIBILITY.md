@@ -34,6 +34,15 @@ authoritative Python `LXMRouter.get_announce_app_data()` method and the C test
 checks both encoding to those bytes and decoding from them. This is codec-level
 evidence, not a live-network or complete messaging parity claim.
 
+The signed message vectors in `tests/fixtures/lxmf_message_vectors.h` similarly
+execute pinned Python `LXMessage.pack()` and its opportunistic packet builder.
+They record exact signatures, message IDs, canonical packed bytes, and the
+destination-prefix-elided opportunistic application payload. The corresponding
+C test validates signing preimages, encoding, signature verification, decoding,
+standard and unknown fields, and the 255-byte MessagePack binary boundary. The
+fixture intentionally excludes random Reticulum ciphertext and therefore does
+not establish live encrypted delivery interoperability.
+
 ## Compatibility policy
 
 - The wire behaviour of the pinned releases is authoritative.
