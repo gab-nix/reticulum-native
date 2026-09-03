@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "reticulum/crypto.h"
+#include "reticulum/hal.h"
 
 #define LXMF_HEADER_LENGTH (LXMF_DESTINATION_LENGTH + LXMF_SOURCE_LENGTH + LXMF_SIGNATURE_LENGTH)
 #define LXMF_MAX_NESTING 32u
@@ -171,8 +172,14 @@ lxmf_status_t lxmf_fields_parse_ticket(const uint8_t *fields,
     return reader.p == reader.end ? LXMF_OK : LXMF_ERR_FORMAT;
 }
 
-static size_t bin_bound(size_t n){return n+5;}
-size_t lxmf_pack_bound(const lxmf_message_t *m){if(!m)return 0;size_t stamp_len=m->stamp_len?m->stamp_len:LXMF_STAMP_LENGTH;return LXMF_HEADER_LENGTH+1+9+bin_bound(m->title.len)+bin_bound(m->content.len)+(m->fields_msgpack.len?m->fields_msgpack.len:1)+(m->has_stamp?bin_bound(stamp_len):0);}
+static size_t bin_bound(size_t n){return n<=UINT32_MAX&&n<=SIZE_MAX-5u?n+5u:0u;}
+static bool add_bound(size_t *total,size_t value){if(value>SIZE_MAX-*total)return false;*total+=value;return *total<=LXMF_MAX_MESSAGE_SIZE;}
+size_t lxmf_pack_bound(const lxmf_message_t *m){
+    if(!m)return 0;size_t title=bin_bound(m->title.len),content=bin_bound(m->content.len);size_t stamp_len=m->stamp_len?m->stamp_len:LXMF_STAMP_LENGTH;size_t stamp=m->has_stamp?bin_bound(stamp_len):0u;
+    if(title==0u||content==0u||(m->has_stamp&&stamp==0u))return 0u;
+    size_t fields=m->fields_msgpack.len?m->fields_msgpack.len:1u;size_t bound=LXMF_HEADER_LENGTH;
+    return add_bound(&bound,10u)&&add_bound(&bound,fields)&&add_bound(&bound,title)&&add_bound(&bound,content)&&add_bound(&bound,stamp)?bound:0u;
+}
 
 static lxmf_status_t encode_payload(const lxmf_message_t *m,bool stamp,writer_t *w){
     if(!put_u8(w,(uint8_t)(stamp?0x95:0x94))||!put_double(w,m->timestamp)||!put_bin(w,m->title)||!put_bin(w,m->content))return LXMF_ERR_BOUNDS;
@@ -181,20 +188,21 @@ static lxmf_status_t encode_payload(const lxmf_message_t *m,bool stamp,writer_t 
 }
 
 lxmf_status_t lxmf_pack(const lxmf_message_t *m,lxmf_sign_fn signer,void *ctx,uint8_t *out,size_t cap,size_t *out_len){
-    if(!m||!signer||!out||!out_len)return LXMF_ERR_ARGUMENT;size_t bound=lxmf_pack_bound(m);if(cap<bound)return LXMF_ERR_BOUNDS;
-    uint8_t payload_stack[4096];size_t payload_cap=bound-LXMF_HEADER_LENGTH;if(payload_cap>sizeof payload_stack)return LXMF_ERR_BOUNDS;writer_t pw={payload_stack,payload_cap};lxmf_status_t st=encode_payload(m,false,&pw);if(st!=LXMF_OK)return st;size_t plen=payload_cap-pw.left;
-    sha_ctx hc;sha_init(&hc);sha_update(&hc,m->destination,16);sha_update(&hc,m->source,16);sha_update(&hc,payload_stack,plen);uint8_t id[32];sha_final(&hc,id);
-    uint8_t preimage_stack[16+16+4096+32];size_t prelen=0;memcpy(preimage_stack+prelen,m->destination,16);prelen+=16;memcpy(preimage_stack+prelen,m->source,16);prelen+=16;memcpy(preimage_stack+prelen,payload_stack,plen);prelen+=plen;memcpy(preimage_stack+prelen,id,32);prelen+=32;uint8_t sig[64];st=signer(ctx,preimage_stack,prelen,sig);if(st!=LXMF_OK)return LXMF_ERR_CRYPTO;
+    if(!m||!signer||!out||!out_len)return LXMF_ERR_ARGUMENT;*out_len=0u;size_t bound=lxmf_pack_bound(m);if(bound==0u||cap<bound)return LXMF_ERR_BOUNDS;
+    size_t payload_cap=bound-LXMF_HEADER_LENGTH;uint8_t *payload=malloc(payload_cap);if(!payload)return LXMF_ERR_BOUNDS;writer_t pw={payload,payload_cap};lxmf_status_t st=encode_payload(m,false,&pw);if(st!=LXMF_OK){free(payload);return st;}size_t plen=payload_cap-pw.left;
+    sha_ctx hc;sha_init(&hc);sha_update(&hc,m->destination,16);sha_update(&hc,m->source,16);sha_update(&hc,payload,plen);uint8_t id[32];sha_final(&hc,id);
+    if(plen>SIZE_MAX-64u){rns_hal_secure_zero(payload,payload_cap);free(payload);return LXMF_ERR_BOUNDS;}size_t prelen=plen+64u;uint8_t *preimage=malloc(prelen);if(!preimage){rns_hal_secure_zero(payload,payload_cap);free(payload);return LXMF_ERR_BOUNDS;}size_t offset=0u;memcpy(preimage+offset,m->destination,16);offset+=16u;memcpy(preimage+offset,m->source,16);offset+=16u;memcpy(preimage+offset,payload,plen);offset+=plen;memcpy(preimage+offset,id,32);uint8_t sig[64];st=signer(ctx,preimage,prelen,sig);
+    rns_hal_secure_zero(preimage,prelen);free(preimage);rns_hal_secure_zero(payload,payload_cap);free(payload);if(st!=LXMF_OK)return LXMF_ERR_CRYPTO;
     writer_t w={out,cap};if(!put(&w,m->destination,16)||!put(&w,m->source,16)||!put(&w,sig,64))return LXMF_ERR_BOUNDS;st=encode_payload(m,m->has_stamp,&w);if(st!=LXMF_OK)return st;*out_len=cap-w.left;return LXMF_OK;
 }
 
 lxmf_status_t lxmf_unpack(const uint8_t *in,size_t len,lxmf_verify_fn verify,void *ctx,lxmf_message_t *m){
-    if(!in||!m)return LXMF_ERR_ARGUMENT;if(len<LXMF_HEADER_LENGTH+1)return LXMF_ERR_FORMAT;memset(m,0,sizeof *m);memcpy(m->destination,in,16);memcpy(m->source,in+16,16);memcpy(m->signature,in+32,64);
+    if(!in||!m)return LXMF_ERR_ARGUMENT;if(len<LXMF_HEADER_LENGTH+1||len>LXMF_MAX_MESSAGE_SIZE)return LXMF_ERR_FORMAT;memset(m,0,sizeof *m);memcpy(m->destination,in,16);memcpy(m->source,in+16,16);memcpy(m->signature,in+32,64);
     reader_t r={in+LXMF_HEADER_LENGTH,in+len};uint8_t a=*r.p++;if(a!=0x94&&a!=0x95)return LXMF_ERR_FORMAT;if(!get_double(&r,&m->timestamp)||!get_bin(&r,&m->title)||!get_bin(&r,&m->content))return LXMF_ERR_FORMAT;
     const uint8_t *fs=r.p;if(!skip_obj(&r,0)||((*fs&0xf0)!=0x80&&*fs!=0xde&&*fs!=0xdf))return LXMF_ERR_FORMAT;m->fields_msgpack.data=fs;m->fields_msgpack.len=(size_t)(r.p-fs);
     if(a==0x95){lxmf_slice_t s;if(!get_bin(&r,&s)||(s.len!=LXMF_STAMP_LENGTH&&s.len!=LXMF_POW_STAMP_LENGTH))return LXMF_ERR_FORMAT;m->has_stamp=true;m->stamp_len=s.len;memcpy(m->stamp,s.data,s.len);}if(r.p!=r.end)return LXMF_ERR_FORMAT;
-    lxmf_message_t base=*m;base.has_stamp=false;uint8_t payload[4096];writer_t pw={payload,sizeof payload};lxmf_status_t st=encode_payload(&base,false,&pw);if(st!=LXMF_OK)return st;size_t plen=sizeof payload-pw.left;sha_ctx hc;sha_init(&hc);sha_update(&hc,m->destination,16);sha_update(&hc,m->source,16);sha_update(&hc,payload,plen);sha_final(&hc,m->message_id);
-    if(verify){uint8_t pre[16+16+4096+32];size_t n=0;memcpy(pre+n,m->destination,16);n+=16;memcpy(pre+n,m->source,16);n+=16;memcpy(pre+n,payload,plen);n+=plen;memcpy(pre+n,m->message_id,32);n+=32;st=verify(ctx,m->source,pre,n,m->signature);if(st==LXMF_ERR_UNKNOWN_SIGNER)return LXMF_ERR_UNKNOWN_SIGNER;if(st!=LXMF_OK)return LXMF_ERR_SIGNATURE;}return LXMF_OK;
+    lxmf_message_t base=*m;base.has_stamp=false;size_t payload_capacity=len-LXMF_HEADER_LENGTH;uint8_t *payload=malloc(payload_capacity);if(!payload)return LXMF_ERR_BOUNDS;writer_t pw={payload,payload_capacity};lxmf_status_t st=encode_payload(&base,false,&pw);if(st!=LXMF_OK){free(payload);return st;}size_t plen=payload_capacity-pw.left;sha_ctx hc;sha_init(&hc);sha_update(&hc,m->destination,16);sha_update(&hc,m->source,16);sha_update(&hc,payload,plen);sha_final(&hc,m->message_id);
+    if(verify){if(plen>SIZE_MAX-64u){rns_hal_secure_zero(payload,payload_capacity);free(payload);return LXMF_ERR_BOUNDS;}size_t n=plen+64u;uint8_t *pre=malloc(n);if(!pre){rns_hal_secure_zero(payload,payload_capacity);free(payload);return LXMF_ERR_BOUNDS;}size_t offset=0u;memcpy(pre+offset,m->destination,16);offset+=16u;memcpy(pre+offset,m->source,16);offset+=16u;memcpy(pre+offset,payload,plen);offset+=plen;memcpy(pre+offset,m->message_id,32);st=verify(ctx,m->source,pre,n,m->signature);rns_hal_secure_zero(pre,n);free(pre);rns_hal_secure_zero(payload,payload_capacity);free(payload);if(st==LXMF_ERR_UNKNOWN_SIGNER)return LXMF_ERR_UNKNOWN_SIGNER;if(st!=LXMF_OK)return LXMF_ERR_SIGNATURE;}else{rns_hal_secure_zero(payload,payload_capacity);free(payload);}return LXMF_OK;
 }
 
 void lxmf_ticket_stamp(const uint8_t ticket[16],const uint8_t id[32],uint8_t stamp[16]){sha_ctx c;uint8_t d[32];sha_init(&c);sha_update(&c,ticket,16);sha_update(&c,id,32);sha_final(&c,d);memcpy(stamp,d,16);}

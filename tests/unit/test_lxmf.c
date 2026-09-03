@@ -1,6 +1,7 @@
 #include "reticulum/lxmf.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static lxmf_status_t fake_sign(void *ctx,const uint8_t *p,size_t n,uint8_t sig[64]){(void)ctx;uint8_t d[32];lxmf_sha256(p,n,d);memcpy(sig,d,32);memcpy(sig+32,d,32);return LXMF_OK;}
@@ -27,5 +28,7 @@ int main(void){
     assert(strcmp(lxmf_signature_state_string(LXMF_SIGNATURE_UNVERIFIED),lxmf_signature_state_string(LXMF_SIGNATURE_VERIFIED))!=0);
     memcpy(m.source,identity.hash,16);assert(lxmf_pack(&m,lxmf_identity_signer,&identity,packed,sizeof packed,&packed_len)==LXMF_OK);assert(lxmf_unpack(packed,packed_len,lxmf_identity_verifier,&vc,&u)==LXMF_OK);
     uint8_t pow_stamp[32],value=0;uint64_t attempts=0;assert(lxmf_pow_stamp_generate(u.message_id,0,NULL,NULL,pow_stamp,&value,&attempts)==LXMF_ERR_ARGUMENT);assert(lxmf_pow_stamp_generate(u.message_id,1,cancel_now,NULL,pow_stamp,&value,&attempts)==LXMF_ERR_CANCELLED);assert(lxmf_pow_stamp_generate(u.message_id,1,NULL,NULL,pow_stamp,&value,&attempts)==LXMF_OK);assert(attempts>0&&value>=1);assert(lxmf_pow_stamp_validate(u.message_id,1,pow_stamp,&value)==LXMF_OK);pow_stamp[0]^=1; /* A changed stamp is overwhelmingly likely invalid at a stronger cost. */ assert(lxmf_pow_stamp_validate(u.message_id,255,pow_stamp,&value)==LXMF_ERR_FORMAT);
+    size_t large_length=8192u;uint8_t *large=malloc(large_length);assert(large);for(size_t i=0u;i<large_length;i++)large[i]=(uint8_t)i;m.content=(lxmf_slice_t){large,large_length};size_t large_bound=lxmf_pack_bound(&m);assert(large_bound>4096u&&large_bound<LXMF_MAX_MESSAGE_SIZE);uint8_t *large_packed=malloc(large_bound);assert(large_packed);assert(lxmf_pack(&m,fake_sign,NULL,large_packed,large_bound,&packed_len)==LXMF_OK);assert(packed_len<=large_bound);assert(lxmf_unpack(large_packed,packed_len,fake_verify,NULL,&u)==LXMF_OK);assert(u.content.len==large_length&&memcmp(u.content.data,large,large_length)==0);free(large_packed);free(large);
+    m.content=(lxmf_slice_t){(const uint8_t *)"x",LXMF_MAX_MESSAGE_SIZE};assert(lxmf_pack_bound(&m)==0u);
     puts("test_lxmf: ok");return 0;
 }

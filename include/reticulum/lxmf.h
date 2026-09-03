@@ -19,6 +19,9 @@ extern "C" {
 #define LXMF_POW_STAMP_LENGTH 32u
 #define LXMF_STAMP_WORKBLOCK_ROUNDS 3000u
 #define LXMF_FIELD_TICKET 0x0cu
+/* Upper bound for one canonical LXMF representation handled by the codec.
+ * Transport/resource policy can impose a smaller limit. */
+#define LXMF_MAX_MESSAGE_SIZE (8u * 1024u * 1024u)
 
 typedef enum {
     LXMF_OK = 0,
