@@ -58,6 +58,14 @@ static void test_keys_dump_and_persistence(void) {
     state->settings.has_propagation_node = true;
     memset(state->settings.propagation_node, 0x42,
            sizeof state->settings.propagation_node);
+    assert(tui_state_save_settings(state));
+    state->propagation_sync.state = LXMF_PN_COMPLETE;
+    state->propagation_sync.result = LXMF_ERR_SIGNATURE;
+    state->propagation_sync.available = 3u;
+    state->propagation_sync.received = 3u;
+    state->propagation_sync.accepted = 2u;
+    state->propagation_sync.rejected = 1u;
+    state->propagation_sync.acknowledged = 2u;
 
     FILE *dump = tmpfile();
     assert(dump != NULL);
@@ -71,7 +79,9 @@ static void test_keys_dump_and_persistence(void) {
     assert(strstr(output, "Display name: Rei") != NULL);
     assert(strstr(output, "enforced and advertised") != NULL);
     assert(strstr(output, "waiting for verified announce") != NULL);
-    assert(strstr(output, "sync unavailable") != NULL);
+    assert(strstr(output, "Propagation sync: complete active=no") != NULL);
+    assert(strstr(output, "accepted=2") != NULL);
+    assert(strstr(output, "rejected=1") != NULL);
     assert(fclose(dump) == 0);
 
     state->screen = TUI_SCREEN_INTERFACES;
@@ -146,7 +156,7 @@ static void test_keys_dump_and_persistence(void) {
     assert(!ferror(dump));
     output[length] = '\0';
     assert(strstr(output, "Screen: Guide") != NULL);
-    assert(strstr(output, "Enter node actions") != NULL);
+    assert(strstr(output, "Enter actions") != NULL);
     assert(fclose(dump) == 0);
 
     tui_settings_t persisted;
@@ -154,6 +164,12 @@ static void test_keys_dump_and_persistence(void) {
     assert(tui_settings_load(path, &persisted, &found) && found);
     assert(strcmp(persisted.display_name, "Rei") == 0);
     assert(!persisted.announce_at_start);
+    assert(persisted.has_propagation_node);
+    tui_state_t *restarted = make_state(path);
+    restarted->settings = persisted;
+    assert(restarted->propagation_sync.state == LXMF_PN_IDLE);
+    assert(!restarted->propagation_sync.active);
+    destroy_state(restarted);
     assert(unlink(path) == 0);
     destroy_state(state);
 }

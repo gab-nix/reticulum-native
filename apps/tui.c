@@ -169,6 +169,18 @@ static void handle_node_actions_key(tui_state_t *state, int key) {
         else
             tui_state_set_status(state,
                 "Node cannot be selected without a fresh enabled propagation announce and cost");
+    } else if (key == 's' || key == 'S') {
+        if (state->propagation_sync.active) {
+            (void)tui_state_propagation_sync_cancel(state);
+        } else if (!state->settings.has_propagation_node ||
+                   memcmp(state->settings.propagation_node, node.destination,
+                          LXMF_DESTINATION_LENGTH) != 0) {
+            tui_state_set_status(state,
+                "Use p to select this verified propagation node before syncing");
+        } else {
+            (void)tui_state_propagation_sync_start(state);
+        }
+        state->overlay = TUI_OVERLAY_NONE;
     } else if (key == 'r' || key == 'R') {
         tui_state_request_path(state);
         state->overlay = TUI_OVERLAY_NONE;
@@ -261,11 +273,11 @@ static bool handle_command_key(tui_state_t *state, int key) {
             if (state->screen == TUI_SCREEN_CONVERSATIONS)
                 state->overlay = TUI_OVERLAY_HELP;
             else if (state->screen == TUI_SCREEN_NETWORK)
-                tui_state_set_status(state, "Network: j/k select, Enter node actions, R request path, Esc Chats");
+                tui_state_set_status(state, "Network: j/k select, Enter actions, p select relay, s sync/cancel");
             else if (state->screen == TUI_SCREEN_BROWSER)
                 tui_state_set_status(state, "Browser: j/k links, Enter open, PgUp/PgDn scroll, R reload, Esc cancel/back");
             else if (state->screen == TUI_SCREEN_SETTINGS)
-                tui_state_set_status(state, "Settings: j/k select, Enter edit/apply, Esc cancel/back");
+                tui_state_set_status(state, "Settings: j/k select, Enter edit/action, Sync Now can cancel");
             else if (state->screen == TUI_SCREEN_INTERFACES)
                 tui_state_set_status(state, "Interfaces: j/k inspect live counters, Esc Chats");
             else if (state->screen == TUI_SCREEN_CONFIG)

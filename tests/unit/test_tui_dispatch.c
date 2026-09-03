@@ -131,6 +131,31 @@ static void test_delivery_shortcut_is_screen_scoped(void) {
     free(state);
 }
 
+static void test_propagation_sync_actions_are_screen_scoped(void) {
+    tui_state_t *state = state_create();
+    state->screen = TUI_SCREEN_SETTINGS;
+    state->setting_selected = TUI_SETTING_PROPAGATION_SYNC;
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_NONE);
+    assert(strstr(state->status, "runtime is offline") != NULL);
+
+    state->screen = TUI_SCREEN_NETWORK;
+    seed_node(state);
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->overlay == TUI_OVERLAY_NODE_ACTIONS);
+    assert(tui_dispatch_key(state, 's'));
+    assert(state->overlay == TUI_OVERLAY_NONE);
+    assert(strstr(state->status, "Use p to select") != NULL);
+
+    state->propagation_sync.active = true;
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->overlay == TUI_OVERLAY_NODE_ACTIONS);
+    assert(tui_dispatch_key(state, 's'));
+    assert(state->overlay == TUI_OVERLAY_NONE);
+    assert(strstr(state->status, "Cannot cancel sync") != NULL);
+    free(state);
+}
+
 static void test_hidden_editors(void) {
     for (int screen = 0; screen < TUI_SCREEN_COUNT; ++screen) {
         for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_RRC; ++field) {
@@ -342,6 +367,7 @@ int main(void) {
     test_screen_scoping();
     test_empty_network_and_filtered_contact();
     test_delivery_shortcut_is_screen_scoped();
+    test_propagation_sync_actions_are_screen_scoped();
     test_hidden_editors();
     test_modal_isolation();
     test_shortcuts_drafts_and_node_action();

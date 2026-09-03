@@ -365,7 +365,7 @@ static void test_verified_propagation_selection(void) {
     assert(state->router.config.propagation_stamp_cost == 9u);
     assert(memcmp(state->router.config.propagation_node_destination,
                   node.destination, sizeof node.destination) == 0);
-    assert(strstr(state->status, "download sync is unavailable") != NULL);
+    assert(strstr(state->status, "Sync Now is available") != NULL);
     tui_settings_t saved;
     bool found = false;
     assert(tui_settings_load(path, &saved, &found) && found);
@@ -381,6 +381,61 @@ static void test_verified_propagation_selection(void) {
     assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_DIRECT);
     state->router_ready = false;
     assert(unlink(path) == 0);
+    destroy_state(state);
+}
+
+static void test_propagation_sync_ui_projection(void) {
+    tui_state_t *state = make_state();
+    add_contact(state, 0x77u, TUI_TRUST_UNKNOWN);
+    add_message(state, 0x77u, false, "conversation survives sync failures");
+    size_t messages = state->message_count;
+
+    state->router_ready = true;
+    state->runtime = (rns_runtime_t *)state;
+    assert(!tui_state_propagation_sync_start(state));
+    assert(strstr(state->status, "Select a verified propagation node") != NULL);
+    state->router_ready = false;
+    state->runtime = NULL;
+    assert(!tui_state_propagation_sync_start(state));
+    assert(strstr(state->status, "runtime is offline") != NULL);
+
+    lxmf_router_propagation_sync_status_t sync = {
+        .state = LXMF_PN_DOWNLOAD,
+        .result = LXMF_ERR_PENDING,
+        .available = 5u,
+        .received = 2u,
+        .active = true};
+    tui_state_apply_propagation_sync(state, &sync);
+    assert(state->propagation_sync.active);
+    assert(strstr(state->status, "2/5 messages") != NULL);
+
+    sync.active = false;
+    sync.state = LXMF_PN_COMPLETE;
+    sync.result = LXMF_OK;
+    sync.accepted = 4u;
+    sync.duplicates = 1u;
+    sync.acknowledged = 5u;
+    tui_state_apply_propagation_sync(state, &sync);
+    assert(strstr(state->status, "4 accepted, 1 duplicates, 5 acknowledged") != NULL);
+
+    sync.result = LXMF_ERR_SIGNATURE;
+    sync.rejected = 1u;
+    sync.acknowledged = 4u;
+    tui_state_apply_propagation_sync(state, &sync);
+    assert(strstr(state->status, "1 rejected and kept on node") != NULL);
+
+    sync.state = LXMF_PN_CANCELLED;
+    sync.result = LXMF_ERR_CANCELLED;
+    tui_state_apply_propagation_sync(state, &sync);
+    assert(strstr(state->status, "cancelled") != NULL);
+
+    sync.state = LXMF_PN_FAILED;
+    sync.result = LXMF_ERR_TIMEOUT;
+    sync.transport_error = RNS_ERROR_TIMEOUT;
+    tui_state_apply_propagation_sync(state, &sync);
+    assert(strstr(state->status, "sync failed") != NULL);
+    assert(strstr(state->status, "timeout") != NULL);
+    assert(state->message_count == messages);
     destroy_state(state);
 }
 
@@ -687,6 +742,7 @@ int main(void) {
     test_rejected_message_keeps_owned_previews();
     test_verified_peer_stamp_cost_resolution();
     test_verified_propagation_selection();
+    test_propagation_sync_ui_projection();
     test_node_selection_survives_resort();
     test_node_move_clamps();
     test_only_nomad_nodes_serve_pages();

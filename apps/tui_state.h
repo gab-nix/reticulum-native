@@ -60,6 +60,7 @@ typedef enum {
     TUI_SETTING_ANNOUNCE_AT_START,
     TUI_SETTING_ANNOUNCE_INTERVAL,
     TUI_SETTING_PROPAGATION_NODE,
+    TUI_SETTING_PROPAGATION_SYNC,
     TUI_SETTING_ANNOUNCE_NOW,
     TUI_SETTING_COUNT
 } tui_setting_item_t;
@@ -168,6 +169,7 @@ typedef struct tui_state {
     rns_status_t last_announce_result;
     rns_identity resolved_identity;
     rns_identity resolved_propagation_identity;
+    lxmf_router_propagation_sync_status_t propagation_sync;
     lxmf_delivery_method_t compose_delivery_method;
     bool send_attempted;
     bool send_ok;
@@ -270,6 +272,14 @@ tui_propagation_state_t tui_state_propagation_state(
 /* Explicitly selects a verified enabled Network entry and persists it. */
 bool tui_state_use_propagation_node(tui_state_t *state,
                                     const rns_node_record *record);
+/* Starts or cancels one explicit list/download/ack transaction. Sync starts
+ * only while the saved propagation node has a fresh verified announce. */
+bool tui_state_propagation_sync_start(tui_state_t *state);
+bool tui_state_propagation_sync_cancel(tui_state_t *state);
+/* Pure UI projection of immutable router status, also used by headless tests. */
+void tui_state_apply_propagation_sync(
+    tui_state_t *state,
+    const lxmf_router_propagation_sync_status_t *status);
 /* Direct remains the default; propagated messages never silently downgrade. */
 void tui_state_toggle_delivery_method(tui_state_t *state);
 

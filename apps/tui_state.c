@@ -527,8 +527,129 @@ bool tui_state_use_propagation_node(tui_state_t *state,
     }
     apply_propagation_route(state);
     tui_state_set_status(state,
-        "Verified propagation node selected (cost %u); download sync is unavailable",
+        "Verified propagation node selected (cost %u); Sync Now is available",
         (unsigned)record->lxmf_pn_stamp_cost);
+    return true;
+}
+
+static const char *propagation_sync_phase(lxmf_pn_session_state_t phase) {
+    switch (phase) {
+        case LXMF_PN_IDLE: return "idle";
+        case LXMF_PN_PATH: return "finding path";
+        case LXMF_PN_LINK: return "authenticating link";
+        case LXMF_PN_LIST: return "listing messages";
+        case LXMF_PN_DOWNLOAD: return "downloading";
+        case LXMF_PN_ACK: return "acknowledging";
+        case LXMF_PN_UPLOAD: return "uploading";
+        case LXMF_PN_COMPLETE: return "complete";
+        case LXMF_PN_FAILED: return "failed";
+        case LXMF_PN_CANCELLED: return "cancelled";
+    }
+    return "unknown";
+}
+
+static bool propagation_sync_equal(
+    const lxmf_router_propagation_sync_status_t *left,
+    const lxmf_router_propagation_sync_status_t *right) {
+    return left->state == right->state && left->result == right->result &&
+           left->transport_error == right->transport_error &&
+           left->remote_error == right->remote_error &&
+           left->available == right->available &&
+           left->received == right->received &&
+           left->acknowledged == right->acknowledged &&
+           left->accepted == right->accepted &&
+           left->duplicates == right->duplicates &&
+           left->rejected == right->rejected &&
+           left->retain_on_node == right->retain_on_node &&
+           left->active == right->active;
+}
+
+void tui_state_apply_propagation_sync(
+    tui_state_t *state,
+    const lxmf_router_propagation_sync_status_t *status) {
+    if (state == NULL || status == NULL ||
+        propagation_sync_equal(&state->propagation_sync, status)) return;
+    state->propagation_sync = *status;
+    if (status->active) {
+        tui_state_set_status(state, "Propagation sync: %s (%zu/%zu messages)",
+            propagation_sync_phase(status->state), status->received,
+            status->available);
+        return;
+    }
+    if (status->state == LXMF_PN_COMPLETE) {
+        if (status->rejected != 0u)
+            tui_state_set_status(state,
+                "Sync complete with %zu rejected and kept on node: %s",
+                status->rejected, lxmf_status_string(status->result));
+        else
+            tui_state_set_status(state,
+                "Sync complete: %zu accepted, %zu duplicates, %zu acknowledged",
+                status->accepted, status->duplicates, status->acknowledged);
+    } else if (status->state == LXMF_PN_CANCELLED) {
+        tui_state_set_status(state, "Propagation sync cancelled; messages remain on node");
+    } else if (status->state == LXMF_PN_FAILED) {
+        tui_state_set_status(state, "Propagation sync failed: %s (transport: %s)",
+            lxmf_status_string(status->result),
+            rns_status_string(status->transport_error));
+    }
+}
+
+bool tui_state_propagation_sync_start(tui_state_t *state) {
+    if (state == NULL || !state->router_ready || state->runtime == NULL) {
+        if (state != NULL)
+            tui_state_set_status(state,
+                "Cannot sync while the messaging runtime is offline");
+        return false;
+    }
+    tui_propagation_state_t route =
+        tui_state_propagation_state(state, NULL, NULL);
+    if (route != TUI_PROPAGATION_READY) {
+        tui_state_set_status(state,
+            route == TUI_PROPAGATION_NOT_SELECTED
+                ? "Select a verified propagation node before syncing"
+                : "Sync requires a fresh reachable enabled propagation announce");
+        return false;
+    }
+    if (!tui_state_link_ready(state)) {
+        tui_state_set_status(state,
+            "Cannot sync while every configured interface is down");
+        return false;
+    }
+    apply_propagation_route(state);
+    lxmf_status_t result =
+        lxmf_router_propagation_sync_start(&state->router, false);
+    if (result != LXMF_OK) {
+        tui_state_set_status(state, "Could not start propagation sync: %s",
+                             lxmf_status_string(result));
+        return false;
+    }
+    lxmf_router_propagation_sync_status_t status;
+    if (lxmf_router_propagation_sync_status(&state->router, &status) == LXMF_OK)
+        tui_state_apply_propagation_sync(state, &status);
+    return true;
+}
+
+bool tui_state_propagation_sync_cancel(tui_state_t *state) {
+    if (state == NULL) return false;
+    if (!state->router_ready) {
+        tui_state_set_status(state,
+            "Cannot cancel sync while the messaging runtime is offline");
+        return false;
+    }
+    lxmf_router_propagation_sync_status_t status;
+    if (lxmf_router_propagation_sync_status(&state->router, &status) != LXMF_OK ||
+        !status.active) {
+        tui_state_set_status(state, "No propagation sync is active");
+        return false;
+    }
+    lxmf_status_t result = lxmf_router_propagation_sync_cancel(&state->router);
+    if (result != LXMF_OK) {
+        tui_state_set_status(state, "Could not cancel propagation sync: %s",
+                             lxmf_status_string(result));
+        return false;
+    }
+    if (lxmf_router_propagation_sync_status(&state->router, &status) == LXMF_OK)
+        tui_state_apply_propagation_sync(state, &status);
     return true;
 }
 
@@ -1040,8 +1161,14 @@ void tui_state_poll(tui_state_t *state) {
         if (state->router_ready &&
             now - state->router_polled_ms >= TUI_ROUTER_INTERVAL_MS) {
             lxmf_router_poll_result_t delivery = {0};
-            if (lxmf_router_poll(&state->router, TUI_ROUTER_BATCH, &delivery) == LXMF_OK)
+            lxmf_status_t poll_status =
+                lxmf_router_poll(&state->router, TUI_ROUTER_BATCH, &delivery);
+            if (poll_status == LXMF_OK)
                 state->router_polled_ms = now;
+            lxmf_router_propagation_sync_status_t sync;
+            if (lxmf_router_propagation_sync_status(&state->router,
+                                                     &sync) == LXMF_OK)
+                tui_state_apply_propagation_sync(state, &sync);
         }
     }
 }
@@ -1413,6 +1540,12 @@ void tui_state_setting_activate(tui_state_t *state) {
                 (void)snprintf(value, sizeof value, "%s", "none");
             begin_setting_edit(state, value);
             break;
+        case TUI_SETTING_PROPAGATION_SYNC:
+            if (state->propagation_sync.active)
+                (void)tui_state_propagation_sync_cancel(state);
+            else
+                (void)tui_state_propagation_sync_start(state);
+            break;
         case TUI_SETTING_ANNOUNCE_NOW:
             (void)tui_state_announce(state);
             break;
@@ -1488,6 +1621,7 @@ bool tui_state_setting_apply(tui_state_t *state) {
             }
             break;
         case TUI_SETTING_ANNOUNCE_AT_START:
+        case TUI_SETTING_PROPAGATION_SYNC:
         case TUI_SETTING_ANNOUNCE_NOW:
         case TUI_SETTING_COUNT:
             return false;

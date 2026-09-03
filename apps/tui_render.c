@@ -144,6 +144,22 @@ static const char *interface_state_name(rns_runtime_interface_state_t state) {
     return "invalid";
 }
 
+static const char *propagation_sync_phase_name(lxmf_pn_session_state_t state) {
+    switch (state) {
+        case LXMF_PN_IDLE: return "idle";
+        case LXMF_PN_PATH: return "finding path";
+        case LXMF_PN_LINK: return "authenticating link";
+        case LXMF_PN_LIST: return "listing";
+        case LXMF_PN_DOWNLOAD: return "downloading";
+        case LXMF_PN_ACK: return "acknowledging";
+        case LXMF_PN_UPLOAD: return "uploading";
+        case LXMF_PN_COMPLETE: return "complete";
+        case LXMF_PN_FAILED: return "failed";
+        case LXMF_PN_CANCELLED: return "cancelled";
+    }
+    return "unknown";
+}
+
 static const char *rrc_state_name(rns_rrc_session_state_t state) {
     switch (state) {
         case RNS_RRC_SESSION_DISCONNECTED: return "disconnected";
@@ -518,8 +534,8 @@ static void draw_node_popup(const tui_state_t *state) {
     rns_node_record node;
     char address[TUI_ADDRESS_DIGITS + 1u];
     char inbox[TUI_ADDRESS_DIGITS + 1u];
-    char lines[11][96];
-    const char *pointers[11];
+    char lines[12][96];
+    const char *pointers[12];
     size_t count = 0u;
     if (!tui_state_selected_node(state, &node)) return;
     tui_hex_format(node.destination, LXMF_DESTINATION_LENGTH, address);
@@ -555,6 +571,15 @@ static void draw_node_popup(const tui_state_t *state) {
     (void)snprintf(lines[count++], sizeof lines[0],
                    "p  Use as propagation node%s",
                    propagation_ready ? "" : "   (unavailable: no enabled announce/cost)");
+    bool selected_propagation = state->settings.has_propagation_node &&
+        memcmp(state->settings.propagation_node, node.destination,
+               LXMF_DESTINATION_LENGTH) == 0;
+    (void)snprintf(lines[count++], sizeof lines[0], "%s",
+        state->propagation_sync.active
+            ? "s  Cancel active propagation sync"
+            : selected_propagation && propagation_ready
+                ? "s  Sync messages now"
+                : "s  Sync   (select this fresh propagation node first)");
     (void)snprintf(lines[count++], sizeof lines[0], "r  Refresh path");
     (void)snprintf(lines[count++], sizeof lines[0], "Esc  Close");
     for (size_t i = 0u; i < count; ++i) pointers[i] = lines[i];
@@ -606,7 +631,7 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
         if (selected) (void)attroff(A_REVERSE);
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
-            "j/k select  / search  Enter details  R refresh path  B browser  C conversations");
+            "j/k select  / search  Enter details/actions  R refresh path  C conversations");
 }
 
 static void draw_setting_row(const tui_state_t *state, const tui_layout_t *layout,
@@ -668,15 +693,35 @@ static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) 
             : "waiting for verified announce";
         if (route == TUI_PROPAGATION_READY)
             (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0],
-                           "Propagation node: %s (%s, cost %u; sync unavailable)",
+                           "Propagation node: %s (%s, cost %u; sync ready)",
                            propagation, state_text, (unsigned)cost);
         else
             (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0],
-                           "Propagation node: %s (%s; sync unavailable)",
+                           "Propagation node: %s (%s)",
                            propagation, state_text);
     } else {
         (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0], "%s",
-                       "Propagation node: none (sync unavailable)");
+                       "Propagation node: none (select one in Network)");
+    }
+    if (state->propagation_sync.active) {
+        (void)snprintf(items[TUI_SETTING_PROPAGATION_SYNC], sizeof items[0],
+            "Cancel Sync: %s, %zu/%zu messages",
+            propagation_sync_phase_name(state->propagation_sync.state),
+            state->propagation_sync.received,
+            state->propagation_sync.available);
+    } else if (state->propagation_sync.state == LXMF_PN_COMPLETE) {
+        (void)snprintf(items[TUI_SETTING_PROPAGATION_SYNC], sizeof items[0],
+            "Sync Now (last: %zu accepted, %zu duplicate, %zu rejected)",
+            state->propagation_sync.accepted, state->propagation_sync.duplicates,
+            state->propagation_sync.rejected);
+    } else if (state->propagation_sync.state == LXMF_PN_FAILED ||
+               state->propagation_sync.state == LXMF_PN_CANCELLED) {
+        (void)snprintf(items[TUI_SETTING_PROPAGATION_SYNC], sizeof items[0],
+            "Sync Now (last: %s)",
+            propagation_sync_phase_name(state->propagation_sync.state));
+    } else {
+        (void)snprintf(items[TUI_SETTING_PROPAGATION_SYNC], sizeof items[0], "%s",
+                       "Sync Now");
     }
     (void)snprintf(items[TUI_SETTING_ANNOUNCE_NOW], sizeof items[0], "%s",
                    "Announce Now");
@@ -724,7 +769,7 @@ static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) 
     clipped(stdscr, layout->hint_row, 0, layout->columns,
             state->field == TUI_FIELD_SETTING
                 ? "Enter save  Esc cancel  edit value"
-                : "j/k select  Enter edit/toggle/announce  C conversations  q quit");
+                : "j/k select  Enter edit/toggle/announce/sync  C conversations  q quit");
 }
 
 /* ------------------------------------------------------------------- micron */
@@ -983,9 +1028,9 @@ static void draw_guide(const tui_layout_t *layout) {
         "Conversations: 1/2/3 trust tabs, / search, a address, Enter compose",
         "Contact actions: i details, p pin, x block, t trust, u untrust",
         "Delivery: d selects direct or propagation-node upload for queued messages",
-        "Network: / search nodes, Enter details, then b browse, m message, p relay",
+        "Network: / search, Enter details; b browse, m message, p relay, s sync/cancel",
         "Browser: j/k select links, Enter follow, Backspace back, r reload",
-        "Settings: j/k select, Enter edit or activate Announce Now",
+        "Settings: j/k select, Enter edit, announce, start or cancel propagation sync",
         "",
         "Delivery is proof-backed. A queued message is not shown as delivered.",
         "See docs/TUI.md for setup, persistence, bounds and current limitations."
@@ -1086,15 +1131,29 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
                     : "waiting for verified announce";
             if (route == TUI_PROPAGATION_READY)
                 (void)fprintf(output,
-                    "Propagation node: %s (upload ready, cost %u; sync unavailable)\n",
+                    "Propagation node: %s (upload and sync ready, cost %u)\n",
                     propagation, (unsigned)cost);
             else
                 (void)fprintf(output,
-                    "Propagation node: %s (%s; sync unavailable)\n",
+                    "Propagation node: %s (%s)\n",
                     propagation, state_text);
         } else {
             (void)fprintf(output, "Propagation node: none\n");
         }
+        (void)fprintf(output,
+            "Propagation sync: %s active=%s available=%zu received=%zu "
+            "accepted=%zu duplicates=%zu rejected=%zu acknowledged=%zu "
+            "result=%s transport=%s\n",
+            propagation_sync_phase_name(state->propagation_sync.state),
+            state->propagation_sync.active ? "yes" : "no",
+            state->propagation_sync.available,
+            state->propagation_sync.received,
+            state->propagation_sync.accepted,
+            state->propagation_sync.duplicates,
+            state->propagation_sync.rejected,
+            state->propagation_sync.acknowledged,
+            lxmf_status_string(state->propagation_sync.result),
+            rns_status_string(state->propagation_sync.transport_error));
         (void)fprintf(output, "Last announce: %s\nStatus: %s\n",
                       !state->has_announce_result ? "never"
                       : rns_status_string(state->last_announce_result),
@@ -1105,9 +1164,9 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
         (void)fprintf(output,
             "Screen: Guide\n"
             "Conversations: C, trust tabs 1/2/3, / search, a address, Enter compose\n"
-            "Network: N, / search, Enter node actions, b browse, m message, r path\n"
+            "Network: N, / search, Enter actions, b browse, m message, p relay, s sync\n"
             "Browser: B, j/k links, Enter follow, Backspace back, r reload\n"
-            "Settings: S, j/k select, Enter edit/activate\n"
+            "Settings: S, j/k select, Enter edit/announce/sync/cancel\n"
             "RRC: R, j/k select, Enter edit/connect/join/part/send\n"
             "Escape: close active layer or return to Conversations\n"
             "Status: %s\n", state->status);

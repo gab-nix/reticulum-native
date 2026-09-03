@@ -82,6 +82,14 @@ valid advertised cost, `r` to refresh its path, and `Esc` to close. Actions
 that cannot apply are listed with the reason, because most announces are LXMF
 inboxes or transport nodes that serve no pages at all.
 
+For the currently selected propagation node, `s` starts one explicit
+list/download/ack sync. While it is active the same action cancels it. Settings
+also has a `Sync Now` row that changes to `Cancel Sync` and shows the current
+path/link/list/download/ack phase plus received/available counts. Completion
+shows accepted, durable-duplicate, rejected and acknowledged totals. Rejected
+items remain on the node; cancellation and transport failures do not discard
+conversations or previously stored messages.
+
 Delivery markers are `[.]` queued, `[>]` sending, `[+]` sent, `[x]` delivered,
 and `[!]` failed. Incoming messages have no delivery marker. On narrow terminals
 the contacts sidebar is hidden; below 38 columns by 10 rows the UI displays a
@@ -92,7 +100,10 @@ verified `lxmf.propagation` announce says the node is enabled and advertises a
 cost from 1 to 254. The Settings screen distinguishes ready, stale, disabled,
 invalid-cost and awaiting-announce states. `[+]` for propagated delivery means
 the node accepted the upload; it does not claim the final recipient received it.
-Download/sync is not wired into the TUI yet and is labelled unavailable.
+Manual download sync starts only while that saved node has a fresh, reachable,
+enabled and cost-bearing verified announce. It is caller-polled and does not
+block keyboard input. Automatic sync scheduling is disabled and not yet
+implemented.
 
 For automated checks and accessibility, `nomad-chat tui --dump-ui IDENTITY
 STORE [DESTINATION]` prints the same essential state without starting curses.
