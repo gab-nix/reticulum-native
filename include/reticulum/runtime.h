@@ -50,6 +50,10 @@ typedef void (*rns_runtime_link_packet_callback_t)(
 typedef struct rns_runtime_link_options {
     double timeout_seconds;
     uint32_t mtu;
+    /* Emit an explicit link-key proof before dispatching each authenticated
+     * context-NONE application packet. LXMF delivery destinations use this to
+     * match the upstream direct-delivery contract. */
+    bool prove_data_packets;
     rns_runtime_link_state_callback_t state_callback;
     rns_runtime_link_packet_callback_t packet_callback;
     void *callback_context;

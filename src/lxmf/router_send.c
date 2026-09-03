@@ -1,4 +1,5 @@
 #include "reticulum/lxmf_router.h"
+#include "reticulum/destination.h"
 #include "reticulum/lxmf_delivery.h"
 #include "reticulum/packet.h"
 
@@ -29,6 +30,20 @@ static void report_event(lxmf_router_t *router,
     memcpy(event.message_id, id, sizeof event.message_id);
     router->config.event_callback(router->config.event_context, &event);
 }
+
+static lxmf_status_t receive_representation(
+    lxmf_router_t *router, const uint8_t *packed, size_t packed_length,
+    lxmf_delivery_method_t method);
+static void direct_link_state_changed(rns_runtime_link_t *link,
+                                      rns_link_state state,
+                                      rns_status_t reason, void *context);
+static void direct_link_packet_received(rns_runtime_link_t *link,
+                                        uint8_t packet_context,
+                                        const uint8_t *plaintext,
+                                        size_t plaintext_length,
+                                        void *context);
+static void direct_link_accepted(rns_runtime_destination_t *destination,
+                                 rns_runtime_link_t *link, void *context);
 
 const char *lxmf_delivery_method_string(lxmf_delivery_method_t method) {
     switch (method) {
@@ -63,6 +78,24 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
         return LXMF_ERR_ARGUMENT;
     memset(router, 0, sizeof *router);
     router->config = *config;
+    if (config->runtime != NULL && config->accept_inbound_links) {
+        static const char *const aspects[] = {"delivery"};
+        uint8_t hash[LXMF_DESTINATION_LENGTH];
+        rns_runtime_link_options_t options = {
+            .prove_data_packets = true,
+            .state_callback = direct_link_state_changed,
+            .packet_callback = direct_link_packet_received,
+            .callback_context = router};
+        if (!rns_destination_hash(config->identity, "lxmf", aspects, 1U,
+                                  hash) ||
+            rns_runtime_register_link_destination(
+                config->runtime, hash, config->identity, &options,
+                direct_link_accepted, router,
+                &router->inbound_destination) != RNS_OK) {
+            memset(router, 0, sizeof *router);
+            return LXMF_ERR_CRYPTO;
+        }
+    }
     return LXMF_OK;
 }
 
@@ -79,6 +112,11 @@ static void release_receipts(lxmf_router_t *router, bool all) {
 void lxmf_router_destroy(lxmf_router_t *router) {
     if (router == NULL) return;
     release_receipts(router, true);
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i) {
+        if (router->links[i].used && router->links[i].link != NULL)
+            rns_runtime_link_destroy(router->links[i].link);
+    }
+    rns_runtime_destination_destroy(router->inbound_destination);
     memset(router, 0, sizeof *router);
 }
 
@@ -118,7 +156,7 @@ static void receipt_changed(rns_packet_receipt_t *receipt,
                                    delivery);
     report(router, slot->message_id, delivery, result);
     report_event(router, slot->message_id,
-                 LXMF_DELIVERY_METHOD_OPPORTUNISTIC, delivery,
+                 slot->method, delivery,
                  result == LXMF_ERR_TIMEOUT ? LXMF_QUEUE_REASON_RETRY_BACKOFF
                                             : LXMF_QUEUE_REASON_NONE,
                  result);
@@ -133,6 +171,7 @@ static lxmf_status_t send_with_receipt(
     lxmf_router_receipt_slot_t *slot = reserve_receipt(router);
     if (slot == NULL) return LXMF_ERR_PENDING;
     memcpy(slot->message_id, id, sizeof slot->message_id);
+    slot->method = LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
     rns_packet_receipt_options_t options = {
         .timeout_seconds = 30.0,
         .callback = receipt_changed,
@@ -154,6 +193,156 @@ static lxmf_status_t send_with_receipt(
     return LXMF_OK;
 }
 
+static lxmf_router_link_slot_t *find_direct_link(
+    lxmf_router_t *router,
+    const uint8_t destination[LXMF_DESTINATION_LENGTH]) {
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i)
+        if (router->links[i].used && !router->links[i].inbound &&
+            memcmp(router->links[i].destination, destination,
+                   LXMF_DESTINATION_LENGTH) == 0)
+            return &router->links[i];
+    return NULL;
+}
+
+static lxmf_router_link_slot_t *reserve_direct_link(lxmf_router_t *router) {
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i)
+        if (!router->links[i].used) {
+            router->links[i].used = true;
+            router->links[i].router = router;
+            return &router->links[i];
+        }
+    return NULL;
+}
+
+static void direct_link_state_changed(rns_runtime_link_t *link,
+                                      rns_link_state state,
+                                      rns_status_t reason, void *context) {
+    lxmf_router_t *router = context;
+    (void)reason;
+    if (router == NULL || link == NULL || state != RNS_LINK_CLOSED) return;
+    /* Destruction is deferred to router polling; runtime callbacks are not a
+     * safe place to release the currently dispatching link. */
+}
+
+static void direct_link_packet_received(rns_runtime_link_t *link,
+                                        uint8_t packet_context,
+                                        const uint8_t *plaintext,
+                                        size_t plaintext_length,
+                                        void *context) {
+    lxmf_router_t *router = context;
+    if (router == NULL || packet_context != 0U) return;
+    (void)link;
+    (void)receive_representation(router, plaintext, plaintext_length,
+                                 LXMF_DELIVERY_METHOD_DIRECT);
+}
+
+static void direct_link_accepted(rns_runtime_destination_t *destination,
+                                 rns_runtime_link_t *link, void *context) {
+    lxmf_router_t *router = context;
+    (void)destination;
+    if (router == NULL || link == NULL) return;
+    lxmf_router_link_slot_t *slot = reserve_direct_link(router);
+    if (slot == NULL) return;
+    slot->inbound = true;
+    slot->link = link;
+}
+
+static lxmf_status_t ensure_direct_link(
+    lxmf_router_t *router,
+    const uint8_t destination_hash[LXMF_DESTINATION_LENGTH],
+    const rns_identity *destination, rns_runtime_link_t **active) {
+    *active = NULL;
+    lxmf_router_link_slot_t *slot = find_direct_link(router, destination_hash);
+    if (slot != NULL) {
+        rns_link_state state = rns_runtime_link_state(slot->link);
+        if (state == RNS_LINK_ACTIVE) {
+            *active = slot->link;
+            return LXMF_OK;
+        }
+        if (state != RNS_LINK_CLOSED) return LXMF_ERR_PENDING;
+        rns_runtime_link_destroy(slot->link);
+        memset(slot, 0, sizeof *slot);
+    }
+    if (rns_runtime_path_lookup(router->config.runtime, destination_hash,
+                                &(rns_path_entry){0}) != RNS_OK) {
+        (void)rns_runtime_request_path(router->config.runtime,
+                                       destination_hash);
+        return LXMF_ERR_PENDING;
+    }
+    slot = reserve_direct_link(router);
+    if (slot == NULL) return LXMF_ERR_PENDING;
+    memcpy(slot->destination, destination_hash, LXMF_DESTINATION_LENGTH);
+    rns_runtime_link_options_t options = {
+        .prove_data_packets = true,
+        .state_callback = direct_link_state_changed,
+        .packet_callback = direct_link_packet_received,
+        .callback_context = router};
+    rns_status_t status = rns_runtime_link_open(
+        router->config.runtime, destination_hash, destination, &options,
+        &slot->link);
+    if (status != RNS_OK) {
+        memset(slot, 0, sizeof *slot);
+        if (status == RNS_ERROR_NOT_FOUND)
+            (void)rns_runtime_request_path(router->config.runtime,
+                                           destination_hash);
+        return status == RNS_ERROR_NOT_FOUND ? LXMF_ERR_PENDING
+                                             : LXMF_ERR_CRYPTO;
+    }
+    return LXMF_ERR_PENDING;
+}
+
+static lxmf_status_t send_direct(
+    lxmf_router_t *router, const lxmf_store_message_t *stored,
+    const uint8_t id[LXMF_MESSAGE_ID_LENGTH], const rns_identity *destination,
+    lxmf_queue_reason_t *queue_reason) {
+    rns_runtime_link_t *link = NULL;
+    lxmf_status_t status = ensure_direct_link(
+        router, stored->destination, destination, &link);
+    if (status != LXMF_OK) {
+        *queue_reason = rns_runtime_path_lookup(
+                            router->config.runtime, stored->destination,
+                            &(rns_path_entry){0}) == RNS_OK
+                            ? LXMF_QUEUE_REASON_LINK
+                            : LXMF_QUEUE_REASON_PATH;
+        return status;
+    }
+    uint8_t packed[LXMF_STORE_MAX_PACKED];
+    size_t packed_length = 0U;
+    lxmf_message_t message = {0};
+    message.content = stored->content;
+    memcpy(message.destination, stored->destination, LXMF_DESTINATION_LENGTH);
+    memcpy(message.source, stored->source, LXMF_SOURCE_LENGTH);
+    message.timestamp = stored->timestamp;
+    status = lxmf_pack(&message, lxmf_identity_signer,
+                       router->config.identity, packed, sizeof packed,
+                       &packed_length);
+    if (status != LXMF_OK) {
+        *queue_reason = LXMF_QUEUE_REASON_RESOURCE;
+        return status == LXMF_ERR_BOUNDS ? LXMF_ERR_PENDING : status;
+    }
+    lxmf_router_receipt_slot_t *receipt_slot = reserve_receipt(router);
+    if (receipt_slot == NULL) {
+        *queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
+        return LXMF_ERR_PENDING;
+    }
+    memcpy(receipt_slot->message_id, id, LXMF_MESSAGE_ID_LENGTH);
+    receipt_slot->method = LXMF_DELIVERY_METHOD_DIRECT;
+    rns_packet_receipt_options_t options = {
+        .timeout_seconds = 30.0,
+        .callback = receipt_changed,
+        .callback_context = receipt_slot};
+    rns_status_t sent = rns_runtime_link_send_with_receipt(
+        link, 0U, packed, packed_length, &options, &receipt_slot->receipt);
+    if (sent != RNS_OK) {
+        memset(receipt_slot, 0, sizeof *receipt_slot);
+        *queue_reason = sent == RNS_ERROR_OVERFLOW
+                            ? LXMF_QUEUE_REASON_RESOURCE
+                            : LXMF_QUEUE_REASON_LINK;
+        return sent == RNS_ERROR_OVERFLOW ? LXMF_ERR_PENDING : LXMF_ERR_CRYPTO;
+    }
+    return LXMF_OK;
+}
+
 lxmf_status_t lxmf_router_send_message(
     lxmf_router_t *router, const uint8_t id[LXMF_MESSAGE_ID_LENGTH]) {
     if (router == NULL || id == NULL) return LXMF_ERR_ARGUMENT;
@@ -167,9 +356,13 @@ lxmf_status_t lxmf_router_send_message(
         return LXMF_ERR_ARGUMENT;
     const rns_identity *destination = router->config.resolve_identity(
         router->config.resolve_context, stored.destination);
+    lxmf_delivery_method_t method =
+        router->config.preferred_delivery_method == LXMF_DELIVERY_METHOD_DIRECT
+            ? LXMF_DELIVERY_METHOD_DIRECT
+            : LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
     /* A missing announce is a normal discovery state, not a delivery failure. */
     if (destination == NULL) {
-        report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+        report_event(router, id, method,
                      LXMF_DELIVERY_QUEUED, LXMF_QUEUE_REASON_PEER_IDENTITY,
                      LXMF_ERR_PENDING);
         return LXMF_ERR_PENDING;
@@ -184,27 +377,36 @@ lxmf_status_t lxmf_router_send_message(
                                  LXMF_DELIVERY_SENDING) != LXMF_OK)
         return LXMF_ERR_CRYPTO;
     report(router, id, LXMF_DELIVERY_SENDING, LXMF_OK);
-    report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+    report_event(router, id, method,
                  LXMF_DELIVERY_SENDING, LXMF_QUEUE_REASON_NONE, LXMF_OK);
     size_t packet_length = 0;
     lxmf_queue_reason_t pending_reason = LXMF_QUEUE_REASON_NONE;
-    lxmf_status_t status = lxmf_opportunistic_packet_pack(
-        &message, router->config.identity, destination, packet, sizeof packet,
-        &packet_length);
-    if (status == LXMF_OK) {
-        if (router->config.runtime != NULL)
-            status = send_with_receipt(router, id, stored.destination,
-                                       destination, packet, packet_length,
-                                       &pending_reason);
+    lxmf_status_t status;
+    if (method == LXMF_DELIVERY_METHOD_DIRECT) {
+        if (router->config.runtime == NULL)
+            status = LXMF_ERR_ARGUMENT;
         else
-            status = router->config.send_packet(router->config.send_context,
-                                                packet, packet_length);
+            status = send_direct(router, &stored, id, destination,
+                                 &pending_reason);
+    } else {
+        status = lxmf_opportunistic_packet_pack(
+            &message, router->config.identity, destination, packet,
+            sizeof packet, &packet_length);
+        if (status == LXMF_OK) {
+            if (router->config.runtime != NULL)
+                status = send_with_receipt(router, id, stored.destination,
+                                           destination, packet, packet_length,
+                                           &pending_reason);
+            else
+                status = router->config.send_packet(
+                    router->config.send_context, packet, packet_length);
+        }
     }
     if (status == LXMF_ERR_PENDING) {
         (void)lxmf_store_update_status(router->config.store, id,
                                        LXMF_DELIVERY_QUEUED);
         report(router, id, LXMF_DELIVERY_QUEUED, status);
-        report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+        report_event(router, id, method,
                      LXMF_DELIVERY_QUEUED,
                      pending_reason, status);
         return status;
@@ -214,13 +416,13 @@ lxmf_status_t lxmf_router_send_message(
         status = LXMF_ERR_CRYPTO;
     if (status == LXMF_OK) {
         report(router, id, LXMF_DELIVERY_SENT, LXMF_OK);
-        report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+        report_event(router, id, method,
                      LXMF_DELIVERY_SENT, LXMF_QUEUE_REASON_NONE, LXMF_OK);
     } else {
         (void)lxmf_store_update_status(router->config.store, id,
                                        LXMF_DELIVERY_FAILED);
         report(router, id, LXMF_DELIVERY_FAILED, status);
-        report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+        report_event(router, id, method,
                      LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_NONE, status);
     }
     return status;
@@ -247,6 +449,14 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
         return LXMF_ERR_ARGUMENT;
     memset(result, 0, sizeof *result);
     release_receipts(router, false);
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i) {
+        lxmf_router_link_slot_t *slot = &router->links[i];
+        if (!slot->used || slot->link == NULL ||
+            rns_runtime_link_state(slot->link) != RNS_LINK_CLOSED)
+            continue;
+        rns_runtime_link_destroy(slot->link);
+        memset(slot, 0, sizeof *slot);
+    }
     if (max_messages == 0u) return LXMF_OK;
     pending_messages_t pending = {.limit = max_messages};
     lxmf_status_t status = lxmf_store_list(router->config.store, collect_pending,
@@ -285,6 +495,33 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
     if (unverified && plaintext_length > LXMF_STORE_MAX_PACKED)
         return LXMF_ERR_BOUNDS;
 
+    return receive_representation(router, plaintext, plaintext_length,
+                                  LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
+}
+
+static lxmf_status_t receive_representation(
+    lxmf_router_t *router, const uint8_t *packed, size_t packed_length,
+    lxmf_delivery_method_t method) {
+    if (router == NULL || packed == NULL || packed_length == 0U ||
+        packed_length > LXMF_STORE_MAX_PACKED)
+        return LXMF_ERR_ARGUMENT;
+    lxmf_message_t message;
+    lxmf_identity_verifier_context_t verifier = {
+        .resolve = router->config.resolve_identity,
+        .resolve_context = router->config.resolve_context};
+    lxmf_status_t status = lxmf_unpack(
+        packed, packed_length, lxmf_identity_verifier, &verifier, &message);
+    bool unverified = status == LXMF_ERR_UNKNOWN_SIGNER;
+    if (status != LXMF_OK && !unverified) return status;
+    static const char *const aspects[] = {"delivery"};
+    uint8_t local_destination[LXMF_DESTINATION_LENGTH];
+    if (!rns_destination_hash(router->config.identity, "lxmf", aspects, 1U,
+                              local_destination))
+        return LXMF_ERR_CRYPTO;
+    if (memcmp(message.destination, local_destination,
+               LXMF_DESTINATION_LENGTH) != 0)
+        return LXMF_ERR_FORMAT;
+
     lxmf_store_message_t stored = {0};
     memcpy(stored.message_id, message.message_id, sizeof stored.message_id);
     memcpy(stored.destination, message.destination, sizeof stored.destination);
@@ -294,15 +531,14 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
     stored.content = message.content;
     stored.signature_state =
         unverified ? LXMF_SIGNATURE_UNVERIFIED : LXMF_SIGNATURE_VERIFIED;
-    if (unverified) stored.packed = (lxmf_slice_t){plaintext, plaintext_length};
+    if (unverified) stored.packed = (lxmf_slice_t){packed, packed_length};
     bool inserted = false;
     status = lxmf_store_put(router->config.store, &stored, &inserted);
     if (status != LXMF_OK) return status;
     if (inserted && router->config.message_callback != NULL)
         router->config.message_callback(router->config.message_context, &stored);
     if (inserted)
-        report_event(router, stored.message_id,
-                     LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+        report_event(router, stored.message_id, method,
                      LXMF_DELIVERY_DELIVERED, LXMF_QUEUE_REASON_NONE, LXMF_OK);
     return LXMF_OK;
 }

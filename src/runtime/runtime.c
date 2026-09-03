@@ -61,6 +61,7 @@ struct rns_request_receipt {
 
 struct rns_packet_receipt {
     rns_runtime_t *runtime;
+    rns_runtime_link_t *link;
     rns_packet_receipt_options_t options;
     rns_packet_receipt_state_t state;
     rns_identity destination_identity;
@@ -580,6 +581,8 @@ static bool link_ingress(rns_runtime_t *runtime, size_t interface_index,
             if (!rns_packet_hash(raw, raw_length, link->callback_packet_hash))
                 return true;
             link->callback_packet_provable = true;
+            if (packet.context == 0U && link->options.prove_data_packets)
+                (void)rns_runtime_link_prove_current_packet(link);
             link->options.packet_callback(link, packet.context, payload,
                                           plaintext_length,
                                           link->options.callback_context);
@@ -1354,6 +1357,7 @@ rns_status_t rns_runtime_link_send_with_receipt(
     rns_packet_receipt_t *receipt = calloc(1U, sizeof *receipt);
     if (receipt == NULL) return RNS_ERROR_NO_MEMORY;
     receipt->runtime = link->runtime;
+    receipt->link = link;
     if (options != NULL) receipt->options = *options;
     receipt->link_proof = true;
     memcpy(receipt->link_id, link->protocol.link_id, sizeof receipt->link_id);
@@ -1484,6 +1488,16 @@ void rns_runtime_link_destroy(rns_runtime_link_t *link) {
     link->resource_receipt = NULL;
     fail_pending_requests(link, RNS_ERROR_INVALID_STATE);
     if (runtime != NULL) {
+        for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i) {
+            rns_packet_receipt_t *receipt = runtime->packet_receipts[i];
+            if (receipt == NULL || receipt->link != link ||
+                receipt->state != RNS_PACKET_RECEIPT_PENDING)
+                continue;
+            receipt->state = RNS_PACKET_RECEIPT_FAILED;
+            receipt->concluded_at = runtime_clock(NULL);
+            receipt->link = NULL;
+            packet_receipt_notify(receipt, RNS_ERROR_INVALID_STATE);
+        }
         if (link->registered)
             (void)rns_node_unregister_destination(&runtime->node,
                                                   link->protocol.link_id);

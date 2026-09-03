@@ -447,7 +447,9 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
             .signature_callback = on_signature,
             .signature_context = state,
             .event_callback = on_router_event,
-            .event_context = state
+            .event_context = state,
+            .preferred_delivery_method = LXMF_DELIVERY_METHOD_DIRECT,
+            .accept_inbound_links = true
         };
         state->router_ready = lxmf_router_init(&state->router, &router) == LXMF_OK;
         if (state->router_ready &&

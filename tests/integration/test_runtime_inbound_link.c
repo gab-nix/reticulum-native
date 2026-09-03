@@ -115,6 +115,7 @@ int main(void) {
     link_observation_t responder = {0};
     rns_runtime_link_options_t responder_options = {
         .timeout_seconds = 2.0,
+        .prove_data_packets = true,
         .state_callback = link_state_changed,
         .packet_callback = link_packet_received,
         .callback_context = &responder};
@@ -187,7 +188,6 @@ int main(void) {
     assert(responder.payload_length == sizeof message - 1U);
     assert(memcmp(responder.payload, message, sizeof message - 1U) == 0);
 
-    responder.prove_packets = true;
     static const uint8_t proved_message[] = "proved link packet";
     rns_packet_receipt_t *receipt = NULL;
     rns_packet_receipt_options_t receipt_options = {

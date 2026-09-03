@@ -13,6 +13,7 @@ extern "C" {
 #define LXMF_IDENTITY_PUBLIC_LENGTH 64u
 #define LXMF_FEATURE_COMPRESSION 0x00000001u
 #define LXMF_ROUTER_MAX_RECEIPTS 16u
+#define LXMF_ROUTER_MAX_LINKS 16u
 
 typedef struct {
     char display_name[LXMF_DISPLAY_NAME_MAX + 1u];
@@ -100,6 +101,8 @@ typedef struct {
 typedef void (*lxmf_router_event_callback_fn)(
     void *context, const lxmf_router_event_t *event);
 
+typedef struct lxmf_router lxmf_router_t;
+
 typedef struct {
     rns_identity *identity;
     lxmf_store_t *store;
@@ -119,19 +122,35 @@ typedef struct {
     void *signature_context;
     lxmf_router_event_callback_fn event_callback;
     void *event_context;
+    /* UNKNOWN retains the legacy opportunistic default. Applications that
+     * require NomadNet's default forward-secret delivery select DIRECT. */
+    lxmf_delivery_method_t preferred_delivery_method;
+    /* Register the local lxmf.delivery destination for authenticated inbound
+     * links. The router owns this registration until destroy. */
+    bool accept_inbound_links;
 } lxmf_router_config_t;
-typedef struct lxmf_router lxmf_router_t;
 typedef struct {
     bool used;
     bool terminal;
     lxmf_router_t *router;
     rns_packet_receipt_t *receipt;
     uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
+    lxmf_delivery_method_t method;
 } lxmf_router_receipt_slot_t;
+
+typedef struct {
+    bool used;
+    bool inbound;
+    lxmf_router_t *router;
+    rns_runtime_link_t *link;
+    uint8_t destination[LXMF_DESTINATION_LENGTH];
+} lxmf_router_link_slot_t;
 
 struct lxmf_router {
     lxmf_router_config_t config;
     lxmf_router_receipt_slot_t receipts[LXMF_ROUTER_MAX_RECEIPTS];
+    lxmf_router_link_slot_t links[LXMF_ROUTER_MAX_LINKS];
+    rns_runtime_destination_t *inbound_destination;
 };
 
 typedef struct {
