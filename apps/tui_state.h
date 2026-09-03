@@ -68,6 +68,15 @@ typedef enum {
     TUI_OVERLAY_NODE_ACTIONS
 } tui_overlay_t;
 
+typedef enum {
+    TUI_PROPAGATION_NOT_SELECTED,
+    TUI_PROPAGATION_WAITING_ANNOUNCE,
+    TUI_PROPAGATION_STALE,
+    TUI_PROPAGATION_DISABLED,
+    TUI_PROPAGATION_INVALID_COST,
+    TUI_PROPAGATION_READY
+} tui_propagation_state_t;
+
 typedef struct {
     uint8_t peer[LXMF_DESTINATION_LENGTH];
     size_t messages;
@@ -149,6 +158,8 @@ typedef struct tui_state {
     bool has_announce_result;
     rns_status_t last_announce_result;
     rns_identity resolved_identity;
+    rns_identity resolved_propagation_identity;
+    lxmf_delivery_method_t compose_delivery_method;
     bool send_attempted;
     bool send_ok;
 
@@ -242,6 +253,14 @@ bool tui_state_announce(tui_state_t *state);
 bool tui_state_peer_stamp_cost(
     const tui_state_t *state,
     const uint8_t destination[LXMF_DESTINATION_LENGTH], uint8_t *cost);
+/* Reports whether the saved node has a current verified propagation announce. */
+tui_propagation_state_t tui_state_propagation_state(
+    const tui_state_t *state, rns_node_record *record, uint8_t *stamp_cost);
+/* Explicitly selects a verified enabled Network entry and persists it. */
+bool tui_state_use_propagation_node(tui_state_t *state,
+                                    const rns_node_record *record);
+/* Direct remains the default; propagated messages never silently downgrade. */
+void tui_state_toggle_delivery_method(tui_state_t *state);
 
 /* Pure state updates used by router callbacks and unit tests. */
 void tui_state_apply_router_event(tui_state_t *state,

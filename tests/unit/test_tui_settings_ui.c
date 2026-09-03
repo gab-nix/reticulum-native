@@ -70,7 +70,8 @@ static void test_keys_dump_and_persistence(void) {
     assert(strstr(output, "Screen: Settings") != NULL);
     assert(strstr(output, "Display name: Rei") != NULL);
     assert(strstr(output, "enforced and advertised") != NULL);
-    assert(strstr(output, "stored; sync pending") != NULL);
+    assert(strstr(output, "waiting for verified announce") != NULL);
+    assert(strstr(output, "sync unavailable") != NULL);
     assert(fclose(dump) == 0);
 
     state->screen = TUI_SCREEN_INTERFACES;
@@ -169,12 +170,17 @@ static void test_submit_preserves_pending_status(void) {
     uint8_t destination[LXMF_DESTINATION_LENGTH];
     memset(destination, 0x42, sizeof destination);
     assert(tui_state_open_conversation(state, destination));
+    tui_state_toggle_delivery_method(state);
+    assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_PROPAGATED);
     state->field = TUI_FIELD_COMPOSE;
     assert(tui_editor_insert_byte(&state->composer, 'a'));
     assert(tui_dispatch_key(state, '\n'));
     assert(strstr(state->status, "Queued locally") != NULL);
     assert(strstr(state->status, "failed") == NULL);
     assert(state->message_count == 1u);
+    assert(state->messages[0].value.delivery.desired_method ==
+           LXMF_DELIVERY_METHOD_PROPAGATED);
+    tui_state_toggle_delivery_method(state);
     lxmf_peer_t peer;
     assert(lxmf_peer_store_get(&state->peer_store, destination, &peer) == LXMF_OK);
     assert(peer.draft_len == 0u);

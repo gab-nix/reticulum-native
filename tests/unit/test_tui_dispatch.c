@@ -113,6 +113,21 @@ static void test_empty_network_and_filtered_contact(void) {
     free(state);
 }
 
+static void test_delivery_shortcut_is_screen_scoped(void) {
+    tui_state_t *state = state_create();
+    state->compose_delivery_method = LXMF_DELIVERY_METHOD_DIRECT;
+    assert(tui_dispatch_key(state, 'd'));
+    assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_PROPAGATED);
+    assert(strstr(state->status, "choose a verified node") != NULL);
+    state->screen = TUI_SCREEN_NETWORK;
+    assert(tui_dispatch_key(state, 'd'));
+    assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_PROPAGATED);
+    state->screen = TUI_SCREEN_CONVERSATIONS;
+    assert(tui_dispatch_key(state, 'D'));
+    assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_DIRECT);
+    free(state);
+}
+
 static void test_hidden_editors(void) {
     for (int screen = 0; screen < TUI_SCREEN_COUNT; ++screen) {
         for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_SETTING; ++field) {
@@ -265,6 +280,7 @@ int main(void) {
     assert(!tui_dispatch_key(NULL, '\n'));
     test_screen_scoping();
     test_empty_network_and_filtered_contact();
+    test_delivery_shortcut_is_screen_scoped();
     test_hidden_editors();
     test_modal_isolation();
     test_shortcuts_drafts_and_node_action();

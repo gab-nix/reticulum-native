@@ -1513,6 +1513,50 @@ lxmf_status_t lxmf_router_set_inbound_stamp_cost(lxmf_router_t *router,
     return LXMF_OK;
 }
 
+lxmf_status_t lxmf_router_set_propagation_node(
+    lxmf_router_t *router, const rns_identity *identity,
+    const uint8_t destination[LXMF_DESTINATION_LENGTH], uint8_t stamp_cost) {
+    if (router == NULL) return LXMF_ERR_ARGUMENT;
+    if (identity == NULL) {
+        if (destination != NULL || stamp_cost != 0u) return LXMF_ERR_ARGUMENT;
+        if (router->propagation.used) return LXMF_ERR_PENDING;
+        memset(&router->propagation_node, 0, sizeof router->propagation_node);
+        router->config.propagation_node_identity = NULL;
+        memset(router->config.propagation_node_destination, 0,
+               sizeof router->config.propagation_node_destination);
+        router->config.propagation_stamp_cost = 0u;
+        return LXMF_OK;
+    }
+    if (destination == NULL || router->config.runtime == NULL ||
+        router->config.wall_clock == NULL ||
+        stamp_cost == 0u || stamp_cost == UINT8_MAX)
+        return LXMF_ERR_ARGUMENT;
+    uint8_t expected[LXMF_DESTINATION_LENGTH];
+    const char *const aspects[] = {"propagation"};
+    if (!rns_destination_hash(identity, "lxmf", aspects, 1u, expected) ||
+        memcmp(expected, destination, sizeof expected) != 0)
+        return LXMF_ERR_ARGUMENT;
+    if (router->propagation.used) {
+        if (router->config.propagation_node_identity != NULL &&
+            router->config.propagation_stamp_cost == stamp_cost &&
+            memcmp(router->config.propagation_node_destination, destination,
+                   sizeof expected) == 0)
+            return LXMF_OK;
+        return LXMF_ERR_PENDING;
+    }
+    uint8_t public_key[RNS_IDENTITY_PUBLIC_SIZE];
+    rns_identity candidate;
+    rns_identity_export_public(identity, public_key);
+    if (!rns_identity_from_public(&candidate, public_key))
+        return LXMF_ERR_ARGUMENT;
+    router->propagation_node = candidate;
+    router->config.propagation_node_identity = &router->propagation_node;
+    memcpy(router->config.propagation_node_destination, destination,
+           sizeof router->config.propagation_node_destination);
+    router->config.propagation_stamp_cost = stamp_cost;
+    return LXMF_OK;
+}
+
 lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
                                          const uint8_t *packet,
                                          size_t packet_length) {

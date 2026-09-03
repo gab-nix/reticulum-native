@@ -20,6 +20,8 @@
 #define TUI_RUNTIME_BATCH 32u
 #define TUI_NODE_LIFETIME 3600.0
 
+static void apply_propagation_route(tui_state_t *state);
+
 static const uint8_t *message_peer(const tui_state_t *state,
                                    const lxmf_store_message_t *message) {
     return memcmp(message->source, state->local, LXMF_DESTINATION_LENGTH) == 0
@@ -333,15 +335,25 @@ void tui_state_apply_router_event(tui_state_t *state,
         tui_state_set_status(state, "Sending via %s",
                              lxmf_delivery_method_string(event->method));
     } else if (event->state == LXMF_DELIVERY_SENT) {
-        tui_state_set_status(state, "Sent via %s; awaiting delivery proof",
-                             lxmf_delivery_method_string(event->method));
+        if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED)
+            tui_state_set_status(state,
+                "Uploaded to propagation node; recipient delivery is not yet confirmed");
+        else
+            tui_state_set_status(state, "Sent via %s; awaiting delivery proof",
+                                 lxmf_delivery_method_string(event->method));
     } else if (event->state == LXMF_DELIVERY_DELIVERED) {
         tui_state_set_status(state, "Delivered via %s",
                              lxmf_delivery_method_string(event->method));
     } else {
-        tui_state_set_status(state, "Delivery via %s failed: %s",
-                             lxmf_delivery_method_string(event->method),
-                             lxmf_status_string(event->result));
+        if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED &&
+            event->queue_reason == LXMF_QUEUE_REASON_RETRY_EXHAUSTED)
+            tui_state_set_status(state,
+                "Propagation upload stopped after bounded retries: %s",
+                lxmf_status_string(event->result));
+        else
+            tui_state_set_status(state, "Delivery via %s failed: %s",
+                                 lxmf_delivery_method_string(event->method),
+                                 lxmf_status_string(event->result));
     }
 }
 
@@ -405,9 +417,9 @@ static void on_announce(rns_runtime_t *runtime, const rns_node_result *announce,
                         void *context) {
     tui_state_t *state = context;
     (void)runtime;
-    if (!rns_node_registry_consider_announce(&state->nodes, announce) ||
-        !state->router_ready)
-        return;
+    if (!rns_node_registry_consider_announce(&state->nodes, announce)) return;
+    apply_propagation_route(state);
+    if (!state->router_ready) return;
     lxmf_router_verify_result_t verified;
     (void)lxmf_router_verify_pending(&state->router,
                                      announce->destination_hash, &verified);
@@ -460,6 +472,87 @@ bool tui_state_peer_stamp_cost(
         }
     }
     return false;
+}
+
+tui_propagation_state_t tui_state_propagation_state(
+    const tui_state_t *state, rns_node_record *record, uint8_t *stamp_cost) {
+    if (record != NULL) memset(record, 0, sizeof *record);
+    if (stamp_cost != NULL) *stamp_cost = 0u;
+    if (state == NULL || !state->settings.has_propagation_node)
+        return TUI_PROPAGATION_NOT_SELECTED;
+    const rns_node_record *node = rns_node_registry_get(
+        &state->nodes, state->settings.propagation_node);
+    if (node == NULL || !node->propagation || !node->lxmf_pn_app_data_valid)
+        return TUI_PROPAGATION_WAITING_ANNOUNCE;
+    if (!node->reachable) return TUI_PROPAGATION_STALE;
+    if (!node->lxmf_pn_enabled) return TUI_PROPAGATION_DISABLED;
+    if (node->lxmf_pn_stamp_cost == 0u ||
+        node->lxmf_pn_stamp_cost == UINT8_MAX)
+        return TUI_PROPAGATION_INVALID_COST;
+    if (record != NULL) *record = *node;
+    if (stamp_cost != NULL) *stamp_cost = node->lxmf_pn_stamp_cost;
+    return TUI_PROPAGATION_READY;
+}
+
+static void apply_propagation_route(tui_state_t *state) {
+    if (state == NULL || !state->router_ready) return;
+    rns_node_record node;
+    uint8_t cost = 0u;
+    if (tui_state_propagation_state(state, &node, &cost) ==
+            TUI_PROPAGATION_READY &&
+        rns_identity_from_public(&state->resolved_propagation_identity,
+                                 node.public_key)) {
+        (void)lxmf_router_set_propagation_node(
+            &state->router, &state->resolved_propagation_identity,
+            node.destination, cost);
+    } else {
+        (void)lxmf_router_set_propagation_node(&state->router, NULL, NULL, 0u);
+    }
+}
+
+bool tui_state_use_propagation_node(tui_state_t *state,
+                                    const rns_node_record *record) {
+    if (state == NULL || record == NULL || !record->reachable ||
+        !record->propagation || !record->lxmf_pn_app_data_valid ||
+        !record->lxmf_pn_enabled || record->lxmf_pn_stamp_cost == 0u ||
+        record->lxmf_pn_stamp_cost == UINT8_MAX)
+        return false;
+    tui_settings_t previous = state->settings;
+    state->settings.has_propagation_node = true;
+    memcpy(state->settings.propagation_node, record->destination,
+           sizeof state->settings.propagation_node);
+    if (!tui_state_save_settings(state)) {
+        state->settings = previous;
+        return false;
+    }
+    apply_propagation_route(state);
+    tui_state_set_status(state,
+        "Verified propagation node selected (cost %u); download sync is unavailable",
+        (unsigned)record->lxmf_pn_stamp_cost);
+    return true;
+}
+
+void tui_state_toggle_delivery_method(tui_state_t *state) {
+    if (state == NULL) return;
+    if (state->compose_delivery_method == LXMF_DELIVERY_METHOD_PROPAGATED) {
+        state->compose_delivery_method = LXMF_DELIVERY_METHOD_DIRECT;
+        tui_state_set_status(state, "Delivery mode set to direct");
+        return;
+    }
+    state->compose_delivery_method = LXMF_DELIVERY_METHOD_PROPAGATED;
+    uint8_t cost = 0u;
+    tui_propagation_state_t route =
+        tui_state_propagation_state(state, NULL, &cost);
+    if (route == TUI_PROPAGATION_READY)
+        tui_state_set_status(state,
+            "Delivery mode set to propagation-node upload (cost %u)",
+            (unsigned)cost);
+    else if (route == TUI_PROPAGATION_NOT_SELECTED)
+        tui_state_set_status(state,
+            "Propagated delivery selected; choose a verified node in Network or Settings");
+    else
+        tui_state_set_status(state,
+            "Propagated delivery selected; messages wait for a fresh enabled node announce");
 }
 
 static bool resolve_peer_stamp_cost(
@@ -565,6 +658,15 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
     options.callback_context = state;
     rns_status_t status = rns_runtime_create(&state->runtime, &config, &options);
     if (status == RNS_OK) {
+        rns_node_record propagation_record;
+        uint8_t propagation_cost = 0u;
+        const rns_identity *propagation_identity = NULL;
+        if (tui_state_propagation_state(state, &propagation_record,
+                                        &propagation_cost) ==
+                TUI_PROPAGATION_READY &&
+            rns_identity_from_public(&state->resolved_propagation_identity,
+                                     propagation_record.public_key))
+            propagation_identity = &state->resolved_propagation_identity;
         lxmf_router_config_t router = {
             .identity = &state->identity,
             .store = &state->store,
@@ -596,8 +698,14 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
             .event_callback = on_router_event,
             .event_context = state,
             .preferred_delivery_method = LXMF_DELIVERY_METHOD_DIRECT,
-            .accept_inbound_links = true
+            .accept_inbound_links = true,
+            .propagation_node_identity = propagation_identity,
+            .propagation_stamp_cost = propagation_cost
         };
+        if (propagation_identity != NULL)
+            memcpy(router.propagation_node_destination,
+                   propagation_record.destination,
+                   sizeof router.propagation_node_destination);
         state->router_ready = lxmf_router_init(&state->router, &router) == LXMF_OK;
         if (state->router_ready &&
             rns_runtime_register_destination(state->runtime, state->local) != RNS_OK)
@@ -672,6 +780,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     tui_settings_defaults(&state->settings);
     state->tab = TUI_TRUST_UNKNOWN;
+    state->compose_delivery_method = LXMF_DELIVERY_METHOD_DIRECT;
     state->screen = TUI_SCREEN_CONVERSATIONS;
     state->filter_dirty = true;
     state->messages = calloc(TUI_MAX_MESSAGES, sizeof *state->messages);
@@ -718,9 +827,12 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     rns_node_registry_init(&state->nodes, TUI_NODE_LIFETIME);
     written = snprintf(state->node_store_path, sizeof state->node_store_path,
                        "%s.nodes", store_path);
-    if (written > 0 && (size_t)written < sizeof state->node_store_path)
-        (void)rns_node_registry_load(&state->nodes, state->node_store_path,
-                                     TUI_NODE_LIFETIME);
+    if (written > 0 && (size_t)written < sizeof state->node_store_path) {
+        if (rns_node_registry_load(&state->nodes, state->node_store_path,
+                                   TUI_NODE_LIFETIME))
+            for (size_t i = 0u; i < state->nodes.count; ++i)
+                state->nodes.records[i].reachable = false;
+    }
     else state->node_store_path[0] = '\0';
 
     if (config_path != NULL) start_runtime(state, config_path);
@@ -853,6 +965,7 @@ void tui_state_poll(tui_state_t *state) {
     poll_browser(state);
     if (rns_hal_monotonic_ms(&now) == RNS_OK) {
         (void)rns_node_registry_expire(&state->nodes, (double)now / 1000.0);
+        apply_propagation_route(state);
         if (state->next_announce_ms == 0u)
             state->next_announce_ms = now + tui_settings_interval_ms(&state->settings);
         if (tui_settings_announce_due(state->startup_announce_pending,
@@ -981,13 +1094,22 @@ lxmf_status_t tui_state_queue_message(tui_state_t *state) {
     stored.status = LXMF_DELIVERY_QUEUED;
     stored.content = source.content;
     stored.packed = (lxmf_slice_t){packed, packed_length};
+    stored.delivery.desired_method = state->compose_delivery_method;
     status = lxmf_store_put(&state->store, &stored, &inserted);
     state->send_attempted = false;
     state->send_ok = false;
     if (status != LXMF_OK || !inserted) return status;
 
     if (state->router_ready) {
-        if (resolve_peer(state, stored.destination) == NULL) {
+        bool propagation_waiting =
+            stored.delivery.desired_method == LXMF_DELIVERY_METHOD_PROPAGATED &&
+            tui_state_propagation_state(state, NULL, NULL) !=
+                TUI_PROPAGATION_READY;
+        if (propagation_waiting) {
+            state->send_attempted = true;
+            (void)lxmf_router_send_message(&state->router,
+                                           decoded.message_id);
+        } else if (resolve_peer(state, stored.destination) == NULL) {
             state->send_attempted =
                 rns_runtime_request_path(state->runtime, stored.destination) == RNS_OK;
             tui_state_set_status(state, "Queued; requesting a verified path to recipient");
@@ -1064,6 +1186,7 @@ bool tui_state_save_settings(tui_state_t *state) {
             &state->router, state->settings.has_stamp_cost
                                 ? state->settings.stamp_cost
                                 : 0u);
+    apply_propagation_route(state);
     return true;
 }
 
@@ -1207,6 +1330,7 @@ bool tui_state_setting_apply(tui_state_t *state) {
     if (state->router_ready)
         (void)lxmf_router_set_inbound_stamp_cost(
             &state->router, changed.has_stamp_cost ? changed.stamp_cost : 0u);
+    apply_propagation_route(state);
     state->next_announce_ms = 0u;
     tui_editor_clear(&state->setting);
     state->field = TUI_FIELD_NONE;

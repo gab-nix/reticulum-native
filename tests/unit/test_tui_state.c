@@ -1,4 +1,5 @@
 #include "tui_state.h"
+#include "reticulum/destination.h"
 
 #include <assert.h>
 #include <fcntl.h>
@@ -8,6 +9,11 @@
 #include <unistd.h>
 
 static const uint8_t local_address[LXMF_DESTINATION_LENGTH] = {0x11u};
+
+static uint64_t test_wall_clock(void *context) {
+    (void)context;
+    return 1700000000u;
+}
 
 /*
  * Builds a state without touching the store or the network so the pure
@@ -309,6 +315,75 @@ static void test_verified_peer_stamp_cost_resolution(void) {
     destroy_state(state);
 }
 
+static void test_verified_propagation_selection(void) {
+    char path[] = "/tmp/nomad-propagation-setting-XXXXXX";
+    int descriptor = mkstemp(path);
+    assert(descriptor >= 0 && close(descriptor) == 0 && unlink(path) == 0);
+    tui_state_t *state = make_state();
+    rns_node_registry_init(&state->nodes, 3600.0);
+    (void)snprintf(state->settings_path, sizeof state->settings_path, "%s", path);
+    rns_identity propagation_identity;
+    assert(rns_identity_generate(&propagation_identity));
+    const char *const aspects[] = {"propagation"};
+    state->settings.has_propagation_node = true;
+    assert(rns_destination_hash(&propagation_identity, "lxmf", aspects, 1u,
+                                state->settings.propagation_node));
+    assert(tui_state_propagation_state(state, NULL, NULL) ==
+           TUI_PROPAGATION_WAITING_ANNOUNCE);
+
+    rns_node_record node = {0};
+    memcpy(node.destination, state->settings.propagation_node,
+           sizeof node.destination);
+    rns_identity_export_public(&propagation_identity, node.public_key);
+    node.kind = RNS_NODE_KIND_LXMF;
+    node.propagation = true;
+    node.lxmf_pn_app_data_valid = true;
+    node.lxmf_pn_enabled = true;
+    node.lxmf_pn_stamp_cost = 9u;
+    node.reachable = false;
+    assert(rns_node_registry_upsert(&state->nodes, &node));
+    assert(tui_state_propagation_state(state, NULL, NULL) ==
+           TUI_PROPAGATION_STALE);
+    state->nodes.records[0].reachable = true;
+    state->nodes.records[0].lxmf_pn_enabled = false;
+    assert(tui_state_propagation_state(state, NULL, NULL) ==
+           TUI_PROPAGATION_DISABLED);
+    state->nodes.records[0].lxmf_pn_enabled = true;
+    state->nodes.records[0].lxmf_pn_stamp_cost = 0u;
+    assert(tui_state_propagation_state(state, NULL, NULL) ==
+           TUI_PROPAGATION_INVALID_COST);
+    state->nodes.records[0].lxmf_pn_stamp_cost = 9u;
+    uint8_t cost = 0u;
+    assert(tui_state_propagation_state(state, &node, &cost) ==
+           TUI_PROPAGATION_READY);
+    assert(cost == 9u);
+    state->router_ready = true;
+    state->router.config.runtime = (rns_runtime_t *)state;
+    state->router.config.wall_clock = test_wall_clock;
+    assert(tui_state_use_propagation_node(state, &node));
+    assert(state->router.config.propagation_node_identity != NULL);
+    assert(state->router.config.propagation_stamp_cost == 9u);
+    assert(memcmp(state->router.config.propagation_node_destination,
+                  node.destination, sizeof node.destination) == 0);
+    assert(strstr(state->status, "download sync is unavailable") != NULL);
+    tui_settings_t saved;
+    bool found = false;
+    assert(tui_settings_load(path, &saved, &found) && found);
+    assert(saved.has_propagation_node &&
+           memcmp(saved.propagation_node, node.destination,
+                  sizeof saved.propagation_node) == 0);
+
+    state->compose_delivery_method = LXMF_DELIVERY_METHOD_DIRECT;
+    tui_state_toggle_delivery_method(state);
+    assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_PROPAGATED);
+    assert(strstr(state->status, "cost 9") != NULL);
+    tui_state_toggle_delivery_method(state);
+    assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_DIRECT);
+    state->router_ready = false;
+    assert(unlink(path) == 0);
+    destroy_state(state);
+}
+
 static void test_node_move_clamps(void) {
     tui_state_t *state = make_state();
     rns_node_registry_init(&state->nodes, 3600.0);
@@ -468,6 +543,18 @@ static void test_router_events_update_visible_state(void) {
     tui_state_apply_router_event(state, &event);
     assert(state->messages[0].value.status == LXMF_DELIVERY_DELIVERED);
     assert(strstr(state->status, "Delivered") != NULL);
+    event.method = LXMF_DELIVERY_METHOD_PROPAGATED;
+    event.state = LXMF_DELIVERY_SENT;
+    tui_state_apply_router_event(state, &event);
+    assert(strstr(state->status, "recipient delivery is not yet confirmed") != NULL);
+    event.state = LXMF_DELIVERY_FAILED;
+    event.queue_reason = LXMF_QUEUE_REASON_RETRY_EXHAUSTED;
+    event.result = LXMF_ERR_TIMEOUT;
+    tui_state_apply_router_event(state, &event);
+    assert(strstr(state->status, "bounded retries") != NULL);
+    event.method = LXMF_DELIVERY_METHOD_DIRECT;
+    tui_state_apply_router_event(state, &event);
+    assert(strstr(state->status, "Delivery via direct failed") != NULL);
 
     state->messages[0].value.signature_state = LXMF_SIGNATURE_UNVERIFIED;
     tui_state_apply_signature(state, event.message_id, LXMF_SIGNATURE_VERIFIED);
@@ -599,6 +686,7 @@ int main(void) {
     test_saved_block_policy_and_deferred_rejection();
     test_rejected_message_keeps_owned_previews();
     test_verified_peer_stamp_cost_resolution();
+    test_verified_propagation_selection();
     test_node_selection_survives_resort();
     test_node_move_clamps();
     test_only_nomad_nodes_serve_pages();

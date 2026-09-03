@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "reticulum/node_registry.h"
+#include "reticulum/lxmf_propagation.h"
 #include "reticulum/lxmf_router.h"
 #include <ctype.h>
 #include <fcntl.h>
@@ -13,10 +14,11 @@
 #define REGISTRY_MAGIC_V2 "RNSN2\0\0\0"
 #define REGISTRY_MAGIC_V1 "RNSN1\0\0\0"
 #define REGISTRY_HEADER_SIZE 24u
-#define REGISTRY_RECORD_PREFIX_SIZE 197u
+#define REGISTRY_RECORD_V1_PREFIX_SIZE 197u
+#define REGISTRY_RECORD_PREFIX_SIZE 199u
 #define REGISTRY_MAX_FILE_SIZE (512u * 1024u)
 #define REGISTRY_PATH_MAX 4096u
-#define REGISTRY_RECORD_VERSION 1u
+#define REGISTRY_RECORD_VERSION 2u
 
 _Static_assert(sizeof(double) == sizeof(uint64_t),
                "node registry persistence requires 64-bit doubles");
@@ -28,7 +30,10 @@ enum {
     RECORD_HAS_MESSAGE_DESTINATION = 1u << 3,
     RECORD_LXMF_APP_DATA_VALID = 1u << 4,
     RECORD_LXMF_HAS_STAMP_COST = 1u << 5,
-    RECORD_KNOWN_FLAGS = (1u << 6) - 1u
+    RECORD_LXMF_PN_APP_DATA_VALID = 1u << 6,
+    RECORD_LXMF_PN_ENABLED = 1u << 7,
+    RECORD_V1_KNOWN_FLAGS = (1u << 6) - 1u,
+    RECORD_KNOWN_FLAGS = (1u << 8) - 1u
 };
 
 typedef struct {
@@ -224,7 +229,17 @@ int rns_node_registry_consider_announce(rns_node_registry *r,const rns_node_resu
         }
     }else if(rns_destination_hash(&a->announce_identity,"lxmf",propagation_aspects,1,propagation_hash)&&
              !memcmp(propagation_hash,a->destination_hash,16)){
+        lxmf_pn_announce_t decoded;
         n.kind=RNS_NODE_KIND_LXMF;n.propagation=true;
+        if(a->announce_app_data_length&&
+           lxmf_pn_announce_decode(a->announce_app_data,
+                                   a->announce_app_data_length,
+                                   &decoded)==LXMF_OK){
+            n.lxmf_pn_app_data_valid=true;
+            n.lxmf_pn_enabled=decoded.enabled;
+            n.lxmf_pn_stamp_cost=decoded.stamp_cost;
+            n.lxmf_pn_stamp_flexibility=decoded.stamp_flexibility;
+        }
     }
     return rns_node_registry_upsert(r,&n);
 }
@@ -318,7 +333,11 @@ static bool encode_record(const rns_node_record *record, uint8_t *output,
                      (record->lxmf_app_data_valid
                           ? RECORD_LXMF_APP_DATA_VALID : 0U) |
                      (record->lxmf_has_stamp_cost
-                          ? RECORD_LXMF_HAS_STAMP_COST : 0U);
+                          ? RECORD_LXMF_HAS_STAMP_COST : 0U) |
+                     (record->lxmf_pn_app_data_valid
+                          ? RECORD_LXMF_PN_APP_DATA_VALID : 0U) |
+                     (record->lxmf_pn_enabled
+                          ? RECORD_LXMF_PN_ENABLED : 0U);
     put16(cursor, flags); cursor += 2U;
 #define ENCODE_ARRAY(member) do { \
     memcpy(cursor, record->member, sizeof record->member); \
@@ -350,6 +369,8 @@ static bool encode_record(const rns_node_record *record, uint8_t *output,
     cursor += sizeof record->ratchet;
     put16(cursor, (uint16_t)record->persistence_extensions_length);
     cursor += 2U;
+    *cursor++ = record->lxmf_pn_stamp_cost;
+    *cursor++ = record->lxmf_pn_stamp_flexibility;
     memcpy(cursor, record->app_data, record->app_data_length);
     cursor += record->app_data_length;
     memcpy(cursor, record->name, name_length); cursor += name_length;
@@ -362,10 +383,16 @@ static bool encode_record(const rns_node_record *record, uint8_t *output,
 
 static bool decode_record(rns_node_record *record, const uint8_t *input,
                           size_t length) {
-    if (length < REGISTRY_RECORD_PREFIX_SIZE ||
-        get16(input) != REGISTRY_RECORD_VERSION) return false;
+    if (length < REGISTRY_RECORD_V1_PREFIX_SIZE) return false;
+    uint16_t version = get16(input);
+    size_t prefix_size = version == 1U ? REGISTRY_RECORD_V1_PREFIX_SIZE
+                                      : REGISTRY_RECORD_PREFIX_SIZE;
+    if ((version != 1U && version != REGISTRY_RECORD_VERSION) ||
+        length < prefix_size) return false;
     uint16_t flags = get16(input + 2U);
-    if ((flags & (uint16_t)~RECORD_KNOWN_FLAGS) != 0U) return false;
+    uint16_t known_flags = version == 1U ? RECORD_V1_KNOWN_FLAGS
+                                        : RECORD_KNOWN_FLAGS;
+    if ((flags & (uint16_t)~known_flags) != 0U) return false;
     const uint8_t *cursor = input + 4U;
     memset(record, 0, sizeof *record);
 #define DECODE_ARRAY(member) do { \
@@ -395,6 +422,10 @@ static bool decode_record(rns_node_record *record, const uint8_t *input,
     memcpy(record->ratchet, cursor, sizeof record->ratchet);
     cursor += sizeof record->ratchet;
     size_t extensions_length = get16(cursor); cursor += 2U;
+    if (version >= 2U) {
+        record->lxmf_pn_stamp_cost = *cursor++;
+        record->lxmf_pn_stamp_flexibility = *cursor++;
+    }
     if (app_data_length > RNS_NODE_APP_DATA_MAX || name_length >= 64U ||
         extensions_length > RNS_NODE_PERSISTENCE_EXT_MAX ||
         (size_t)(cursor - input) + app_data_length + name_length +
@@ -414,6 +445,9 @@ static bool decode_record(rns_node_record *record, const uint8_t *input,
         (flags & RECORD_LXMF_APP_DATA_VALID) != 0U;
     record->lxmf_has_stamp_cost =
         (flags & RECORD_LXMF_HAS_STAMP_COST) != 0U;
+    record->lxmf_pn_app_data_valid =
+        (flags & RECORD_LXMF_PN_APP_DATA_VALID) != 0U;
+    record->lxmf_pn_enabled = (flags & RECORD_LXMF_PN_ENABLED) != 0U;
     return valid_record(record);
 }
 

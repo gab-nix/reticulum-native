@@ -23,6 +23,9 @@ starting an asynchronous attempt is never presented as a failure by itself.
 - `Page Up`/`Page Down`: scroll conversation history.
 - `/`: search addresses, local notes, and message text in the current trust tab.
 - `Enter`: open the composer; in the composer, queue the message locally.
+- `d`: switch the compose delivery mode between direct delivery and an explicit
+  propagation-node upload. Direct is the default, and propagated messages never
+  silently fall back to direct delivery.
 - `a`: enter a 32-hex LXMF address, select or create that conversation, and
   open its composer.
 - `Left`/`Right`, `Home`/`End`, `Delete`, and `Backspace`: edit input. Editing
@@ -63,7 +66,8 @@ filtered list retains reachable/newest/address ordering and anchored selection.
 Enter opens a details popup showing the address, announced name, node type,
 route, and associated LXMF inbox, followed by the actions that apply to that
 node: `b` to browse its pages, `m` to open a conversation with its
-`lxmf.delivery` address, `r` to refresh its path, and `Esc` to close. Actions
+`lxmf.delivery` address, `p` to save a verified enabled propagation node with a
+valid advertised cost, `r` to refresh its path, and `Esc` to close. Actions
 that cannot apply are listed with the reason, because most announces are LXMF
 inboxes or transport nodes that serve no pages at all.
 
@@ -71,6 +75,13 @@ Delivery markers are `[.]` queued, `[>]` sending, `[+]` sent, `[x]` delivered,
 and `[!]` failed. Incoming messages have no delivery marker. On narrow terminals
 the contacts sidebar is hidden; below 38 columns by 10 rows the UI displays a
 resize prompt instead of drawing an unusable layout.
+
+A saved propagation-node address stays inert until a fresh cryptographically
+verified `lxmf.propagation` announce says the node is enabled and advertises a
+cost from 1 to 254. The Settings screen distinguishes ready, stale, disabled,
+invalid-cost and awaiting-announce states. `[+]` for propagated delivery means
+the node accepted the upload; it does not claim the final recipient received it.
+Download/sync is not wired into the TUI yet and is labelled unavailable.
 
 For automated checks and accessibility, `nomad-chat tui --dump-ui IDENTITY
 STORE [DESTINATION]` prints the same essential state without starting curses.

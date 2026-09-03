@@ -268,6 +268,12 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
 /* Updates the enforced inbound policy without rebuilding runtime links. */
 lxmf_status_t lxmf_router_set_inbound_stamp_cost(lxmf_router_t *router,
                                                   uint8_t cost);
+/* Atomically selects a verified outbound lxmf.propagation node. The router
+ * copies only its public identity. Passing NULL/NULL/zero clears the node;
+ * changing it while an upload is active returns LXMF_ERR_PENDING. */
+lxmf_status_t lxmf_router_set_propagation_node(
+    lxmf_router_t *router, const rns_identity *identity,
+    const uint8_t destination[LXMF_DESTINATION_LENGTH], uint8_t stamp_cost);
 /* Accepts a single encrypted opportunistic LXMF packet for the local identity.
  * Valid new messages are persisted as DELIVERED before message_callback runs.
  * A message signed by an identity the resolver does not yet hold cannot be

@@ -256,7 +256,11 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
     const tui_editor_t *editor = NULL;
     const char *prompt = "Search: ";
     switch (state->field) {
-        case TUI_FIELD_COMPOSE: editor = &state->composer; prompt = "Message: "; break;
+        case TUI_FIELD_COMPOSE:
+            editor = &state->composer;
+            prompt = state->compose_delivery_method ==
+                         LXMF_DELIVERY_METHOD_PROPAGATED ? "Relay: " : "Direct: ";
+            break;
         case TUI_FIELD_SEARCH: editor = &state->search; prompt = "Search: "; break;
         case TUI_FIELD_NODE_SEARCH:
             editor = &state->node_search; prompt = "Find node: "; break;
@@ -276,7 +280,7 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
             editor != NULL ? "Enter accept  Esc cancel  Home/End  Ctrl-A/E/U/K/W"
-                           : "1/2/3 trust tabs  / search  i info  p pin  t/u trust  ? help");
+                           : "d direct/propagated  1/2/3 trust  / search  i info  ? help");
     clipped(stdscr, layout->legend_row, 0, layout->columns,
             "[.] queued  [>] sending  [+] sent  [x] delivered  [!] failed");
 }
@@ -288,8 +292,10 @@ static void draw_conversation_overlay(const tui_state_t *state) {
             "1/2/3: trusted/unknown/untrusted    /: search",
             "Enter: compose    i: peer info    p: pin    x: block",
             "t/u: trust/untrust    n: local note    y: copy fallback",
+            "d: choose direct or propagated delivery for queued messages",
             "Composer: arrows Home End Del Backspace Ctrl-A/E/U/K/W",
-            "Configured networks send and receive opportunistic LXMF. Press ? or Esc to close."
+            "Propagated means accepted by the relay, not delivered to the recipient.",
+            "Press ? or Esc to close."
         };
         centered_box("Help", help, sizeof help / sizeof help[0]);
         return;
@@ -336,8 +342,8 @@ static void draw_node_popup(const tui_state_t *state) {
     rns_node_record node;
     char address[TUI_ADDRESS_DIGITS + 1u];
     char inbox[TUI_ADDRESS_DIGITS + 1u];
-    char lines[10][96];
-    const char *pointers[10];
+    char lines[11][96];
+    const char *pointers[11];
     size_t count = 0u;
     if (!tui_state_selected_node(state, &node)) return;
     tui_hex_format(node.destination, LXMF_DESTINATION_LENGTH, address);
@@ -367,6 +373,12 @@ static void draw_node_popup(const tui_state_t *state) {
                    pages ? "" : "   (unavailable: not a Nomad node)");
     (void)snprintf(lines[count++], sizeof lines[0], "m  Send a message%s",
                    messageable ? "" : "   (unavailable: no LXMF inbox announced)");
+    bool propagation_ready = node.reachable && node.propagation &&
+        node.lxmf_pn_app_data_valid && node.lxmf_pn_enabled &&
+        node.lxmf_pn_stamp_cost > 0u && node.lxmf_pn_stamp_cost < UINT8_MAX;
+    (void)snprintf(lines[count++], sizeof lines[0],
+                   "p  Use as propagation node%s",
+                   propagation_ready ? "" : "   (unavailable: no enabled announce/cost)");
     (void)snprintf(lines[count++], sizeof lines[0], "r  Refresh path");
     (void)snprintf(lines[count++], sizeof lines[0], "Esc  Close");
     for (size_t i = 0u; i < count; ++i) pointers[i] = lines[i];
@@ -470,11 +482,25 @@ static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) 
     if (state->settings.has_propagation_node) {
         tui_hex_format(state->settings.propagation_node, LXMF_DESTINATION_LENGTH,
                        propagation);
-        (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0],
-                       "Propagation node: %s (stored; sync pending)", propagation);
+        uint8_t cost = 0u;
+        tui_propagation_state_t route =
+            tui_state_propagation_state(state, NULL, &cost);
+        const char *state_text = route == TUI_PROPAGATION_READY ? "upload ready"
+            : route == TUI_PROPAGATION_STALE ? "stale; waiting for fresh announce"
+            : route == TUI_PROPAGATION_DISABLED ? "announce says disabled"
+            : route == TUI_PROPAGATION_INVALID_COST ? "invalid advertised cost"
+            : "waiting for verified announce";
+        if (route == TUI_PROPAGATION_READY)
+            (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0],
+                           "Propagation node: %s (%s, cost %u; sync unavailable)",
+                           propagation, state_text, (unsigned)cost);
+        else
+            (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0],
+                           "Propagation node: %s (%s; sync unavailable)",
+                           propagation, state_text);
     } else {
         (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0], "%s",
-                       "Propagation node: none (sync pending)");
+                       "Propagation node: none (sync unavailable)");
     }
     (void)snprintf(items[TUI_SETTING_ANNOUNCE_NOW], sizeof items[0], "%s",
                    "Announce Now");
@@ -779,7 +805,8 @@ static void draw_guide(const tui_layout_t *layout) {
         "",
         "Conversations: 1/2/3 trust tabs, / search, a address, Enter compose",
         "Contact actions: i details, p pin, x block, t trust, u untrust",
-        "Network: / search nodes, Enter details, then b browse, m message, r path",
+        "Delivery: d selects direct or propagation-node upload for queued messages",
+        "Network: / search nodes, Enter details, then b browse, m message, p relay",
         "Browser: j/k select links, Enter follow, Backspace back, R reload",
         "Settings: j/k select, Enter edit or activate Announce Now",
         "",
@@ -860,8 +887,24 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
         if (state->settings.has_propagation_node) {
             tui_hex_format(state->settings.propagation_node,
                            LXMF_DESTINATION_LENGTH, propagation);
-            (void)fprintf(output, "Propagation node: %s (stored; sync pending)\n",
-                          propagation);
+            uint8_t cost = 0u;
+            tui_propagation_state_t route =
+                tui_state_propagation_state(state, NULL, &cost);
+            const char *state_text = route == TUI_PROPAGATION_STALE
+                ? "stale; waiting for fresh announce"
+                : route == TUI_PROPAGATION_DISABLED
+                    ? "announce says disabled"
+                : route == TUI_PROPAGATION_INVALID_COST
+                    ? "invalid advertised cost"
+                    : "waiting for verified announce";
+            if (route == TUI_PROPAGATION_READY)
+                (void)fprintf(output,
+                    "Propagation node: %s (upload ready, cost %u; sync unavailable)\n",
+                    propagation, (unsigned)cost);
+            else
+                (void)fprintf(output,
+                    "Propagation node: %s (%s; sync unavailable)\n",
+                    propagation, state_text);
         } else {
             (void)fprintf(output, "Propagation node: none\n");
         }
@@ -914,6 +957,8 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
     (void)fprintf(output, "Network: %s\n",
                   state->runtime == NULL ? "OFFLINE (local outbox only)"
                   : tui_state_link_ready(state) ? "ONLINE" : "NO LINK");
+    (void)fprintf(output, "Compose delivery: %s\n",
+                  lxmf_delivery_method_string(state->compose_delivery_method));
     (void)fprintf(output, "Conversations: %zu\n", state->contact_count);
     for (size_t i = 0u; i < state->contact_count; ++i) {
         char peer[TUI_ADDRESS_DIGITS + 1u];

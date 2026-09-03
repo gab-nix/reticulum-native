@@ -27,6 +27,12 @@ typedef struct {
     bool lxmf_has_stamp_cost;
     uint8_t lxmf_stamp_cost;
     uint32_t lxmf_features;
+    /* Parsed only from a cryptographically verified lxmf.propagation
+     * announce. Persisted records are treated as stale until refreshed. */
+    bool lxmf_pn_app_data_valid;
+    bool lxmf_pn_enabled;
+    uint8_t lxmf_pn_stamp_cost;
+    uint8_t lxmf_pn_stamp_flexibility;
     /* Opaque trailing bytes from a newer portable persistence record. They
      * are never interpreted and are written back unchanged. */
     uint8_t persistence_extensions[RNS_NODE_PERSISTENCE_EXT_MAX];

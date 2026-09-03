@@ -154,6 +154,12 @@ static void handle_node_actions_key(tui_state_t *state, int key) {
         if (node.has_message_destination)
             (void)tui_state_open_conversation(state, node.message_destination);
         else tui_state_set_status(state, "This announce has no associated LXMF inbox");
+    } else if (key == 'p' || key == 'P') {
+        if (tui_state_use_propagation_node(state, &node))
+            state->overlay = TUI_OVERLAY_NONE;
+        else
+            tui_state_set_status(state,
+                "Node cannot be selected without a fresh enabled propagation announce and cost");
     } else if (key == 'r' || key == 'R') {
         tui_state_request_path(state);
         state->overlay = TUI_OVERLAY_NONE;
@@ -278,6 +284,10 @@ static bool handle_command_key(tui_state_t *state, int key) {
                 state->field = TUI_FIELD_ADDRESS;
                 tui_editor_clear(&state->address);
             }
+            break;
+        case 'd': case 'D':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+                tui_state_toggle_delivery_method(state);
             break;
         case 'i':
             if (conversation_selected(state))

@@ -124,7 +124,13 @@ int main(void) {
         LXMF_ROUTER_PROPAGATION_MAX_RETRY_BASE_MS+1u;
     assert(lxmf_router_init(&router,&options)==LXMF_ERR_ARGUMENT);
     options.propagation_retry_base_ms=1;
-    assert(lxmf_router_init(&router,&options)==LXMF_OK); pump(client,server,&router,id,LXMF_DELIVERY_SENT);
+    assert(lxmf_router_init(&router,&options)==LXMF_OK);
+    assert(lxmf_router_set_propagation_node(&router,NULL,NULL,0u)==LXMF_OK);
+    assert(router.config.propagation_node_identity==NULL);
+    assert(lxmf_router_set_propagation_node(&router,&node,node_hash,1u)==LXMF_OK);
+    uint8_t wrong_hash[16];memcpy(wrong_hash,node_hash,sizeof wrong_hash);wrong_hash[0]^=1u;
+    assert(lxmf_router_set_propagation_node(&router,&node,wrong_hash,1u)==LXMF_ERR_ARGUMENT);
+    pump(client,server,&router,id,LXMF_DELIVERY_SENT);
     assert(host.uploads==1&&host.valid); lxmf_delivery_metadata_t metadata;
     assert(lxmf_store_read_delivery(&store,id,&metadata)==LXMF_OK);
     assert(metadata.actual_method==LXMF_DELIVERY_METHOD_PROPAGATED&&metadata.progress==LXMF_DELIVERY_PROGRESS_COMPLETE);

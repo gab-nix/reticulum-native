@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "reticulum/destination.h"
 #include "reticulum/lxmf_router.h"
+#include "reticulum/lxmf_propagation.h"
 #include "reticulum/node_registry.h"
 
 #include <assert.h>
@@ -53,6 +54,30 @@ static void write_file(const char *path, const uint8_t *bytes, size_t length) {
     assert(fclose(file) == 0);
 }
 
+static uint32_t test_get32(const uint8_t *input) {
+    return ((uint32_t)input[0] << 24U) | ((uint32_t)input[1] << 16U) |
+           ((uint32_t)input[2] << 8U) | input[3];
+}
+
+static void test_put32(uint8_t *output, uint32_t value) {
+    output[0] = (uint8_t)(value >> 24U);
+    output[1] = (uint8_t)(value >> 16U);
+    output[2] = (uint8_t)(value >> 8U);
+    output[3] = (uint8_t)value;
+}
+
+static uint32_t test_crc32(const uint8_t *input, size_t length) {
+    uint32_t crc = UINT32_MAX;
+    while (length-- != 0U) {
+        crc ^= *input++;
+        for (unsigned bit = 0U; bit < 8U; ++bit)
+            crc = (crc >> 1U) ^
+                  (UINT32_C(0xedb88320) &
+                   (uint32_t)-(int32_t)(crc & 1U));
+    }
+    return ~crc;
+}
+
 static rns_node_record complete_record(uint8_t marker) {
     rns_node_record record = {0};
     memset(record.destination, marker, sizeof record.destination);
@@ -79,6 +104,10 @@ static rns_node_record complete_record(uint8_t marker) {
     record.lxmf_has_stamp_cost = true;
     record.lxmf_stamp_cost = 9U;
     record.lxmf_features = UINT32_C(0x10203040);
+    record.lxmf_pn_app_data_valid = true;
+    record.lxmf_pn_enabled = true;
+    record.lxmf_pn_stamp_cost = 11U;
+    record.lxmf_pn_stamp_flexibility = 3U;
     static const uint8_t extension[] = {0x81, 0xa1, 'x', 0x2a};
     memcpy(record.persistence_extensions, extension, sizeof extension);
     record.persistence_extensions_length = sizeof extension;
@@ -106,6 +135,9 @@ static void assert_complete_record(const rns_node_record *record,
     assert(record->lxmf_app_data_valid && record->lxmf_has_stamp_cost &&
            record->lxmf_stamp_cost == 9U &&
            record->lxmf_features == UINT32_C(0x10203040));
+    assert(record->lxmf_pn_app_data_valid && record->lxmf_pn_enabled &&
+           record->lxmf_pn_stamp_cost == 11U &&
+           record->lxmf_pn_stamp_flexibility == 3U);
     static const uint8_t extension[] = {0x81, 0xa1, 'x', 0x2a};
     assert(record->persistence_extensions_length == sizeof extension &&
            memcmp(record->persistence_extensions, extension,
@@ -139,6 +171,34 @@ static void test_portable_roundtrip_corruption_and_atomic_replace(void) {
     assert(rns_node_registry_load(&loaded, path, 10.0));
     assert(loaded.count == 1U && loaded.lifetime == 10.0);
     assert_complete_record(&loaded.records[0], 0x21U);
+
+    /* The first portable record format did not include propagation-node
+     * costs. It must remain readable, with only those new fields defaulted. */
+    const size_t record_offset = 28U;
+    const size_t v1_prefix_end = record_offset + 197U;
+    assert(length > v1_prefix_end + 2U);
+    uint8_t *portable_v1 = malloc(length - 2U);
+    assert(portable_v1 != NULL);
+    memcpy(portable_v1, valid, v1_prefix_end);
+    memcpy(portable_v1 + v1_prefix_end, valid + v1_prefix_end + 2U,
+           length - v1_prefix_end - 2U);
+    portable_v1[record_offset] = 0U;
+    portable_v1[record_offset + 1U] = 1U;
+    portable_v1[record_offset + 2U] = 0U;
+    portable_v1[record_offset + 3U] &= 0x3fU;
+    test_put32(portable_v1 + 24U, test_get32(valid + 24U) - 2U);
+    test_put32(portable_v1 + 16U, test_get32(valid + 16U) - 2U);
+    test_put32(portable_v1 + 20U,
+               test_crc32(portable_v1 + 24U,
+                          test_get32(portable_v1 + 16U)));
+    write_file(path, portable_v1, length - 2U);
+    assert(rns_node_registry_load(&loaded, path, 10.0));
+    assert(!loaded.records[0].lxmf_pn_app_data_valid &&
+           !loaded.records[0].lxmf_pn_enabled &&
+           loaded.records[0].lxmf_pn_stamp_cost == 0U &&
+           loaded.records[0].lxmf_pn_stamp_flexibility == 0U);
+    free(portable_v1);
+    write_file(path, valid, length);
 
     for (size_t cut = 0U; cut < length; ++cut) {
         write_file(path, valid, cut);
@@ -288,6 +348,29 @@ static void test_registry_and_verified_announces(void) {
     assert(!rns_node_registry_consider_announce(&registry, &result));
     record = rns_node_registry_get(&registry, result.destination_hash);
     assert(record != NULL && record->ratchet[0] == 0xa5U);
+
+    const char *propagation_aspects[] = {"propagation"};
+    assert(rns_destination_hash(&result.announce_identity, "lxmf",
+                                propagation_aspects, 1U,
+                                result.destination_hash));
+    lxmf_pn_announce_t pn = {0};
+    pn.enabled = true;
+    pn.stamp_cost = 11U;
+    pn.stamp_flexibility = 3U;
+    size_t pn_length = 0U;
+    assert(lxmf_pn_announce_encode(&pn, app_data, sizeof app_data,
+                                   &pn_length) == LXMF_OK);
+    result.announce_timebase = 11U;
+    result.announce_app_data = app_data;
+    result.announce_app_data_length = pn_length;
+    result.announce_has_ratchet = 0;
+    result.announce_ratchet = NULL;
+    assert(rns_node_registry_consider_announce(&registry, &result));
+    record = rns_node_registry_get(&registry, result.destination_hash);
+    assert(record != NULL && record->propagation &&
+           record->lxmf_pn_app_data_valid && record->lxmf_pn_enabled &&
+           record->lxmf_pn_stamp_cost == 11U &&
+           record->lxmf_pn_stamp_flexibility == 3U);
 
     rns_node_record filtered[RNS_NODE_REGISTRY_MAX];
     size_t matches = rns_node_registry_sorted_filter(
