@@ -54,11 +54,19 @@ keys, identity files, histories or raw packet capture. New runs generate new
 identities and IDs. Temporary identity/configuration/history data is removed
 on normal completion, failure and child termination.
 
-Validation checkpoint: AppleClang warnings-as-errors and the complete 64-test
-suite pass. The live exchange also passes with the C driver instrumented with
-ASan/UBSan, along with focused `test_lxmf_router_direct` and
-`test_runtime_resource` runs. LeakSanitizer is unsupported by this macOS runtime;
-GCC was unavailable. This is narrowly scoped bidirectional UDP direct-message
-evidence, not full NomadNet parity: TCP, relay hops, loss/reconnect/restart,
+`tests/fixtures/lxmf_direct_tcp_live.provenance.json` records the equivalent
+framed-TCP run from committed native source `1723bdc`. The first TCP attempt
+identified a real MTU negotiation defect: the C responder confirmed Python's
+16 KiB stream MTU despite using 500-byte packet/framing buffers, so Python's
+large Resource parts were correctly sent but could not be admitted. The link
+layer now signs a downgrade to its actual local bound; the final exchange uses
+five parts in both directions and receives both completion proofs.
+
+Validation checkpoint: AppleClang warnings-as-errors and the complete offline
+suite pass. The live exchanges also pass with the C driver instrumented with
+ASan/UBSan, along with focused link/direct-router/runtime-Resource tests.
+LeakSanitizer is unsupported by this macOS runtime; GCC was unavailable. This
+is narrowly scoped bidirectional UDP and continuous framed-TCP direct-message
+evidence, not full NomadNet parity: relay hops, loss/reconnect/restart,
 stamps/tickets, ratchet enforcement, propagation, multi-segment resources,
 physical RNode and end-user TUI workflows are outside this acceptance case.

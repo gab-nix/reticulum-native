@@ -1,0 +1,160 @@
+{
+  "c_events": [
+    {
+      "destination": "aef24ab52c62fd69606351c9e4ec9345",
+      "event": "ready"
+    },
+    {
+      "event": "peer_verified"
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "received",
+      "id": "5aa0c205bc637f6a1a84d31d23a44eaf5af6c20fc430022866fba07992465c4b",
+      "size": 17,
+      "verified": true
+    },
+    {
+      "event": "state",
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "state",
+      "id": "d21541cabc4082ed61d1d351e592c63215361d716c4fa3172910cc968624766c",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "d21541cabc4082ed61d1d351e592c63215361d716c4fa3172910cc968624766c",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "d21541cabc4082ed61d1d351e592c63215361d716c4fa3172910cc968624766c",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "received",
+      "id": "eda79a40cf320d98c30a07afb43609de7ceeb2471d312dc52b70febd89df8da8",
+      "size": 2048,
+      "verified": true
+    },
+    {
+      "event": "done",
+      "metadata_retained": true,
+      "ok": true,
+      "proved": 2,
+      "received": 2,
+      "resource": true,
+      "resource_parts": 5
+    }
+  ],
+  "c_exit": 0,
+  "driver_sha256": "d67026a3b313a4b233e63be035acd6ba5b2af86f4f58f033c30fb6518ab2eb50",
+  "driver_source_sha256": "b606e51ddffea169e5e3a683abdd4208789e19bc6a1026b60a60498d90d861b6",
+  "errors": [],
+  "library_revision": "1723bdca42678873d2b2a306c56abd9c7f7f547c",
+  "lxmf_commit": "795fdaa2b0777c13033787d933d1afc94a2377cb",
+  "lxmf_version": "1.1.0",
+  "ok": true,
+  "python_proved": [
+    {
+      "id": "5aa0c205bc637f6a1a84d31d23a44eaf5af6c20fc430022866fba07992465c4b",
+      "representation": 1,
+      "resource_parts": 0,
+      "size": 17,
+      "state": 8
+    },
+    {
+      "id": "eda79a40cf320d98c30a07afb43609de7ceeb2471d312dc52b70febd89df8da8",
+      "representation": 2,
+      "resource_parts": 5,
+      "size": 2048,
+      "state": 8
+    }
+  ],
+  "python_received": [
+    {
+      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "representation": 0,
+      "size": 17,
+      "valid": true,
+      "verified": true
+    },
+    {
+      "id": "d21541cabc4082ed61d1d351e592c63215361d716c4fa3172910cc968624766c",
+      "representation": 0,
+      "size": 2048,
+      "valid": true,
+      "verified": true
+    }
+  ],
+  "rns_commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+  "rns_version": "1.5.2",
+  "run_utc": "2026-09-03T19:03:36.976870+00:00",
+  "transport": "loopback TCP"
+}
