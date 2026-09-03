@@ -262,11 +262,39 @@ static void test_empty_registry_has_no_selection(void) {
     destroy_state(state);
 }
 
+/* Link selection and page scrolling work on the parsed page, not on raw text. */
+static void test_browser_links_and_scroll(void) {
+    static const char markup[] =
+        ">Index\n"
+        "intro `[First`/page/a.mu] middle `[Second`/page/b.mu]\n"
+        "tail\n";
+    tui_state_t *state = make_state();
+    assert(rns_micron_parse(&state->page, (const uint8_t *)markup,
+                            sizeof markup - 1u) == 1);
+    assert(tui_state_link_count(state) == 2u);
+    const rns_micron_span *first = tui_state_link(state, 0u);
+    assert(first != NULL);
+    assert(strcmp(rns_micron_span_text(&state->page, first), "First") == 0);
+    assert(strcmp(rns_micron_span_target(&state->page, first), "/page/a.mu") == 0);
+    assert(tui_state_link(state, 2u) == NULL);
+
+    /* Page scrolling runs the opposite way to the upward-growing thread list. */
+    state->screen = TUI_SCREEN_BROWSER;
+    tui_state_scroll_by(state, -2);
+    assert(state->page_scroll == 2u);
+    tui_state_scroll_by(state, -50);
+    assert(state->page_scroll == (size_t)state->page.line_count - 1u);
+    tui_state_scroll_by(state, 100);
+    assert(state->page_scroll == 0u);
+    destroy_state(state);
+}
+
 int main(void) {
     test_node_selection_survives_resort();
     test_node_move_clamps();
     test_only_nomad_nodes_serve_pages();
     test_empty_registry_has_no_selection();
+    test_browser_links_and_scroll();
     test_trust_tabs();
     test_thread_and_search();
     test_selection_cycles();

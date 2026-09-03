@@ -374,11 +374,18 @@ bool tui_state_link_ready(const tui_state_t *state) {
 
 /* ------------------------------------------------------------- lifecycle */
 
+/* Written in Micron so the built-in page exercises the same parser as a
+ * remote one: sections, a divider, formatting escapes and links. */
 static const uint8_t tui_home_page[] =
-    "# Nomad Browser\n"
-    "Native Micron navigation is ready.\n"
-    "[Network nodes](/network)\n"
-    "[Guide](/guide)\n";
+    ">Nomad Browser\n"
+    "\n"
+    "`cNative Micron rendering is active.\n"
+    "`a\n"
+    "-\n"
+    "Select a node on the `!network`! screen and press Enter to browse it.\n"
+    "\n"
+    "Links on a remote page are `_underlined`_. `!j`! and `!k`! move between\n"
+    "them, `!Enter`! follows one, and `!Backspace`! goes back.\n";
 
 int tui_state_open(tui_state_t *state, const char *identity_path,
                    const char *store_path, const char *destination_hex,
@@ -463,6 +470,7 @@ static void poll_browser(tui_state_t *state) {
         const rns_micron_page *page = rns_browser_page(state->browser);
         if (page != NULL) state->page = *page;
         state->link_selected = 0u;
+        state->page_scroll = 0u;
         tui_state_set_status(state, "Remote Nomad page loaded");
     } else if (current == RNS_BROWSER_FAILED) {
         tui_state_set_status(state, "Page load failed: %s",
@@ -527,6 +535,21 @@ void tui_state_set_tab(tui_state_t *state, tui_trust_t tab) {
 
 void tui_state_scroll_by(tui_state_t *state, int lines) {
     if (state == NULL) return;
+    if (state->screen == TUI_SCREEN_BROWSER) {
+        /* The thread list grows upward, a page downward, so the same key
+         * moves the viewport the opposite way here. */
+        size_t limit = state->page.line_count != 0u
+                           ? (size_t)state->page.line_count - 1u : 0u;
+        if (lines > 0) {
+            size_t back = (size_t)lines;
+            state->page_scroll = state->page_scroll > back ? state->page_scroll - back
+                                                           : 0u;
+        } else {
+            state->page_scroll += (size_t)(-lines);
+        }
+        if (state->page_scroll > limit) state->page_scroll = limit;
+        return;
+    }
     tui_state_refresh(state);
     if (lines < 0) {
         size_t back = (size_t)(-lines);
@@ -712,21 +735,11 @@ void tui_state_request_path(tui_state_t *state) {
 /* ------------------------------------------------------------------ browser */
 
 size_t tui_state_link_count(const tui_state_t *state) {
-    size_t count = 0u;
-    if (state == NULL) return 0u;
-    for (size_t i = 0u; i < state->page.count; ++i)
-        if (state->page.items[i].kind == RNS_MICRON_LINK) ++count;
-    return count;
+    return state == NULL ? 0u : rns_micron_link_count(&state->page);
 }
 
-const rns_micron_item *tui_state_link(const tui_state_t *state, size_t index) {
-    size_t seen = 0u;
-    if (state == NULL) return NULL;
-    for (size_t i = 0u; i < state->page.count; ++i) {
-        if (state->page.items[i].kind != RNS_MICRON_LINK) continue;
-        if (seen++ == index) return &state->page.items[i];
-    }
-    return NULL;
+const rns_micron_span *tui_state_link(const tui_state_t *state, size_t index) {
+    return state == NULL ? NULL : rns_micron_link(&state->page, index);
 }
 
 bool tui_state_browse(tui_state_t *state, const char *url, bool push_history) {
@@ -772,6 +785,7 @@ bool tui_state_browse(tui_state_t *state, const char *url, bool push_history) {
     }
     (void)snprintf(state->url, sizeof state->url, "%s", requested);
     state->link_selected = 0u;
+    state->page_scroll = 0u;
     state->browser_state = rns_browser_state(state->browser);
     tui_state_set_status(state, "Discovering route to Nomad page");
     return true;
@@ -780,13 +794,26 @@ bool tui_state_browse(tui_state_t *state, const char *url, bool push_history) {
 void tui_state_browse_selected(tui_state_t *state) {
     char url[RNS_MICRON_TEXT_MAX];
     if (state == NULL) return;
-    const rns_micron_item *item = tui_state_link(state, state->link_selected);
+    const rns_micron_span *item = tui_state_link(state, state->link_selected);
     if (item == NULL) return;
-    if (strncmp(item->target, "lxmf:", 5u) == 0) {
+    const char *target = rns_micron_span_target(&state->page, item);
+    /* Pages advertise their author as lxmf@<hash>; following one is a
+     * handoff to the conversation screen, not a page fetch. */
+    if (strncmp(target, "lxmf@", 5u) == 0) {
+        uint8_t peer[LXMF_DESTINATION_LENGTH];
+        if (!tui_hex_parse(target + 5u, peer, sizeof peer)) {
+            tui_state_set_status(state, "Link carries a malformed LXMF address");
+            return;
+        }
+        if (tui_state_open_conversation(state, peer))
+            state->screen = TUI_SCREEN_CONVERSATIONS;
+        return;
+    }
+    if (strncmp(target, "lxmf:", 5u) == 0) {
         tui_state_set_status(state, "LXMF browser links require a destination handoff");
         return;
     }
-    if (!rns_micron_normalize_url(state->url, item->target, url, sizeof url)) {
+    if (!rns_micron_normalize_url(state->url, target, url, sizeof url)) {
         tui_state_set_status(state, "Invalid or oversized link");
         return;
     }

@@ -128,6 +128,7 @@ typedef struct {
     rns_micron_page page;
     rns_micron_history history;
     size_t link_selected;
+    size_t page_scroll;
     char url[RNS_MICRON_TEXT_MAX];
 
     char status[TUI_STATUS_MAX];
@@ -178,7 +179,7 @@ bool tui_state_node_serves_pages(const rns_node_record *node);
 void tui_state_request_path(tui_state_t *state);
 
 size_t tui_state_link_count(const tui_state_t *state);
-const rns_micron_item *tui_state_link(const tui_state_t *state, size_t index);
+const rns_micron_span *tui_state_link(const tui_state_t *state, size_t index);
 bool tui_state_browse(tui_state_t *state, const char *url, bool push_history);
 void tui_state_browse_selected(tui_state_t *state);
 void tui_state_browse_back(tui_state_t *state);

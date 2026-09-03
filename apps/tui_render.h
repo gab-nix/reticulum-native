@@ -6,7 +6,7 @@
 #include <stdio.h>
 
 /* Draws the current screen. The caller refreshes filters first. */
-void tui_render_draw(const tui_state_t *state);
+void tui_render_draw(tui_state_t *state);
 /*
  * Writes the deterministic headless snapshot. It never touches curses, the
  * terminal size, stdin or the store, so it stays usable under TERM=dumb.

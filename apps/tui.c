@@ -228,6 +228,11 @@ static int run_loop(tui_state_t *state) {
     if (initscr() == NULL) return -1;
     (void)cbreak();
     (void)noecho();
+    /* Micron pages carry colour; a terminal without it still renders text. */
+    if (has_colors()) {
+        (void)start_color();
+        (void)use_default_colors();
+    }
     (void)keypad(stdscr, TRUE);
     (void)timeout(TUI_POLL_INTERVAL_MS);
     while (running) {

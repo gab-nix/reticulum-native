@@ -114,11 +114,9 @@ static void response_received(rns_request_receipt_t *receipt,
     browser->state = RNS_BROWSER_COMPLETE;
 }
 
-/*
- * Nomad Network answers with a Resource whenever a page exceeds the link MDU,
- * which is the common case. Resource transfer is not implemented, so report
- * that explicitly instead of letting the request time out with no reason.
- */
+/* The runtime consumes supported response resources before application packet
+ * dispatch. Reaching this callback means the peer used a resource context that
+ * could not be correlated with the active request. */
 static void link_packet(rns_runtime_link_t *link, uint8_t packet_context,
                         const uint8_t *plaintext, size_t plaintext_length,
                         void *context) {

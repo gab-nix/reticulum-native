@@ -3,6 +3,7 @@
 #include "tui_text.h"
 
 #include <curses.h>
+#include <limits.h>
 #include <string.h>
 
 #define TUI_MIN_ROWS 10
@@ -249,15 +250,10 @@ static void draw_conversation_overlay(const tui_state_t *state) {
     centered_box("Peer information", lines, sizeof lines / sizeof lines[0]);
 }
 
-/*
- * RNS_ERROR_UNSUPPORTED from the browser means the node answered with a
- * Resource, which the stack cannot receive yet. "unsupported operation" does
- * not tell anyone that, so name the real reason.
- */
 static const char *tui_browser_error_text(const rns_browser_t *browser) {
     rns_status_t error = rns_browser_error(browser);
     if (error == RNS_ERROR_UNSUPPORTED)
-        return "page is sent as a Reticulum Resource, which is not supported yet";
+        return "the remote response uses an unsupported protocol feature";
     if (error == RNS_ERROR_TIMEOUT)
         return "no response (the node may not serve this page)";
     return rns_status_string(error);
@@ -355,24 +351,199 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
             "j/k select  Enter details  R refresh path  B browser  C conversations  q quit");
 }
 
-static void draw_browser(const tui_state_t *state, const tui_layout_t *layout) {
+/* ------------------------------------------------------------------- micron */
+
+/*
+ * Micron carries 24 bit colour. Terminals do not, so each colour is reduced
+ * to the closest entry the terminal actually has, and the resulting
+ * foreground/background combinations are interned as curses pairs on demand.
+ */
+#define TUI_MAX_PAIRS 60
+
+static struct { short foreground; short background; } tui_pairs[TUI_MAX_PAIRS];
+static size_t tui_pair_count;
+
+static short micron_color(uint32_t rgb) {
+    if (rgb == RNS_MICRON_COLOR_DEFAULT) return -1;
+    unsigned red = (rgb >> 16) & 0xffu;
+    unsigned green = (rgb >> 8) & 0xffu;
+    unsigned blue = rgb & 0xffu;
+    if (COLORS >= 256) {
+        if (red == green && green == blue) {
+            if (red < 8u) return 16;
+            if (red > 248u) return 231;
+            return (short)(232u + (red - 8u) * 24u / 247u);
+        }
+        return (short)(16u + 36u * (red * 5u / 255u) + 6u * (green * 5u / 255u) +
+                       blue * 5u / 255u);
+    }
+    return (short)((red > 127u ? 1 : 0) | (green > 127u ? 2 : 0) |
+                   (blue > 127u ? 4 : 0));
+}
+
+static int micron_pair(uint32_t foreground, uint32_t background) {
+    if (!has_colors() ||
+        (foreground == RNS_MICRON_COLOR_DEFAULT &&
+         background == RNS_MICRON_COLOR_DEFAULT))
+        return 0;
+    short want_fg = micron_color(foreground);
+    short want_bg = micron_color(background);
+    for (size_t i = 0u; i < tui_pair_count; ++i)
+        if (tui_pairs[i].foreground == want_fg && tui_pairs[i].background == want_bg)
+            return (int)i + 1;
+    if (tui_pair_count == TUI_MAX_PAIRS || (int)tui_pair_count + 1 >= COLOR_PAIRS)
+        return 0;
+    if (init_pair((short)(tui_pair_count + 1u), want_fg, want_bg) == ERR) return 0;
+    tui_pairs[tui_pair_count].foreground = want_fg;
+    tui_pairs[tui_pair_count].background = want_bg;
+    return (int)++tui_pair_count;
+}
+
+static chtype micron_attrs(const rns_micron_style *style) {
+    chtype attrs = (chtype)COLOR_PAIR(micron_pair(style->foreground, style->background));
+    if (style->bold) attrs |= A_BOLD;
+    if (style->underline) attrs |= A_UNDERLINE;
+#ifdef A_ITALIC
+    if (style->italic) attrs |= A_ITALIC;
+#else
+    if (style->italic) attrs |= A_DIM;
+#endif
+    return attrs;
+}
+
+/* Writes at most limit columns of sanitised text and returns what it used. */
+static int put_text(int y, int x, int limit, const char *text, chtype attrs) {
+    char safe[2u * RNS_MICRON_TEXT_MAX];
+    size_t bytes = 0u;
+    int columns = 0;
+    if (limit <= 0) return 0;
+    size_t length = tui_text_sanitize((const uint8_t *)text, strlen(text), safe,
+                                      sizeof safe);
+    while (bytes < length && columns < limit) {
+        size_t step = tui_utf8_length((const uint8_t *)safe + bytes, length - bytes);
+        bytes += step != 0u ? step : 1u;
+        ++columns;
+    }
+    if (columns == 0) return 0;
+    (void)attron(attrs);
+    (void)mvaddnstr(y, x, safe, (int)bytes);
+    (void)attroff(attrs);
+    return columns;
+}
+
+/* Renders one span into buffer and returns the text to draw. */
+static const char *span_display(const rns_micron_page *page,
+                                const rns_micron_span *span, char *buffer,
+                                size_t capacity) {
+    const char *text = rns_micron_span_text(page, span);
+    switch (span->kind) {
+        case RNS_MICRON_SPAN_FIELD: {
+            unsigned width = span->width != 0u ? span->width : 1u;
+            if (width > 64u) width = 64u;
+            (void)snprintf(buffer, capacity, "[%-*.*s]", (int)width, (int)width,
+                           span->masked ? "" : text);
+            return buffer;
+        }
+        case RNS_MICRON_SPAN_CHECKBOX:
+            (void)snprintf(buffer, capacity, "[%c] %s", span->prechecked ? 'x' : ' ',
+                           text);
+            return buffer;
+        case RNS_MICRON_SPAN_RADIO:
+            (void)snprintf(buffer, capacity, "(%c) %s", span->prechecked ? '*' : ' ',
+                           text);
+            return buffer;
+        case RNS_MICRON_SPAN_TEXT:
+        case RNS_MICRON_SPAN_LINK:
+        default:
+            return text;
+    }
+}
+
+static int line_columns(const rns_micron_page *page, const rns_micron_line *line) {
+    char buffer[RNS_MICRON_TEXT_MAX + 8u];
+    size_t columns = 0u;
+    for (uint16_t i = 0u; i < line->span_count; ++i) {
+        const rns_micron_span *span = &page->spans[line->first_span + i];
+        const char *text = span_display(page, span, buffer, sizeof buffer);
+        columns += tui_utf8_columns(text, strlen(text));
+    }
+    return columns > INT_MAX ? INT_MAX : (int)columns;
+}
+
+/* Index of the page line carrying the nth link, or line_count when absent. */
+static size_t link_line(const rns_micron_page *page, size_t nth) {
+    size_t seen = 0u;
+    for (size_t i = 0u; i < page->line_count; ++i) {
+        const rns_micron_line *line = &page->lines[i];
+        for (uint16_t j = 0u; j < line->span_count; ++j) {
+            if (page->spans[line->first_span + j].kind != RNS_MICRON_SPAN_LINK)
+                continue;
+            if (seen++ == nth) return i;
+        }
+    }
+    return page->line_count;
+}
+
+static void draw_micron_line(const tui_state_t *state, const rns_micron_line *line,
+                             int y, int left, int width, size_t *link_ordinal) {
+    const rns_micron_page *page = &state->page;
+    char buffer[RNS_MICRON_TEXT_MAX + 8u];
+    int indent = line->depth > 1u
+                     ? (int)((line->depth - 1u) * RNS_MICRON_SECTION_INDENT)
+                     : 0;
+    if (indent > width / 2) indent = width / 2;
+    int available = width - indent;
+    if (available <= 0) return;
+    if (line->divider) {
+        chtype attrs = micron_attrs(&(rns_micron_style){RNS_MICRON_COLOR_DEFAULT,
+                                                        RNS_MICRON_COLOR_DEFAULT,
+                                                        false, false, false});
+        for (int column = 0; column < available; ++column)
+            (void)put_text(y, left + indent + column, 1, line->divider_char, attrs);
+        return;
+    }
+    int used = line_columns(page, line);
+    int x = left + indent;
+    if (line->align == RNS_MICRON_ALIGN_CENTER && used < available)
+        x += (available - used) / 2;
+    else if (line->align == RNS_MICRON_ALIGN_RIGHT && used < available)
+        x += available - used;
+    int remaining = left + width - x;
+    for (uint16_t i = 0u; i < line->span_count && remaining > 0; ++i) {
+        const rns_micron_span *span = &page->spans[line->first_span + i];
+        const char *text = span_display(page, span, buffer, sizeof buffer);
+        chtype attrs = micron_attrs(&span->style);
+        if (line->heading != 0u) attrs |= A_BOLD | A_REVERSE;
+        if (span->kind == RNS_MICRON_SPAN_LINK) {
+            bool selected = *link_ordinal == state->link_selected;
+            attrs |= selected ? (A_REVERSE | A_BOLD) : A_UNDERLINE;
+            ++*link_ordinal;
+        }
+        int drawn = put_text(y, x, remaining, text, attrs);
+        x += drawn;
+        remaining -= drawn;
+    }
+}
+
+static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
     char title[RNS_MICRON_TEXT_MAX + 32u];
     (void)snprintf(title, sizeof title, "Browser  %s", state->url);
     (void)attron(A_BOLD);
     clipped(stdscr, 3, 1, layout->columns - 2, title);
     (void)attroff(A_BOLD);
-    bool loading = false;
+    bool loading = false, failed = false;
     if (state->browser != NULL) {
         rns_browser_state_t browser_state = rns_browser_state(state->browser);
         char notice[TUI_STATUS_MAX];
         loading = browser_state == RNS_BROWSER_PATH_DISCOVERY ||
                   browser_state == RNS_BROWSER_LINK_ESTABLISHMENT ||
                   browser_state == RNS_BROWSER_REQUEST_TRANSMISSION;
+        failed = browser_state == RNS_BROWSER_FAILED;
         if (loading) {
             (void)snprintf(notice, sizeof notice, "Loading remote page... %.0f%%",
                            rns_browser_progress(state->browser) * 100.0);
             clipped(stdscr, 4, 2, layout->columns - 4, notice);
-        } else if (browser_state == RNS_BROWSER_FAILED) {
+        } else if (failed) {
             (void)snprintf(notice, sizeof notice, "Page load failed: %s",
                            tui_browser_error_text(state->browser));
             clipped(stdscr, 4, 2, layout->columns - 4, notice);
@@ -389,32 +560,44 @@ static void draw_browser(const tui_state_t *state, const tui_layout_t *layout) {
                 "Esc cancel  Backspace back  N network  q quit");
         return;
     }
-    int body_top = state->browser != NULL &&
-                   rns_browser_state(state->browser) == RNS_BROWSER_FAILED ? 7 : 5;
-    size_t link = 0u;
-    for (size_t i = 0u; i < state->page.count && (int)i < layout->rows - 8; ++i) {
-        const rns_micron_item *item = &state->page.items[i];
-        char line[2u * RNS_MICRON_TEXT_MAX + 16u];
-        if (item->kind == RNS_MICRON_LINK) {
-            (void)snprintf(line, sizeof line, "[%c] %s -> %s",
-                           link == state->link_selected ? '>' : ' ', item->text,
-                           item->target);
-            ++link;
-        } else if (item->kind == RNS_MICRON_MEDIA) {
-            (void)snprintf(line, sizeof line, "[media] %s", item->target);
-        } else {
-            (void)snprintf(line, sizeof line, "%s", item->text);
-        }
-        bool heading = item->kind == RNS_MICRON_HEADING;
-        if (heading) (void)attron(A_BOLD);
-        clipped(stdscr, body_top + (int)i, 2, layout->columns - 4, line);
-        if (heading) (void)attroff(A_BOLD);
+    int body_top = failed ? 7 : 5;
+    int body_rows = layout->hint_row - body_top - 1;
+    if (body_rows < 1) return;
+
+    const rns_micron_page *page = &state->page;
+    /* Keep the selected link on screen as the selection walks the document. */
+    size_t focus = link_line(page, state->link_selected);
+    if (focus < page->line_count) {
+        if (focus < state->page_scroll) state->page_scroll = focus;
+        else if (focus >= state->page_scroll + (size_t)body_rows)
+            state->page_scroll = focus - (size_t)body_rows + 1u;
     }
+    if (state->page_scroll >= page->line_count)
+        state->page_scroll = page->line_count != 0u ? page->line_count - 1u : 0u;
+
+    size_t link_ordinal = 0u;
+    for (size_t i = 0u; i < page->line_count; ++i) {
+        if (i < state->page_scroll) {
+            const rns_micron_line *skipped = &page->lines[i];
+            for (uint16_t j = 0u; j < skipped->span_count; ++j)
+                if (page->spans[skipped->first_span + j].kind == RNS_MICRON_SPAN_LINK)
+                    ++link_ordinal;
+            continue;
+        }
+        int y = body_top + (int)(i - state->page_scroll);
+        if (y >= layout->hint_row - 1) break;
+        draw_micron_line(state, &page->lines[i], y, 2, layout->columns - 4,
+                         &link_ordinal);
+    }
+    if (page->truncated || page->unsupported)
+        clipped(stdscr, layout->hint_row - 1, 2, layout->columns - 4,
+                page->truncated ? "Page was truncated to fit the parser bounds"
+                                : "Tables and partials are shown unformatted");
     clipped(stdscr, layout->hint_row, 0, layout->columns,
-            "j/k select  Enter open  Backspace back  R reload  Esc cancel  N network");
+            "j/k link  Enter open  PgUp/PgDn scroll  Backspace back  R reload  N network");
 }
 
-void tui_render_draw(const tui_state_t *state) {
+void tui_render_draw(tui_state_t *state) {
     int rows, columns;
     if (state == NULL) return;
     getmaxyx(stdscr, rows, columns);
