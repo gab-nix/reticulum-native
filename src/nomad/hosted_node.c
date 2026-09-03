@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE
 #include "reticulum/hosted_node.h"
+#include "reticulum/crypto.h"
 #include "reticulum/destination.h"
 
 #include <errno.h>
@@ -67,20 +68,11 @@ static rns_status_t open_relative(int root, const char *relative, bool page,
             close(parent);
             return RNS_ERROR_UNSUPPORTED;
         }
-        char sidecar[RNS_REQUEST_PATH_MAX + 9U];
-        memcpy(sidecar, component, component_length);
-        memcpy(sidecar + component_length, ".allowed", 9U);
-        struct stat sidecar_info;
-        if (fstatat(parent, sidecar, &sidecar_info, AT_SYMLINK_NOFOLLOW) == 0 ||
-            errno != ENOENT) {
-            close(parent);
-            return RNS_ERROR_UNSUPPORTED;
-        }
     }
     int fd = openat(parent, component,
                     O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
     close(parent);
-    if (fd < 0) return RNS_ERROR_IO;
+    if (fd < 0) return errno == ENOENT ? RNS_ERROR_NOT_FOUND : RNS_ERROR_IO;
     struct stat info;
     if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
         close(fd);
@@ -91,6 +83,109 @@ static rns_status_t open_relative(int root, const char *relative, bool page,
         return RNS_ERROR_UNSUPPORTED;
     }
     *result = fd;
+    return RNS_OK;
+}
+
+static int hex_value(uint8_t byte) {
+    if (byte >= '0' && byte <= '9') return byte - '0';
+    if (byte >= 'a' && byte <= 'f') return byte - 'a' + 10;
+    if (byte >= 'A' && byte <= 'F') return byte - 'A' + 10;
+    return -1;
+}
+
+/* Returns OK with present=false for no sidecar. A malformed, executable,
+ * symlinked, oversized, or non-regular policy fails closed. */
+static rns_status_t read_page_policy(rns_hosted_node_t *node,
+                                     const char *relative, bool *present,
+                                     uint8_t identities[][16], size_t *count) {
+    size_t relative_length = strlen(relative);
+    *present = false;
+    *count = 0U;
+    if (relative_length > RNS_REQUEST_PATH_MAX - 8U) return RNS_ERROR_OVERFLOW;
+    char sidecar[RNS_REQUEST_PATH_MAX + 1U];
+    memcpy(sidecar, relative, relative_length);
+    memcpy(sidecar + relative_length, ".allowed", 9U);
+    int fd = -1;
+    rns_status_t status = open_relative(node->pages_fd, sidecar, false, &fd);
+    if (status == RNS_ERROR_NOT_FOUND) return RNS_OK;
+    if (status != RNS_OK) return status;
+    *present = true;
+    struct stat info;
+    uint8_t input[RNS_RUNTIME_MAX_REQUEST_ALLOWLIST * 34U];
+    if (fstat(fd, &info) != 0 || info.st_size < 0 ||
+        (info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0 ||
+        (uintmax_t)info.st_size > sizeof input) status = RNS_ERROR_PROTOCOL;
+    size_t used = 0U;
+    while (status == RNS_OK && used < sizeof input) {
+        ssize_t amount = read(fd, input + used, sizeof input - used);
+        if (amount < 0 && errno == EINTR) continue;
+        if (amount < 0) status = RNS_ERROR_IO;
+        else if (amount == 0) break;
+        else used += (size_t)amount;
+    }
+    if (status == RNS_OK && used == sizeof input) {
+        uint8_t extra;
+        ssize_t amount;
+        do amount = read(fd, &extra, 1U); while (amount < 0 && errno == EINTR);
+        if (amount != 0) status = amount > 0 ? RNS_ERROR_PROTOCOL : RNS_ERROR_IO;
+    }
+    close(fd);
+    if (status != RNS_OK) return status;
+    size_t offset = 0U;
+    while (offset < used) {
+        size_t end = offset;
+        while (end < used && input[end] != '\n') ++end;
+        size_t length = end - offset;
+        if (length > 0U && input[offset + length - 1U] == '\r') --length;
+        if (length != 32U || *count == RNS_RUNTIME_MAX_REQUEST_ALLOWLIST)
+            return RNS_ERROR_PROTOCOL;
+        for (size_t i = 0U; i < 16U; ++i) {
+            int high = hex_value(input[offset + i * 2U]);
+            int low = hex_value(input[offset + i * 2U + 1U]);
+            if (high < 0 || low < 0) return RNS_ERROR_PROTOCOL;
+            identities[*count][i] = (uint8_t)((unsigned)high << 4U | (unsigned)low);
+        }
+        ++*count;
+        offset = end < used ? end + 1U : end;
+    }
+    return RNS_OK;
+}
+
+static rns_status_t page_policy_authorized(rns_hosted_node_t *node,
+                                            const char *path,
+                                            const rns_identity *remote,
+                                            bool *authorized) {
+    uint8_t identities[RNS_RUNTIME_MAX_REQUEST_ALLOWLIST][16];
+    size_t count = 0U;
+    bool present = false;
+    rns_status_t status = read_page_policy(node, path + 6U, &present,
+                                           identities, &count);
+    *authorized = !present;
+    if (status != RNS_OK || !present || remote == NULL) return status;
+    uint8_t public_key[RNS_IDENTITY_PUBLIC_SIZE], digest[32];
+    rns_identity_export_public(remote, public_key);
+    if (!rns_sha256(public_key, sizeof public_key, digest))
+        return RNS_ERROR_CRYPTO;
+    for (size_t i = 0U; i < count; ++i)
+        if (memcmp(identities[i], digest, 16U) == 0) {
+            *authorized = true;
+            break;
+        }
+    return RNS_OK;
+}
+
+static rns_status_t encode_binary(const uint8_t *content, size_t content_length,
+                                  uint8_t *response, size_t capacity,
+                                  size_t *length) {
+    size_t prefix = content_length <= UINT8_MAX ? 2U :
+                    content_length <= UINT16_MAX ? 3U : 5U;
+    if (capacity < prefix || content_length > capacity - prefix)
+        return RNS_ERROR_OVERFLOW;
+    memmove(response + prefix, content, content_length);
+    response[0] = prefix == 2U ? 0xc4U : prefix == 3U ? 0xc5U : 0xc6U;
+    for (size_t i = 1U; i < prefix; ++i)
+        response[i] = (uint8_t)(content_length >> (8U * (prefix - i - 1U)));
+    *length = content_length + prefix;
     return RNS_OK;
 }
 
@@ -136,21 +231,25 @@ static rns_status_t serve_page(
     rns_runtime_request_handler_t *handler, rns_runtime_link_t *link,
     const rns_request_view_t *request, const rns_identity *remote_identity,
     uint8_t *response, size_t capacity, size_t *length, void *context) {
-    (void)link; (void)request; (void)remote_identity;
+    (void)link; (void)request;
     if (capacity < 5U) return RNS_ERROR_OVERFLOW;
+    const char *path = rns_runtime_request_handler_path(handler);
+    bool authorized = false;
+    rns_status_t status = page_policy_authorized(context, path, remote_identity,
+                                                 &authorized);
+    if (status != RNS_OK) return status;
+    static const uint8_t denied[] =
+        ">Request Not Allowed\n\nYou are not authorised to carry out the request.\n";
+    if (!authorized)
+        return encode_binary(denied, sizeof denied - 1U, response, capacity,
+                             length);
     size_t content_length = 0U;
-    rns_status_t status = rns_hosted_node_read(
-        context, rns_runtime_request_handler_path(handler), response + 5U,
+    status = rns_hosted_node_read(
+        context, path, response + 5U,
         capacity - 5U, &content_length);
     if (status != RNS_OK) return status;
-    size_t prefix = content_length <= UINT8_MAX ? 2U :
-                    content_length <= UINT16_MAX ? 3U : 5U;
-    memmove(response + prefix, response + 5U, content_length);
-    response[0] = prefix == 2U ? 0xc4U : prefix == 3U ? 0xc5U : 0xc6U;
-    for (size_t i = 1U; i < prefix; ++i)
-        response[i] = (uint8_t)(content_length >> (8U * (prefix - i - 1U)));
-    *length = content_length + prefix;
-    return RNS_OK;
+    return encode_binary(response + 5U, content_length, response, capacity,
+                         length);
 }
 
 static void accepted(rns_runtime_destination_t *destination,
@@ -220,6 +319,11 @@ rns_status_t rns_hosted_node_publish_page(rns_hosted_node_t *node,
     if (fstat(fd, &info) != 0 || info.st_size < 0) status = RNS_ERROR_IO;
     else if ((uintmax_t)info.st_size > node->max_content) status = RNS_ERROR_OVERFLOW;
     close(fd);
+    if (status != RNS_OK) return status;
+    bool present = false;
+    uint8_t identities[RNS_RUNTIME_MAX_REQUEST_ALLOWLIST][16];
+    size_t count = 0U;
+    status = read_page_policy(node, relative_path, &present, identities, &count);
     if (status != RNS_OK) return status;
     char path[RNS_REQUEST_PATH_MAX + 1U] = "/page/";
     memcpy(path + 6U, relative_path, strlen(relative_path) + 1U);

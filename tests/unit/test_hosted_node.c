@@ -64,7 +64,8 @@ int main(void) {
     assert(chmod(page, 0600) == 0);
     file = fopen(sidecar, "wb");
     assert(file != NULL && fclose(file) == 0);
-    assert(rns_hosted_node_read(node, "/page/index.mu", output, sizeof output, &length) == RNS_ERROR_UNSUPPORTED);
+    assert(rns_hosted_node_read(node, "/page/index.mu", output, sizeof output, &length) == RNS_OK);
+    assert(length == 5U);
     assert(unlink(sidecar) == 0);
     file = fopen(page, "ab");
     assert(file != NULL && fwrite("!", 1U, 1U, file) == 1U && fclose(file) == 0);

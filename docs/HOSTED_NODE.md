@@ -29,8 +29,11 @@ storage bound does not add multi-segment transfer support.
 - Hidden names, `..`, repeated separators, percent escapes, control characters,
   backslashes, anchors and query strings are rejected. Published paths currently
   use a conservative printable ASCII namespace.
-- No executable page is executed or served as source. A page with an `.allowed`
-  sidecar is rejected rather than bypassing an unsupported per-page ACL.
+- No executable page is executed or served as source. A regular
+  `<page>.allowed` sidecar restricts that page to newline-delimited 16-byte
+  identity hashes encoded as exactly 32 hexadecimal characters. The remote must
+  identify on the link. Empty policies deny everyone; malformed, oversized,
+  symlinked and executable policies fail closed. Policies are reread per request.
 - Global allow-all, deny-all, identified-only and explicit identity allowlists
   are applied by the authenticated runtime request handler before file access.
 - Dedicated roots and their trusted ancestors must be operator-controlled.
@@ -38,7 +41,7 @@ storage bound does not add multi-segment transfer support.
 - The optional file root supports bounded **local** reads only. NomadNet 1.2.0
   file downloads use file-backed response Resources with filename metadata,
   which the runtime does not yet expose. No remote `/file/` handler is registered.
-- Automatic scans, default index generation, executable pages, sidecar ACLs,
+- Automatic scans, default index generation, executable pages,
   UTF-8 path names, refresh jobs, request statistics, daemon/TUI controls and
   streaming downloads remain unimplemented.
 
@@ -47,6 +50,8 @@ storage bound does not add multi-segment transfer support.
 The implementation was behaviorally inspected against pinned
 [NomadNet Node.py](https://github.com/markqvist/NomadNet/blob/475c0ee2a0388cf8470e7f1e90d5decb67b579ea/nomadnet/Node.py).
 `test_hosted_node` covers bounds and filesystem rejection. The loopback
-`test_hosted_node_link` covers identification policy, fresh small-page packet
+`test_hosted_node_link` covers global identification/allowlists, live sidecar
+allow/deny/malformed changes, the upstream denial page, fresh small-page packet
 responses, 2 KiB Resource responses and service lifetime. These are C-to-C tests,
-not stock NomadNet interoperability evidence.
+not stock NomadNet interoperability evidence. Executable `.allowed` generators
+from upstream remain unsupported rather than being run implicitly.

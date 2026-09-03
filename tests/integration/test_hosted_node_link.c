@@ -37,7 +37,11 @@ static void poll_pair(rns_runtime_t *client, rns_runtime_t *server,
     assert(rns_runtime_poll(client, 32U, &processed) == RNS_OK);
     rns_hosted_node_poll(node);
 }
-typedef struct result { size_t count; size_t length; } result_t;
+typedef struct result {
+    size_t count;
+    size_t length;
+    uint8_t bytes[4096];
+} result_t;
 static void response(rns_request_receipt_t *receipt, rns_request_state_t state,
                       rns_status_t status, const uint8_t *bytes, size_t length,
                       void *context) {
@@ -45,14 +49,21 @@ static void response(rns_request_receipt_t *receipt, rns_request_state_t state,
     result_t *result = context;
     if (state == RNS_REQUEST_CANCELLED) return;
     assert(state == RNS_REQUEST_COMPLETE && status == RNS_OK);
-    for (size_t i = 0U; i < length; ++i) assert(bytes[i] == 'A');
+    assert(length <= sizeof result->bytes);
+    memcpy(result->bytes, bytes, length);
     result->count++;
     result->length = length;
 }
+static void write_hash(FILE *file, const uint8_t hash[16]) {
+    for (size_t i = 0U; i < 16U; ++i)
+        assert(fprintf(file, "%02x", hash[i]) == 2);
+    assert(fputc('\n', file) == '\n');
+}
 static void run_access(rns_request_access_t access) {
-    char root[] = "/tmp/rns-hosted-link-XXXXXX", path[512];
+    char root[] = "/tmp/rns-hosted-link-XXXXXX", path[512], sidecar[520];
     assert(mkdtemp(root) != NULL);
     (void)snprintf(path, sizeof path, "%s/index.mu", root);
+    (void)snprintf(sidecar, sizeof sidecar, "%s/index.mu.allowed", root);
     FILE *file = fopen(path, "wb");
     assert(file != NULL);
     for (size_t i = 0U; i < 2048U; ++i) assert(fputc('A', file) == 'A');
@@ -103,13 +114,50 @@ static void run_access(rns_request_access_t access) {
                                     &request_options, &receipt) == RNS_OK);
     for (size_t i = 0U; i < 4000U && result.count == 0U; ++i) poll_pair(client, server, node);
     assert(result.count == 1U && result.length == 2048U);
+    for (size_t i = 0U; i < result.length; ++i) assert(result.bytes[i] == 'A');
     rns_request_receipt_destroy(receipt);
+    file = fopen(sidecar, "wb");
+    assert(file != NULL);
+    write_hash(file, visitor_digest);
+    assert(fclose(file) == 0);
+    assert(rns_runtime_link_request(link, "/page/index.mu", NULL, 0U,
+                                    &request_options, &receipt) == RNS_OK);
+    for (size_t i = 0U; i < 4000U && result.count == 1U; ++i)
+        poll_pair(client, server, node);
+    assert(result.count == 2U && result.length == 2048U);
+    rns_request_receipt_destroy(receipt);
+    uint8_t other_hash[16];
+    memset(other_hash, 0x77, sizeof other_hash);
+    file = fopen(sidecar, "wb");
+    assert(file != NULL);
+    write_hash(file, other_hash);
+    assert(fclose(file) == 0);
+    assert(rns_runtime_link_request(link, "/page/index.mu", NULL, 0U,
+                                    &request_options, &receipt) == RNS_OK);
+    for (size_t i = 0U; i < 1000U && result.count == 2U; ++i)
+        poll_pair(client, server, node);
+    static const uint8_t denied[] =
+        ">Request Not Allowed\n\nYou are not authorised to carry out the request.\n";
+    assert(result.count == 3U && result.length == sizeof denied - 1U);
+    assert(memcmp(result.bytes, denied, sizeof denied - 1U) == 0);
+    rns_request_receipt_destroy(receipt);
+    file = fopen(sidecar, "wb");
+    assert(file != NULL && fwrite("not a hash\n", 1U, 11U, file) == 11U &&
+           fclose(file) == 0);
+    assert(rns_runtime_link_request(link, "/page/index.mu", NULL, 0U,
+                                    &request_options, &receipt) == RNS_OK);
+    for (size_t i = 0U; i < 16U; ++i) poll_pair(client, server, node);
+    assert(result.count == 3U);
+    rns_request_receipt_cancel(receipt);
+    rns_request_receipt_destroy(receipt);
+    assert(unlink(sidecar) == 0);
     file = fopen(path, "wb");
     assert(file != NULL && fwrite("AAA", 1U, 3U, file) == 3U && fclose(file) == 0);
     assert(rns_runtime_link_request(link, "/page/index.mu", NULL, 0U,
                                     &request_options, &receipt) == RNS_OK);
-    for (size_t i = 0U; i < 1000U && result.count == 1U; ++i) poll_pair(client, server, node);
-    assert(result.count == 2U && result.length == 3U);
+    for (size_t i = 0U; i < 1000U && result.count == 3U; ++i) poll_pair(client, server, node);
+    assert(result.count == 4U && result.length == 3U);
+    assert(memcmp(result.bytes, "AAA", 3U) == 0);
     rns_request_receipt_destroy(receipt);
     /* Destroying the service closes owned links before its context disappears. */
     rns_hosted_node_destroy(node);

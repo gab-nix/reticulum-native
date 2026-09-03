@@ -30,9 +30,10 @@ void rns_hosted_node_destroy(rns_hosted_node_t *node);
 const uint8_t *rns_hosted_node_destination(const rns_hosted_node_t *node);
 
 /* Publish one relative page path, for example "index.mu" or "guide/start.mu".
- * Publishes /page/<relative_path>. Hidden files, traversal, symlinks, executable
- * pages and pages with .allowed sidecars fail closed. Up to the runtime's
- * request-handler limit may be published. Global access policy applies. */
+ * Publishes /page/<relative_path>. Hidden files, traversal, symlinks and
+ * executable pages fail closed. A regular `<page>.allowed` sidecar restricts
+ * that page to its newline-delimited identity hashes, in addition to the
+ * global access policy. Up to the runtime request-handler limit is supported. */
 rns_status_t rns_hosted_node_publish_page(rns_hosted_node_t *node,
                                          const char *relative_path);
 size_t rns_hosted_node_page_count(const rns_hosted_node_t *node);
