@@ -40,6 +40,7 @@ struct rns_runtime_link {
     rns_request_receipt_t *resource_receipt;
     uint8_t callback_packet_hash[RNS_PROOF_HASH_SIZE];
     bool callback_packet_provable;
+    bool remote_identified;
 };
 
 struct rns_runtime_destination {
@@ -560,6 +561,27 @@ static bool link_ingress(rns_runtime_t *runtime, size_t interface_index,
             link->protocol.state = RNS_LINK_CLOSED;
             fail_pending_requests(link, RNS_ERROR_INVALID_STATE);
             link_notify(link, RNS_LINK_CLOSED, RNS_OK);
+        } else if (packet.context == RNS_LINK_CONTEXT_IDENTIFY) {
+            if (link->protocol.role != RNS_LINK_RESPONDER ||
+                plaintext_length != RNS_IDENTITY_PUBLIC_SIZE + 64U)
+                return true;
+            rns_identity identified;
+            uint8_t signed_data[16U + RNS_IDENTITY_PUBLIC_SIZE];
+            if (!rns_identity_from_public(&identified, payload)) return true;
+            memcpy(signed_data, link->protocol.link_id, 16U);
+            memcpy(signed_data + 16U, payload, RNS_IDENTITY_PUBLIC_SIZE);
+            if (!rns_identity_verify(&identified, signed_data,
+                                     sizeof signed_data,
+                                     payload + RNS_IDENTITY_PUBLIC_SIZE))
+                return true;
+            if (!link->remote_identified) {
+                link->protocol.remote_identity = identified;
+                link->remote_identified = true;
+                if (link->options.identified_callback != NULL)
+                    link->options.identified_callback(
+                        link, &link->protocol.remote_identity,
+                        link->options.callback_context);
+            }
         } else if (packet.context == RNS_LINK_CONTEXT_RESPONSE) {
             (void)handle_response(link, payload, plaintext_length);
         } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE_ADV &&
@@ -1241,6 +1263,7 @@ rns_status_t rns_runtime_link_open(
     link->runtime = runtime;
     link->interface_index = interface_index;
     if (options != NULL) link->options = *options;
+    link->remote_identified = true;
     double timeout = link->options.timeout_seconds > 0.0
                          ? link->options.timeout_seconds
                          : 10.0 + 6.0 * (double)(path->hops ? path->hops : 1U);
@@ -1325,6 +1348,7 @@ static bool link_receipt_context(uint8_t context) {
     return context != RNS_LINK_CONTEXT_KEEPALIVE &&
            context != RNS_LINK_CONTEXT_CLOSE &&
            context != RNS_LINK_CONTEXT_RTT &&
+           context != RNS_LINK_CONTEXT_IDENTIFY &&
            context != RNS_LINK_CONTEXT_PROOF &&
            context != RNS_LINK_CONTEXT_RESOURCE &&
            context != RNS_LINK_CONTEXT_RESOURCE_ADV &&
@@ -1394,6 +1418,33 @@ rns_status_t rns_runtime_link_prove_current_packet(rns_runtime_link_t *link) {
                           proof + RNS_PROOF_HASH_SIZE))
         return RNS_ERROR_CRYPTO;
     return link_send_proof(link, 0U, proof, sizeof proof);
+}
+
+rns_status_t rns_runtime_link_identify(rns_runtime_link_t *link,
+                                       const rns_identity *identity) {
+    uint8_t public_key[RNS_IDENTITY_PUBLIC_SIZE];
+    uint8_t signed_data[16U + RNS_IDENTITY_PUBLIC_SIZE];
+    uint8_t proof[RNS_IDENTITY_PUBLIC_SIZE + 64U];
+    if (link == NULL || identity == NULL || !identity->has_private ||
+        link->protocol.role != RNS_LINK_INITIATOR ||
+        link->protocol.state != RNS_LINK_ACTIVE)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    rns_identity_export_public(identity, public_key);
+    memcpy(signed_data, link->protocol.link_id, 16U);
+    memcpy(signed_data + 16U, public_key, sizeof public_key);
+    memcpy(proof, public_key, sizeof public_key);
+    if (!rns_identity_sign(identity, signed_data, sizeof signed_data,
+                           proof + sizeof public_key))
+        return RNS_ERROR_CRYPTO;
+    return link_send_plain2(link, RNS_LINK_CONTEXT_IDENTIFY, proof,
+                            sizeof proof);
+}
+
+const rns_identity *rns_runtime_link_remote_identity(
+    const rns_runtime_link_t *link) {
+    return link != NULL && link->remote_identified
+               ? &link->protocol.remote_identity
+               : NULL;
 }
 
 rns_status_t rns_runtime_link_request(

@@ -18,6 +18,8 @@ typedef struct link_observation {
     size_t payload_length;
     bool prove_packets;
     bool receipt_delivered;
+    size_t identified_count;
+    uint8_t identified_public[RNS_IDENTITY_PUBLIC_SIZE];
 } link_observation_t;
 
 static uint16_t reserve_udp_port(void) {
@@ -88,6 +90,15 @@ static void inbound_link_accepted(rns_runtime_destination_t *destination,
     observation->accepted_count++;
 }
 
+static void link_identified(rns_runtime_link_t *link,
+                            const rns_identity *identity, void *context) {
+    link_observation_t *observation = context;
+    assert(link == observation->accepted);
+    assert(identity == rns_runtime_link_remote_identity(link));
+    rns_identity_export_public(identity, observation->identified_public);
+    observation->identified_count++;
+}
+
 int main(void) {
     uint16_t initiator_port = reserve_udp_port();
     uint16_t responder_port = reserve_udp_port();
@@ -118,6 +129,7 @@ int main(void) {
         .prove_data_packets = true,
         .state_callback = link_state_changed,
         .packet_callback = link_packet_received,
+        .identified_callback = link_identified,
         .callback_context = &responder};
     rns_runtime_destination_t *registration = NULL;
     assert(rns_runtime_register_link_destination(
@@ -177,6 +189,20 @@ int main(void) {
     assert(rns_runtime_link_state(responder.accepted) == RNS_LINK_ACTIVE);
     assert(memcmp(rns_runtime_link_id(outbound),
                   rns_runtime_link_id(responder.accepted), 16U) == 0);
+    assert(rns_runtime_link_remote_identity(responder.accepted) == NULL);
+    assert(rns_runtime_link_remote_identity(outbound) != NULL);
+
+    rns_identity initiator_identity;
+    uint8_t initiator_public[RNS_IDENTITY_PUBLIC_SIZE];
+    assert(rns_identity_generate(&initiator_identity));
+    rns_identity_export_public(&initiator_identity, initiator_public);
+    assert(rns_runtime_link_identify(outbound, &initiator_identity) == RNS_OK);
+    for (size_t attempt = 0U; attempt < 1000U &&
+         responder.identified_count == 0U; ++attempt)
+        assert(rns_runtime_poll(responder_runtime, 8U, &processed) == RNS_OK);
+    assert(responder.identified_count == 1U);
+    assert(memcmp(responder.identified_public, initiator_public,
+                  sizeof initiator_public) == 0);
 
     static const uint8_t message[] = "authenticated link packet";
     assert(rns_runtime_link_send(outbound, 0U, message,

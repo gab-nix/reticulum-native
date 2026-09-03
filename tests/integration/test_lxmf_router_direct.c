@@ -101,7 +101,7 @@ int main(void) {
     resolver_t bob_resolver = {.identity = &alice};
     memcpy(alice_resolver.destination, bob_destination, 16U);
     memcpy(bob_resolver.destination, alice_destination, 16U);
-    inbox_t bob_inbox = {0};
+    inbox_t alice_inbox = {0}, bob_inbox = {0};
     lxmf_router_t alice_router, bob_router;
     lxmf_router_config_t alice_options = {
         .identity = &alice,
@@ -109,6 +109,8 @@ int main(void) {
         .runtime = alice_runtime,
         .resolve_identity = resolve,
         .resolve_context = &alice_resolver,
+        .message_callback = delivered,
+        .message_context = &alice_inbox,
         .preferred_delivery_method = LXMF_DELIVERY_METHOD_DIRECT,
         .accept_inbound_links = true};
     lxmf_router_config_t bob_options = {
@@ -187,6 +189,51 @@ int main(void) {
         assert(rns_hal_monotonic_ms(&now) == RNS_OK);
     } while (!confirmed && now - start < 3000U);
     assert(confirmed && bob_inbox.received);
+
+    /* Delivery confirmation triggers private identification. The responder
+     * indexes that same link as a reply backchannel. */
+    bool backchannel = false;
+    for (size_t attempt = 0U; attempt < 1000U && !backchannel; ++attempt) {
+        size_t processed = 0U;
+        assert(rns_runtime_poll(bob_runtime, 8U, &processed) == RNS_OK);
+        for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i)
+            if (bob_router.links[i].used && !bob_router.links[i].inbound &&
+                memcmp(bob_router.links[i].destination, alice_destination,
+                       LXMF_DESTINATION_LENGTH) == 0)
+                backchannel = true;
+    }
+    assert(backchannel);
+
+    static const uint8_t reply_body[] = "reply over backchannel";
+    lxmf_store_message_t reply = {0};
+    reply.message_id[0] = 0x51U;
+    memcpy(reply.destination, alice_destination, 16U);
+    memcpy(reply.source, bob_destination, 16U);
+    reply.timestamp = 93.0;
+    reply.status = LXMF_DELIVERY_QUEUED;
+    reply.signature_state = LXMF_SIGNATURE_VERIFIED;
+    reply.content = (lxmf_slice_t){reply_body, sizeof reply_body - 1U};
+    inserted = false;
+    assert(lxmf_store_put(&bob_store, &reply, &inserted) == LXMF_OK &&
+           inserted);
+    assert(lxmf_router_send_message(&bob_router, reply.message_id) == LXMF_OK);
+    assert(rns_hal_monotonic_ms(&start) == RNS_OK);
+    confirmed = false;
+    do {
+        size_t processed = 0U;
+        assert(rns_runtime_poll(alice_runtime, 8U, &processed) == RNS_OK);
+        assert(rns_runtime_poll(bob_runtime, 8U, &processed) == RNS_OK);
+        uint8_t content[64];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&bob_store, reply.message_id, &stored, content,
+                               sizeof content) == LXMF_OK);
+        confirmed = stored.status == LXMF_DELIVERY_DELIVERED;
+        assert(rns_hal_monotonic_ms(&now) == RNS_OK);
+    } while (!confirmed && now - start < 1000U);
+    assert(confirmed && alice_inbox.received);
+    assert(alice_inbox.content_length == sizeof reply_body - 1U);
+    assert(memcmp(alice_inbox.content, reply_body,
+                  sizeof reply_body - 1U) == 0);
     assert(bob_inbox.content_length == sizeof body - 1U);
     assert(memcmp(bob_inbox.content, body, sizeof body - 1U) == 0);
     {

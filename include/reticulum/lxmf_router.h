@@ -144,6 +144,7 @@ typedef struct {
     bool terminal;
     lxmf_router_t *router;
     rns_packet_receipt_t *receipt;
+    rns_runtime_link_t *link;
     uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
     lxmf_delivery_method_t method;
 } lxmf_router_receipt_slot_t;

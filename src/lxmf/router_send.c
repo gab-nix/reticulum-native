@@ -44,6 +44,9 @@ static void direct_link_packet_received(rns_runtime_link_t *link,
                                         void *context);
 static void direct_link_accepted(rns_runtime_destination_t *destination,
                                  rns_runtime_link_t *link, void *context);
+static void direct_link_identified(rns_runtime_link_t *link,
+                                   const rns_identity *identity,
+                                   void *context);
 
 const char *lxmf_delivery_method_string(lxmf_delivery_method_t method) {
     switch (method) {
@@ -85,6 +88,7 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
             .prove_data_packets = true,
             .state_callback = direct_link_state_changed,
             .packet_callback = direct_link_packet_received,
+            .identified_callback = direct_link_identified,
             .callback_context = router};
         if (!rns_destination_hash(config->identity, "lxmf", aspects, 1U,
                                   hash) ||
@@ -145,6 +149,9 @@ static void receipt_changed(rns_packet_receipt_t *receipt,
     if (state == RNS_PACKET_RECEIPT_DELIVERED) {
         delivery = LXMF_DELIVERY_DELIVERED;
         result = LXMF_OK;
+        if (slot->method == LXMF_DELIVERY_METHOD_DIRECT && slot->link != NULL)
+            (void)rns_runtime_link_identify(slot->link,
+                                            router->config.identity);
     } else if (state == RNS_PACKET_RECEIPT_CANCELLED) {
         delivery = LXMF_DELIVERY_FAILED;
         result = LXMF_ERR_CANCELLED;
@@ -247,6 +254,24 @@ static void direct_link_accepted(rns_runtime_destination_t *destination,
     slot->link = link;
 }
 
+static void direct_link_identified(rns_runtime_link_t *link,
+                                   const rns_identity *identity,
+                                   void *context) {
+    lxmf_router_t *router = context;
+    static const char *const aspects[] = {"delivery"};
+    uint8_t destination[LXMF_DESTINATION_LENGTH];
+    if (router == NULL || link == NULL || identity == NULL ||
+        !rns_destination_hash(identity, "lxmf", aspects, 1U, destination))
+        return;
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i) {
+        lxmf_router_link_slot_t *slot = &router->links[i];
+        if (!slot->used || slot->link != link) continue;
+        memcpy(slot->destination, destination, sizeof slot->destination);
+        slot->inbound = false;
+        return;
+    }
+}
+
 static lxmf_status_t ensure_direct_link(
     lxmf_router_t *router,
     const uint8_t destination_hash[LXMF_DESTINATION_LENGTH],
@@ -276,6 +301,7 @@ static lxmf_status_t ensure_direct_link(
         .prove_data_packets = true,
         .state_callback = direct_link_state_changed,
         .packet_callback = direct_link_packet_received,
+        .identified_callback = direct_link_identified,
         .callback_context = router};
     rns_status_t status = rns_runtime_link_open(
         router->config.runtime, destination_hash, destination, &options,
@@ -346,6 +372,7 @@ static lxmf_status_t send_direct(
     }
     memcpy(receipt_slot->message_id, id, LXMF_MESSAGE_ID_LENGTH);
     receipt_slot->method = LXMF_DELIVERY_METHOD_DIRECT;
+    receipt_slot->link = link;
     rns_packet_receipt_options_t options = {
         .timeout_seconds = 30.0,
         .callback = receipt_changed,

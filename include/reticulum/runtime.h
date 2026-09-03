@@ -36,6 +36,7 @@ typedef struct rns_packet_receipt rns_packet_receipt_t;
 #define RNS_LINK_CONTEXT_REQUEST 0x09u
 #define RNS_LINK_CONTEXT_RESPONSE 0x0au
 #define RNS_LINK_CONTEXT_KEEPALIVE 0xfau
+#define RNS_LINK_CONTEXT_IDENTIFY 0xfbu
 #define RNS_LINK_CONTEXT_CLOSE 0xfcu
 #define RNS_LINK_CONTEXT_RTT 0xfeu
 #define RNS_LINK_CONTEXT_PROOF 0xffu
@@ -46,6 +47,9 @@ typedef void (*rns_runtime_link_state_callback_t)(
 typedef void (*rns_runtime_link_packet_callback_t)(
     rns_runtime_link_t *link, uint8_t packet_context,
     const uint8_t *plaintext, size_t plaintext_length, void *context);
+typedef void (*rns_runtime_link_identified_callback_t)(
+    rns_runtime_link_t *link, const rns_identity *remote_identity,
+    void *context);
 
 typedef struct rns_runtime_link_options {
     double timeout_seconds;
@@ -56,6 +60,7 @@ typedef struct rns_runtime_link_options {
     bool prove_data_packets;
     rns_runtime_link_state_callback_t state_callback;
     rns_runtime_link_packet_callback_t packet_callback;
+    rns_runtime_link_identified_callback_t identified_callback;
     void *callback_context;
 } rns_runtime_link_options_t;
 
@@ -247,6 +252,12 @@ rns_status_t rns_runtime_link_send_with_receipt(
  * packet callback. This is intentionally callback-scoped so callers cannot
  * accidentally prove stale or unauthenticated input. */
 rns_status_t rns_runtime_link_prove_current_packet(rns_runtime_link_t *link);
+/* Privately identifies the initiator over an active encrypted link. */
+rns_status_t rns_runtime_link_identify(rns_runtime_link_t *link,
+                                       const rns_identity *identity);
+/* Borrowed identity valid for the link lifetime, or NULL until known. */
+const rns_identity *rns_runtime_link_remote_identity(
+    const rns_runtime_link_t *link);
 rns_link_state rns_runtime_link_state(const rns_runtime_link_t *link);
 const uint8_t *rns_runtime_link_id(const rns_runtime_link_t *link);
 void rns_runtime_link_destroy(rns_runtime_link_t *link);
