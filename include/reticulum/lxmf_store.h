@@ -45,7 +45,8 @@ typedef enum {
     LXMF_QUEUE_REASON_PROPAGATION_NODE,
     LXMF_QUEUE_REASON_RETRY_BACKOFF,
     /* Explicit user cancellation; automatic polling must not retry. */
-    LXMF_QUEUE_REASON_CANCELLED
+    LXMF_QUEUE_REASON_CANCELLED,
+    LXMF_QUEUE_REASON_RETRY_EXHAUSTED
 } lxmf_queue_reason_t;
 
 #define LXMF_DELIVERY_PROGRESS_COMPLETE 1000000u

@@ -123,12 +123,22 @@ int main(void) {
     assert(lxmf_store_read(&store, message.message_id, &message, content,
                            sizeof content) == LXMF_OK);
     assert_metadata(&message.delivery, 4u, LXMF_QUEUE_REASON_RETRY_BACKOFF);
+    message.delivery.queue_reason = LXMF_QUEUE_REASON_RETRY_EXHAUSTED;
+    assert(lxmf_store_update_delivery(&store, message.message_id,
+                                      &message.delivery) == LXMF_OK);
+    lxmf_store_close(&store);
+    assert(lxmf_store_open(&store, path) == LXMF_OK);
+    assert(lxmf_store_read(&store, message.message_id, &message, content,
+                           sizeof content) == LXMF_OK);
+    assert_metadata(&message.delivery, 4u,
+                    LXMF_QUEUE_REASON_RETRY_EXHAUSTED);
     assert(lxmf_store_compact(&store) == LXMF_OK);
     lxmf_store_close(&store);
     assert(lxmf_store_open(&store, path) == LXMF_OK);
     assert(lxmf_store_read(&store, message.message_id, &message, content,
                            sizeof content) == LXMF_OK);
-    assert_metadata(&message.delivery, 4u, LXMF_QUEUE_REASON_RETRY_BACKOFF);
+    assert_metadata(&message.delivery, 4u,
+                    LXMF_QUEUE_REASON_RETRY_EXHAUSTED);
     assert(lxmf_store_read(&store, legacy_id, &legacy, content,
                            sizeof content) == LXMF_OK);
     assert(legacy.delivery.desired_method == LXMF_DELIVERY_METHOD_UNKNOWN);

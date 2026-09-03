@@ -28,6 +28,26 @@ int main(void) {
     assert(lxmf_stamp_job_poll(NULL, 1) == LXMF_ERR_ARGUMENT);
     assert(lxmf_stamp_job_progress(NULL, &progress) == LXMF_ERR_ARGUMENT);
     assert(lxmf_stamp_job_result(NULL, a, NULL) == LXMF_ERR_ARGUMENT);
+    assert(lxmf_stamp_job_create_expanded(id, 1, 0, nonce, &job) ==
+           LXMF_ERR_ARGUMENT);
+    assert(lxmf_stamp_job_create_expanded(id, 1,
+        LXMF_STAMP_WORKBLOCK_ROUNDS + 1u, nonce, &job) == LXMF_ERR_ARGUMENT);
+
+    /* Deterministic pinned propagation expansion: Python LXStamper's 1,000
+     * rounds finds nonce 0x79 at cost 8 after 122 candidates. */
+    assert(lxmf_stamp_job_create_expanded(id, 8,
+        LXMF_PROPAGATION_STAMP_WORKBLOCK_ROUNDS, nonce, &job) == LXMF_OK);
+    complete_with_budget(job, LXMF_STAMP_POLL_MAX_UNITS);
+    assert(lxmf_stamp_job_result(job, a, NULL) == LXMF_OK);
+    assert(a[31] == 0x79u);
+    for (size_t i = 0; i < 31u; ++i) assert(a[i] == 0u);
+    assert(lxmf_stamp_job_progress(job, &progress) == LXMF_OK);
+    assert(progress.prepared_rounds ==
+           LXMF_PROPAGATION_STAMP_WORKBLOCK_ROUNDS);
+    assert(progress.attempts == 122u);
+    assert(lxmf_pow_stamp_validate_expanded(id, 8,
+        LXMF_PROPAGATION_STAMP_WORKBLOCK_ROUNDS, a, NULL) == LXMF_OK);
+    lxmf_stamp_job_destroy(job); job = NULL;
 
     assert(lxmf_stamp_job_create(id, 8, nonce, &job) == LXMF_OK);
     assert(lxmf_stamp_job_result(job, a, NULL) == LXMF_ERR_PENDING);

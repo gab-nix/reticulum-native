@@ -18,6 +18,7 @@ extern "C" {
 #define LXMF_STAMP_LENGTH 16u
 #define LXMF_POW_STAMP_LENGTH 32u
 #define LXMF_STAMP_WORKBLOCK_ROUNDS 3000u
+#define LXMF_PROPAGATION_STAMP_WORKBLOCK_ROUNDS 1000u
 #define LXMF_FIELD_TICKET 0x0cu
 /* Upper bound for one canonical LXMF representation handled by the codec.
  * Transport/resource policy can impose a smaller limit. */
@@ -154,6 +155,11 @@ typedef struct {
  * 32-byte nonce for reproducible diagnostics. The job copies all inputs. */
 lxmf_status_t lxmf_stamp_job_create(const uint8_t message_id[32], uint8_t cost,
     const uint8_t initial_nonce[32], lxmf_stamp_job_t **job);
+/* Pinned propagation nodes expand 1,000 blocks instead of the delivery
+ * default's 3,000. rounds must be in 1..LXMF_STAMP_WORKBLOCK_ROUNDS. */
+lxmf_status_t lxmf_stamp_job_create_expanded(
+    const uint8_t material[32], uint8_t cost, uint32_t rounds,
+    const uint8_t initial_nonce[32], lxmf_stamp_job_t **job);
 lxmf_status_t lxmf_stamp_job_poll(lxmf_stamp_job_t *job, uint32_t work_units);
 void lxmf_stamp_job_cancel(lxmf_stamp_job_t *job);
 void lxmf_stamp_job_destroy(lxmf_stamp_job_t *job);
@@ -165,6 +171,9 @@ lxmf_status_t lxmf_pow_stamp_generate(const uint8_t message_id[32], uint8_t cost
     lxmf_stamp_progress_fn progress, void *progress_context,
     uint8_t stamp[LXMF_POW_STAMP_LENGTH], uint8_t *value, uint64_t *attempts);
 lxmf_status_t lxmf_pow_stamp_validate(const uint8_t message_id[32], uint8_t cost,
+    const uint8_t stamp[LXMF_POW_STAMP_LENGTH], uint8_t *value);
+lxmf_status_t lxmf_pow_stamp_validate_expanded(
+    const uint8_t material[32], uint8_t cost, uint32_t rounds,
     const uint8_t stamp[LXMF_POW_STAMP_LENGTH], uint8_t *value);
 
 const char *lxmf_status_string(lxmf_status_t status);

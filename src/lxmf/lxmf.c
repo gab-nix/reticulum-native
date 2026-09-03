@@ -212,25 +212,34 @@ lxmf_status_t lxmf_identity_signer(void *identity,const uint8_t *data,size_t len
 lxmf_status_t lxmf_identity_verifier(void *context,const uint8_t source[16],const uint8_t *data,size_t len,const uint8_t signature[64]){lxmf_identity_verifier_context_t *c=(lxmf_identity_verifier_context_t *)context;if(!c||!c->resolve||!source||(!data&&len)||!signature)return LXMF_ERR_ARGUMENT;const rns_identity *identity=c->resolve(c->resolve_context,source);if(!identity)return LXMF_ERR_UNKNOWN_SIGNER;return rns_identity_verify(identity,data,len,signature)?LXMF_OK:LXMF_ERR_SIGNATURE;}
 
 static size_t msgpack_uint(uint32_t n,uint8_t out[5]){if(n<=0x7f){out[0]=(uint8_t)n;return 1;}if(n<=0xff){out[0]=0xcc;out[1]=(uint8_t)n;return 2;}if(n<=0xffff){out[0]=0xcd;out[1]=(uint8_t)(n>>8);out[2]=(uint8_t)n;return 3;}out[0]=0xce;store32be(out+1,n);return 5;}
-static lxmf_status_t stamp_workblock(const uint8_t id[32],uint8_t **out){size_t size=(size_t)LXMF_STAMP_WORKBLOCK_ROUNDS*256u;uint8_t *wb=(uint8_t *)malloc(size);if(!wb)return LXMF_ERR_BOUNDS;for(uint32_t n=0;n<LXMF_STAMP_WORKBLOCK_ROUNDS;n++){uint8_t packed[5],salt_input[37],salt[32];size_t pn=msgpack_uint(n,packed);memcpy(salt_input,id,32);memcpy(salt_input+32,packed,pn);lxmf_sha256(salt_input,32+pn,salt);if(!rns_hkdf_sha256(id,32,salt,32,NULL,0,wb+(size_t)n*256u,256u)){free(wb);return LXMF_ERR_CRYPTO;}}*out=wb;return LXMF_OK;}
+static lxmf_status_t stamp_workblock(const uint8_t id[32],uint32_t rounds,uint8_t **out){if(rounds==0||rounds>LXMF_STAMP_WORKBLOCK_ROUNDS)return LXMF_ERR_ARGUMENT;size_t size=(size_t)rounds*256u;uint8_t *wb=(uint8_t *)malloc(size);if(!wb)return LXMF_ERR_BOUNDS;for(uint32_t n=0;n<rounds;n++){uint8_t packed[5],salt_input[37],salt[32];size_t pn=msgpack_uint(n,packed);memcpy(salt_input,id,32);memcpy(salt_input+32,packed,pn);lxmf_sha256(salt_input,32+pn,salt);if(!rns_hkdf_sha256(id,32,salt,32,NULL,0,wb+(size_t)n*256u,256u)){free(wb);return LXMF_ERR_CRYPTO;}}*out=wb;return LXMF_OK;}
 static uint8_t digest_value(const uint8_t d[32]){uint8_t v=0;for(size_t i=0;i<32;i++){if(d[i]==0){v=(uint8_t)(v+8);continue;}uint8_t b=d[i];while((b&0x80)==0){v++;b<<=1;}break;}return v;}
 static bool digest_meets(const uint8_t d[32],uint8_t cost){uint8_t target[32]={0};unsigned bit=256u-cost;target[31u-bit/8u]=(uint8_t)(1u<<(bit%8u));return memcmp(d,target,32)<=0;}
-static void hash_work_stamp(const uint8_t *wb,const uint8_t stamp[32],uint8_t digest[32]){sha_ctx c;sha_init(&c);sha_update(&c,wb,(size_t)LXMF_STAMP_WORKBLOCK_ROUNDS*256u);sha_update(&c,stamp,32);sha_final(&c,digest);}
+static void hash_work_stamp(const uint8_t *wb,uint32_t rounds,const uint8_t stamp[32],uint8_t digest[32]){sha_ctx c;sha_init(&c);sha_update(&c,wb,(size_t)rounds*256u);sha_update(&c,stamp,32);sha_final(&c,digest);}
 struct lxmf_stamp_job {
     uint8_t id[32], nonce[32], cost, value;
+    uint32_t rounds;
     sha_ctx prefix;
     lxmf_stamp_job_progress_t progress;
 };
 
 lxmf_status_t lxmf_stamp_job_create(const uint8_t id[32], uint8_t cost,
     const uint8_t nonce[32], lxmf_stamp_job_t **out) {
+    return lxmf_stamp_job_create_expanded(id, cost,
+        LXMF_STAMP_WORKBLOCK_ROUNDS, nonce, out);
+}
+
+lxmf_status_t lxmf_stamp_job_create_expanded(const uint8_t id[32], uint8_t cost,
+    uint32_t rounds, const uint8_t nonce[32], lxmf_stamp_job_t **out) {
     if (!out) return LXMF_ERR_ARGUMENT;
     *out = NULL;
-    if (!id || cost == 0) return LXMF_ERR_ARGUMENT;
+    if (!id || cost == 0 || rounds == 0 ||
+        rounds > LXMF_STAMP_WORKBLOCK_ROUNDS) return LXMF_ERR_ARGUMENT;
     lxmf_stamp_job_t *job = calloc(1, sizeof *job);
     if (!job) return LXMF_ERR_BOUNDS;
     memcpy(job->id, id, 32);
     job->cost = cost;
+    job->rounds = rounds;
     if (nonce) memcpy(job->nonce, nonce, 32);
     else if (!rns_random_bytes(job->nonce, 32)) {
         free(job);
@@ -261,7 +270,7 @@ lxmf_status_t lxmf_stamp_job_poll(lxmf_stamp_job_t *job, uint32_t budget) {
             /* Hashing the prefix incrementally gives exactly the same SHA-256
              * state as hashing the entire materialized upstream workblock. */
             sha_update(&job->prefix, block, sizeof block);
-            if (++job->progress.prepared_rounds == LXMF_STAMP_WORKBLOCK_ROUNDS)
+            if (++job->progress.prepared_rounds == job->rounds)
                 job->progress.state = LXMF_STAMP_SEARCHING;
         } else {
             sha_ctx candidate = job->prefix;
@@ -309,8 +318,9 @@ lxmf_status_t lxmf_stamp_job_result(const lxmf_stamp_job_t *job,
     if (value) *value = job->value;
     return LXMF_OK;
 }
-lxmf_status_t lxmf_pow_stamp_validate(const uint8_t id[32],uint8_t cost,const uint8_t stamp[32],uint8_t *value){if(!id||!stamp||cost<1||cost>255)return LXMF_ERR_ARGUMENT;uint8_t *wb=NULL;lxmf_status_t st=stamp_workblock(id,&wb);if(st!=LXMF_OK)return st;uint8_t d[32];hash_work_stamp(wb,stamp,d);free(wb);if(value)*value=digest_value(d);return digest_meets(d,cost)?LXMF_OK:LXMF_ERR_FORMAT;}
-lxmf_status_t lxmf_pow_stamp_generate(const uint8_t id[32],uint8_t cost,lxmf_stamp_progress_fn progress,void *ctx,uint8_t stamp[32],uint8_t *value,uint64_t *attempts){if(!id||!stamp||cost<1||cost>255)return LXMF_ERR_ARGUMENT;if(progress&&!progress(ctx,0))return LXMF_ERR_CANCELLED;uint8_t *wb=NULL;lxmf_status_t st=stamp_workblock(id,&wb);if(st!=LXMF_OK)return st;if(!rns_random_bytes(stamp,32)){free(wb);return LXMF_ERR_CRYPTO;}uint64_t rounds=0;for(;;){uint8_t d[32];hash_work_stamp(wb,stamp,d);rounds++;if(digest_meets(d,cost)){if(value)*value=digest_value(d);if(attempts)*attempts=rounds;free(wb);return LXMF_OK;}for(int i=31;i>=0;i--){stamp[i]++;if(stamp[i])break;}if((rounds&1023u)==0&&progress&&!progress(ctx,rounds)){if(attempts)*attempts=rounds;free(wb);return LXMF_ERR_CANCELLED;}}}
+lxmf_status_t lxmf_pow_stamp_validate_expanded(const uint8_t id[32],uint8_t cost,uint32_t rounds,const uint8_t stamp[32],uint8_t *value){if(!id||!stamp||cost<1||cost>255)return LXMF_ERR_ARGUMENT;uint8_t *wb=NULL;lxmf_status_t st=stamp_workblock(id,rounds,&wb);if(st!=LXMF_OK)return st;uint8_t d[32];hash_work_stamp(wb,rounds,stamp,d);free(wb);if(value)*value=digest_value(d);return digest_meets(d,cost)?LXMF_OK:LXMF_ERR_FORMAT;}
+lxmf_status_t lxmf_pow_stamp_validate(const uint8_t id[32],uint8_t cost,const uint8_t stamp[32],uint8_t *value){return lxmf_pow_stamp_validate_expanded(id,cost,LXMF_STAMP_WORKBLOCK_ROUNDS,stamp,value);}
+lxmf_status_t lxmf_pow_stamp_generate(const uint8_t id[32],uint8_t cost,lxmf_stamp_progress_fn progress,void *ctx,uint8_t stamp[32],uint8_t *value,uint64_t *attempts){if(!id||!stamp||cost<1||cost>255)return LXMF_ERR_ARGUMENT;if(progress&&!progress(ctx,0))return LXMF_ERR_CANCELLED;uint8_t *wb=NULL;lxmf_status_t st=stamp_workblock(id,LXMF_STAMP_WORKBLOCK_ROUNDS,&wb);if(st!=LXMF_OK)return st;if(!rns_random_bytes(stamp,32)){free(wb);return LXMF_ERR_CRYPTO;}uint64_t rounds=0;for(;;){uint8_t d[32];hash_work_stamp(wb,LXMF_STAMP_WORKBLOCK_ROUNDS,stamp,d);rounds++;if(digest_meets(d,cost)){if(value)*value=digest_value(d);if(attempts)*attempts=rounds;free(wb);return LXMF_OK;}for(int i=31;i>=0;i--){stamp[i]++;if(stamp[i])break;}if((rounds&1023u)==0&&progress&&!progress(ctx,rounds)){if(attempts)*attempts=rounds;free(wb);return LXMF_ERR_CANCELLED;}}}
 
 const char *lxmf_status_string(lxmf_status_t s){switch(s){case LXMF_OK:return "ok";case LXMF_ERR_ARGUMENT:return "invalid argument";case LXMF_ERR_BOUNDS:return "buffer bounds";case LXMF_ERR_FORMAT:return "invalid LXMF/MessagePack format";case LXMF_ERR_CRYPTO:return "cryptographic operation failed";case LXMF_ERR_SIGNATURE:return "signature verification failed";case LXMF_ERR_CANCELLED:return "operation cancelled";case LXMF_ERR_TIMEOUT:return "delivery timed out";case LXMF_ERR_PENDING:return "waiting for delivery prerequisite";case LXMF_ERR_UNKNOWN_SIGNER:return "signer identity not held locally";case LXMF_ERR_STAMP:return "stamp validation failed";case LXMF_ERR_BLOCKED:return "source blocked by inbound policy";default:return "unknown LXMF error";}}
 const char *lxmf_signature_state_string(lxmf_signature_state_t s){switch(s){case LXMF_SIGNATURE_VERIFIED:return "verified";case LXMF_SIGNATURE_UNVERIFIED:return "unverified sender";case LXMF_SIGNATURE_FAILED:return "signature invalid";default:return "unknown signature state";}}

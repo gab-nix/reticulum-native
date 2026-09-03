@@ -4,6 +4,7 @@
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_store.h"
 #include "reticulum/lxmf_tickets.h"
+#include "reticulum/lxmf_propagation_session.h"
 #include "reticulum/ratchet_store.h"
 #include "reticulum/runtime.h"
 
@@ -19,6 +20,8 @@ extern "C" {
 #define LXMF_ROUTER_MAX_RECEIPTS 16u
 #define LXMF_ROUTER_MAX_LINKS 16u
 #define LXMF_ROUTER_MAX_RESOURCES 8u
+#define LXMF_ROUTER_PROPAGATION_MAX_RETRIES 32u
+#define LXMF_ROUTER_PROPAGATION_MAX_RETRY_BASE_MS 86400000u
 
 typedef struct {
     char display_name[LXMF_DISPLAY_NAME_MAX + 1u];
@@ -163,6 +166,13 @@ typedef struct {
     size_t max_incoming_resource_size;
     /* Zero selects the runtime Resource default. */
     double resource_timeout_seconds;
+    /* Optional verified propagation node. Supplying an identity requires a
+     * runtime, wall clock, matching lxmf.propagation hash and cost 1..254. */
+    const rns_identity *propagation_node_identity;
+    uint8_t propagation_node_destination[LXMF_DESTINATION_LENGTH];
+    uint8_t propagation_stamp_cost;
+    uint32_t propagation_retry_limit; /* Zero selects five attempts. */
+    uint64_t propagation_retry_base_ms; /* Zero selects ten seconds. */
 } lxmf_router_config_t;
 typedef struct {
     bool used;
@@ -193,6 +203,18 @@ typedef struct {
     uint32_t attempt;
 } lxmf_router_resource_slot_t;
 
+typedef struct {
+    bool used;
+    uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
+    uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH];
+    uint8_t *encrypted;
+    size_t encrypted_length;
+    size_t encrypted_capacity;
+    lxmf_stamp_job_t *stamp_job;
+    lxmf_pn_session_t *session;
+    uint32_t attempt;
+} lxmf_router_propagation_slot_t;
+
 struct lxmf_router {
     lxmf_router_config_t config;
     lxmf_router_receipt_slot_t receipts[LXMF_ROUTER_MAX_RECEIPTS];
@@ -203,6 +225,8 @@ struct lxmf_router {
     lxmf_stamp_job_t *stamp_job;
     uint8_t stamp_message_id[LXMF_MESSAGE_ID_LENGTH];
     uint8_t stamp_cost;
+    lxmf_router_propagation_slot_t propagation;
+    rns_identity propagation_node;
 };
 
 typedef struct {

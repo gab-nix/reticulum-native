@@ -6,6 +6,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <math.h>
 
 static void report(lxmf_router_t *router,
                    const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
@@ -56,6 +58,10 @@ static void direct_resource_received(
     rns_runtime_link_t *link, const uint8_t resource_hash[32],
     rns_status_t status, const uint8_t *data, size_t data_length,
     void *context);
+static lxmf_status_t prepare_outbound_representation(
+    lxmf_router_t *router, const lxmf_store_message_t *stored,
+    const uint8_t id[LXMF_MESSAGE_ID_LENGTH], uint8_t *packed,
+    size_t packed_capacity, size_t *packed_length);
 
 static uint64_t router_wall_time(const lxmf_router_t *router) {
     return router->config.wall_clock(router->config.wall_clock_context);
@@ -95,6 +101,243 @@ static lxmf_status_t validate_inbound_stamp(
     return status;
 }
 
+static uint64_t monotonic_ms(void) {
+    uint64_t now = 0u;
+    return rns_hal_monotonic_ms(&now) == RNS_OK ? now : 0u;
+}
+
+static void propagation_clear(lxmf_router_t *router, bool cancel) {
+    lxmf_router_propagation_slot_t *slot = &router->propagation;
+    if (slot->session != NULL) {
+        if (cancel) lxmf_pn_session_cancel(slot->session);
+        lxmf_pn_session_destroy(slot->session);
+    }
+    if (slot->stamp_job != NULL) {
+        if (cancel) lxmf_stamp_job_cancel(slot->stamp_job);
+        lxmf_stamp_job_destroy(slot->stamp_job);
+    }
+    if (slot->encrypted != NULL) {
+        rns_hal_secure_zero(slot->encrypted, slot->encrypted_capacity);
+        free(slot->encrypted);
+    }
+    memset(slot, 0, sizeof *slot);
+}
+
+static lxmf_status_t propagation_begin(
+    lxmf_router_t *router, const lxmf_store_message_t *stored,
+    const uint8_t id[LXMF_MESSAGE_ID_LENGTH], const rns_identity *destination) {
+    lxmf_router_propagation_slot_t *slot = &router->propagation;
+    if (slot->used) return LXMF_ERR_PENDING;
+    size_t packed_size = 0u;
+    lxmf_status_t status = lxmf_store_packed_size(router->config.store, id,
+                                                  &packed_size);
+    if (status == LXMF_ERR_FORMAT) {
+        packed_size = stored->content.len + 256u;
+        status = LXMF_OK;
+    }
+    if (status != LXMF_OK || packed_size > LXMF_STORE_MAX_PACKED - 64u)
+        return status != LXMF_OK ? status : LXMF_ERR_BOUNDS;
+    size_t packed_capacity = packed_size + 64u;
+    uint8_t *packed = malloc(packed_capacity);
+    if (packed == NULL) return LXMF_ERR_BOUNDS;
+    size_t packed_length = 0u;
+    status = prepare_outbound_representation(router, stored, id, packed,
+        packed_capacity, &packed_length);
+    if (status != LXMF_OK || packed_length <= LXMF_DESTINATION_LENGTH) {
+        free(packed);
+        return status != LXMF_OK ? status : LXMF_ERR_FORMAT;
+    }
+    size_t cipher_capacity = rns_identity_encrypt_bound(
+        packed_length - LXMF_DESTINATION_LENGTH);
+    if (cipher_capacity == 0u ||
+        cipher_capacity > LXMF_PN_MAX_WIRE - LXMF_DESTINATION_LENGTH -
+                              LXMF_POW_STAMP_LENGTH) {
+        rns_hal_secure_zero(packed, packed_capacity); free(packed);
+        return LXMF_ERR_BOUNDS;
+    }
+    slot->encrypted_capacity = LXMF_DESTINATION_LENGTH + cipher_capacity +
+                               LXMF_POW_STAMP_LENGTH;
+    slot->encrypted = malloc(slot->encrypted_capacity);
+    if (slot->encrypted == NULL) {
+        rns_hal_secure_zero(packed, packed_capacity); free(packed);
+        return LXMF_ERR_BOUNDS;
+    }
+    memcpy(slot->encrypted, packed, LXMF_DESTINATION_LENGTH);
+    uint8_t ratchet[RNS_RATCHET_PUBLIC_SIZE];
+    const uint8_t *selected_ratchet = NULL;
+    if (router->config.resolve_ratchet != NULL &&
+        router->config.resolve_ratchet(router->config.ratchet_context,
+                                       stored->destination, ratchet))
+        selected_ratchet = ratchet;
+    size_t cipher_length = 0u;
+    int encrypted = rns_identity_encrypt(destination, selected_ratchet,
+        packed + LXMF_DESTINATION_LENGTH,
+        packed_length - LXMF_DESTINATION_LENGTH,
+        slot->encrypted + LXMF_DESTINATION_LENGTH, cipher_capacity,
+        &cipher_length);
+    rns_hal_secure_zero(ratchet, sizeof ratchet);
+    rns_hal_secure_zero(packed, packed_capacity); free(packed);
+    if (!encrypted) { propagation_clear(router, false); return LXMF_ERR_CRYPTO; }
+    slot->encrypted_length = LXMF_DESTINATION_LENGTH + cipher_length;
+    lxmf_sha256(slot->encrypted, slot->encrypted_length, slot->transient_id);
+    status = lxmf_stamp_job_create_expanded(slot->transient_id,
+        router->config.propagation_stamp_cost,
+        LXMF_PROPAGATION_STAMP_WORKBLOCK_ROUNDS, NULL, &slot->stamp_job);
+    if (status != LXMF_OK) { propagation_clear(router, false); return status; }
+    slot->used = true;
+    slot->attempt = stored->delivery.attempts == UINT32_MAX
+        ? UINT32_MAX : stored->delivery.attempts + 1u;
+    memcpy(slot->message_id, id, sizeof slot->message_id);
+    return LXMF_ERR_PENDING;
+}
+
+static lxmf_status_t propagation_start_session(lxmf_router_t *router) {
+    lxmf_router_propagation_slot_t *slot = &router->propagation;
+    uint8_t stamp[LXMF_POW_STAMP_LENGTH];
+    lxmf_status_t status = lxmf_stamp_job_result(slot->stamp_job, stamp, NULL);
+    if (status != LXMF_OK) return status;
+    memcpy(slot->encrypted + slot->encrypted_length, stamp, sizeof stamp);
+    lxmf_pn_session_options_t options = {
+        .runtime = router->config.runtime,
+        .local_identity = router->config.identity,
+        .node_identity = router->config.propagation_node_identity,
+        .timeout_seconds = router->config.resource_timeout_seconds,
+        .max_response_size = LXMF_PN_MAX_WIRE};
+    memcpy(options.node_destination,
+           router->config.propagation_node_destination, 16u);
+    rns_status_t created = lxmf_pn_session_create(&slot->session, &options);
+    if (created != RNS_OK) return LXMF_ERR_CRYPTO;
+    lxmf_pn_upload_t upload = {.timebase = (double)router_wall_time(router),
+                               .count = 1u};
+    upload.messages[0] = (lxmf_slice_t){slot->encrypted,
+        slot->encrypted_length + sizeof stamp};
+    created = lxmf_pn_session_upload(slot->session, &upload,
+                                     (double)monotonic_ms() / 1000.0);
+    if (created != RNS_OK) return created == RNS_ERROR_OVERFLOW
+        ? LXMF_ERR_BOUNDS : LXMF_ERR_CRYPTO;
+    lxmf_stamp_job_destroy(slot->stamp_job); slot->stamp_job = NULL;
+    return LXMF_OK;
+}
+
+static void propagation_fail(lxmf_router_t *router, lxmf_status_t result) {
+    lxmf_router_propagation_slot_t *slot = &router->propagation;
+    lxmf_delivery_metadata_t metadata;
+    if (lxmf_store_read_delivery(router->config.store, slot->message_id,
+                                 &metadata) == LXMF_OK) {
+        metadata.attempts = slot->attempt;
+        uint32_t limit = router->config.propagation_retry_limit != 0u
+            ? router->config.propagation_retry_limit : 5u;
+        if (slot->attempt >= limit) {
+            metadata.queue_reason = LXMF_QUEUE_REASON_RETRY_EXHAUSTED;
+            metadata.retry_at_ms = 0u;
+            (void)lxmf_store_update_status(router->config.store,
+                                           slot->message_id,
+                                           LXMF_DELIVERY_FAILED);
+            report(router, slot->message_id, LXMF_DELIVERY_FAILED, result);
+            report_event(router, slot->message_id,
+                LXMF_DELIVERY_METHOD_PROPAGATED, LXMF_DELIVERY_FAILED,
+                LXMF_QUEUE_REASON_RETRY_EXHAUSTED, result, slot->attempt);
+        } else {
+            uint64_t base = router->config.propagation_retry_base_ms != 0u
+                ? router->config.propagation_retry_base_ms : 10000u;
+            uint32_t shift = slot->attempt > 7u ? 6u : slot->attempt - 1u;
+            uint64_t delay = base > UINT64_MAX >> shift
+                ? UINT64_MAX : base << shift;
+            uint64_t now = monotonic_ms();
+            metadata.retry_at_ms = delay > UINT64_MAX - now
+                ? UINT64_MAX : now + delay;
+            metadata.queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
+            (void)lxmf_store_update_status(router->config.store,
+                                           slot->message_id,
+                                           LXMF_DELIVERY_QUEUED);
+            report(router, slot->message_id, LXMF_DELIVERY_QUEUED, result);
+            report_event(router, slot->message_id,
+                LXMF_DELIVERY_METHOD_PROPAGATED, LXMF_DELIVERY_QUEUED,
+                LXMF_QUEUE_REASON_RETRY_BACKOFF, result, slot->attempt);
+        }
+        (void)lxmf_store_update_delivery(router->config.store,
+                                         slot->message_id, &metadata);
+    }
+    propagation_clear(router, false);
+}
+
+static void propagation_poll(lxmf_router_t *router) {
+    lxmf_router_propagation_slot_t *slot = &router->propagation;
+    if (!slot->used) return;
+    lxmf_delivery_metadata_t metadata;
+    if (lxmf_store_read_delivery(router->config.store, slot->message_id,
+                                 &metadata) != LXMF_OK) {
+        propagation_clear(router, true); return;
+    }
+    if (slot->stamp_job != NULL) {
+        uint32_t units = router->config.stamp_work_units != 0u
+            ? router->config.stamp_work_units : LXMF_STAMP_POLL_MAX_UNITS;
+        lxmf_status_t status = lxmf_stamp_job_poll(slot->stamp_job, units);
+        lxmf_stamp_job_progress_t progress;
+        (void)lxmf_stamp_job_progress(slot->stamp_job, &progress);
+        metadata.queue_reason = LXMF_QUEUE_REASON_STAMP;
+        metadata.progress = progress.prepared_rounds * 100000u /
+            LXMF_PROPAGATION_STAMP_WORKBLOCK_ROUNDS;
+        (void)lxmf_store_update_delivery(router->config.store,
+                                         slot->message_id, &metadata);
+        if (status == LXMF_OK) {
+            status = propagation_start_session(router);
+            if (status != LXMF_OK) { propagation_fail(router, status); return; }
+            metadata.queue_reason = LXMF_QUEUE_REASON_PROPAGATION_NODE;
+            metadata.attempts = slot->attempt;
+            (void)lxmf_store_update_delivery(router->config.store,
+                                             slot->message_id, &metadata);
+        } else if (status != LXMF_ERR_PENDING) {
+            propagation_fail(router, status); return;
+        }
+        return;
+    }
+    rns_status_t polled = lxmf_pn_session_poll(
+        slot->session, (double)monotonic_ms() / 1000.0);
+    const lxmf_pn_session_progress_t *progress =
+        lxmf_pn_session_progress(slot->session);
+    if (polled != RNS_OK || progress == NULL ||
+        progress->state == LXMF_PN_FAILED) {
+        propagation_fail(router, polled == RNS_ERROR_TIMEOUT
+            ? LXMF_ERR_TIMEOUT : LXMF_ERR_CRYPTO); return;
+    }
+    if (progress->state == LXMF_PN_CANCELLED) {
+        propagation_fail(router, LXMF_ERR_CANCELLED); return;
+    }
+    if (progress->state == LXMF_PN_UPLOAD) {
+        metadata.queue_reason = LXMF_QUEUE_REASON_RESOURCE;
+        metadata.actual_method = LXMF_DELIVERY_METHOD_PROPAGATED;
+        uint64_t scaled = progress->total_parts != 0u
+            ? (uint64_t)progress->transferred_parts * 900000u /
+                  progress->total_parts : 0u;
+        metadata.progress = (uint32_t)(100000u + scaled);
+        if (metadata.progress >= LXMF_DELIVERY_PROGRESS_COMPLETE)
+            metadata.progress = LXMF_DELIVERY_PROGRESS_COMPLETE - 1u;
+        (void)lxmf_store_update_delivery(router->config.store,
+                                         slot->message_id, &metadata);
+        (void)lxmf_store_update_status(router->config.store, slot->message_id,
+                                       LXMF_DELIVERY_SENDING);
+        report_event(router, slot->message_id,
+            LXMF_DELIVERY_METHOD_PROPAGATED, LXMF_DELIVERY_SENDING,
+            LXMF_QUEUE_REASON_RESOURCE, LXMF_OK, slot->attempt);
+    } else if (progress->state == LXMF_PN_COMPLETE) {
+        metadata.actual_method = LXMF_DELIVERY_METHOD_PROPAGATED;
+        metadata.queue_reason = LXMF_QUEUE_REASON_NONE;
+        metadata.retry_at_ms = 0u;
+        metadata.progress = LXMF_DELIVERY_PROGRESS_COMPLETE;
+        metadata.attempts = slot->attempt;
+        (void)lxmf_store_update_delivery(router->config.store,
+                                         slot->message_id, &metadata);
+        (void)lxmf_store_update_status(router->config.store, slot->message_id,
+                                       LXMF_DELIVERY_SENT);
+        report(router, slot->message_id, LXMF_DELIVERY_SENT, LXMF_OK);
+        report_event(router, slot->message_id,
+            LXMF_DELIVERY_METHOD_PROPAGATED, LXMF_DELIVERY_SENT,
+            LXMF_QUEUE_REASON_NONE, LXMF_OK, slot->attempt);
+        propagation_clear(router, false);
+    }
+}
+
 static void remember_verified_ticket(lxmf_router_t *router,
                                      const lxmf_message_t *message) {
     if (router->config.ticket_store == NULL) return;
@@ -124,7 +367,12 @@ static bool recover_interrupted(void *context,
     bool interrupted = message->status == LXMF_DELIVERY_SENDING ||
                        (message->status == LXMF_DELIVERY_SENT &&
                         message->delivery.has_proof_id);
-    if (!interrupted) return true;
+    bool stale_propagation_retry =
+        message->delivery.desired_method == LXMF_DELIVERY_METHOD_PROPAGATED &&
+        message->status == LXMF_DELIVERY_QUEUED &&
+        message->delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_BACKOFF &&
+        message->delivery.retry_at_ms != 0u;
+    if (!interrupted && !stale_propagation_retry) return true;
     lxmf_delivery_metadata_t delivery = message->delivery;
     delivery.queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
     delivery.retry_at_ms = 0u;
@@ -166,6 +414,7 @@ const char *lxmf_queue_reason_string(lxmf_queue_reason_t reason) {
         case LXMF_QUEUE_REASON_RESOURCE: return "resource";
         case LXMF_QUEUE_REASON_PROPAGATION_NODE: return "propagation node";
         case LXMF_QUEUE_REASON_RETRY_BACKOFF: return "retry backoff";
+        case LXMF_QUEUE_REASON_RETRY_EXHAUSTED: return "retry exhausted";
         case LXMF_QUEUE_REASON_CANCELLED: return "cancelled";
         default: return "invalid";
     }
@@ -182,10 +431,33 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
         (config->ticket_store != NULL && config->wall_clock == NULL) ||
         config->inbound_stamp_cost == UINT8_MAX ||
         config->max_incoming_message_size > LXMF_STORE_MAX_PACKED ||
-        config->stamp_work_units > LXMF_STAMP_POLL_MAX_UNITS)
+        config->stamp_work_units > LXMF_STAMP_POLL_MAX_UNITS ||
+        (config->propagation_node_identity != NULL &&
+         (config->runtime == NULL || config->wall_clock == NULL ||
+          config->propagation_stamp_cost == 0u ||
+          config->propagation_stamp_cost == UINT8_MAX ||
+          !isfinite(config->resource_timeout_seconds) ||
+          config->resource_timeout_seconds < 0.0 ||
+          config->propagation_retry_limit >
+              LXMF_ROUTER_PROPAGATION_MAX_RETRIES ||
+          config->propagation_retry_base_ms >
+              LXMF_ROUTER_PROPAGATION_MAX_RETRY_BASE_MS)))
         return LXMF_ERR_ARGUMENT;
     memset(router, 0, sizeof *router);
     router->config = *config;
+    if (config->propagation_node_identity != NULL) {
+        uint8_t public_key[RNS_IDENTITY_PUBLIC_SIZE], expected[16];
+        const char *const aspects[] = {"propagation"};
+        rns_identity_export_public(config->propagation_node_identity, public_key);
+        if (!rns_identity_from_public(&router->propagation_node, public_key) ||
+            !rns_destination_hash(&router->propagation_node, "lxmf", aspects,
+                                  1u, expected) ||
+            memcmp(expected, config->propagation_node_destination, 16u) != 0) {
+            memset(router, 0, sizeof *router);
+            return LXMF_ERR_ARGUMENT;
+        }
+        router->config.propagation_node_identity = &router->propagation_node;
+    }
     if (recover_interrupted_deliveries(config->store) != LXMF_OK) {
         memset(router, 0, sizeof *router);
         return LXMF_ERR_CRYPTO;
@@ -241,6 +513,7 @@ static void release_resources(lxmf_router_t *router, bool all) {
 
 void lxmf_router_destroy(lxmf_router_t *router) {
     if (router == NULL) return;
+    propagation_clear(router, true);
     lxmf_stamp_job_destroy(router->stamp_job);
     release_receipts(router, true);
     release_resources(router, true);
@@ -924,6 +1197,30 @@ lxmf_status_t lxmf_router_send_message(
         if (method == LXMF_DELIVERY_METHOD_UNKNOWN)
             method = LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
     }
+    if (method == LXMF_DELIVERY_METHOD_PROPAGATED) {
+        if (stored.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_EXHAUSTED ||
+            stored.delivery.queue_reason == LXMF_QUEUE_REASON_CANCELLED)
+            return LXMF_ERR_CANCELLED;
+        if (router->propagation.used) {
+            stored.delivery.queue_reason = LXMF_QUEUE_REASON_PROPAGATION_NODE;
+            (void)lxmf_store_update_delivery(router->config.store, id,
+                                             &stored.delivery);
+            return LXMF_ERR_PENDING;
+        }
+        uint64_t now = monotonic_ms();
+        if (stored.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_BACKOFF &&
+            stored.delivery.retry_at_ms != 0u && now < stored.delivery.retry_at_ms)
+            return LXMF_ERR_PENDING;
+        if (router->config.propagation_node_identity == NULL) {
+            stored.delivery.queue_reason = LXMF_QUEUE_REASON_PROPAGATION_NODE;
+            (void)lxmf_store_update_delivery(router->config.store, id,
+                                             &stored.delivery);
+            report_event(router, id, method, LXMF_DELIVERY_QUEUED,
+                LXMF_QUEUE_REASON_PROPAGATION_NODE, LXMF_ERR_PENDING,
+                stored.delivery.attempts);
+            return LXMF_ERR_PENDING;
+        }
+    }
     stored.delivery.desired_method = method;
     stored.delivery.actual_method = LXMF_DELIVERY_METHOD_UNKNOWN;
     stored.delivery.queue_reason = LXMF_QUEUE_REASON_NONE;
@@ -934,16 +1231,6 @@ lxmf_status_t lxmf_router_send_message(
     if (lxmf_store_update_delivery(router->config.store, id,
                                    &stored.delivery) != LXMF_OK)
         return LXMF_ERR_CRYPTO;
-    if (method == LXMF_DELIVERY_METHOD_PROPAGATED) {
-        stored.delivery.queue_reason = LXMF_QUEUE_REASON_PROPAGATION_NODE;
-        if (lxmf_store_update_delivery(router->config.store, id,
-                                       &stored.delivery) != LXMF_OK)
-            return LXMF_ERR_CRYPTO;
-        report_event(router, id, method, LXMF_DELIVERY_QUEUED,
-                     LXMF_QUEUE_REASON_PROPAGATION_NODE, LXMF_ERR_PENDING,
-                     stored.delivery.attempts);
-        return LXMF_ERR_PENDING;
-    }
     const rns_identity *destination = router->config.resolve_identity(
         router->config.resolve_context, stored.destination);
     /* A missing announce is a normal discovery state, not a delivery failure. */
@@ -969,6 +1256,18 @@ lxmf_status_t lxmf_router_send_message(
         report_event(router, id, method, state, LXMF_QUEUE_REASON_STAMP,
                      stamp_status, stored.delivery.attempts);
         return stamp_status;
+    }
+    if (method == LXMF_DELIVERY_METHOD_PROPAGATED) {
+        lxmf_status_t begun = propagation_begin(router, &stored, id,
+                                                destination);
+        stored.delivery.queue_reason = begun == LXMF_ERR_PENDING
+            ? LXMF_QUEUE_REASON_STAMP : LXMF_QUEUE_REASON_RETRY_BACKOFF;
+        if (lxmf_store_update_delivery(router->config.store, id,
+                                       &stored.delivery) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
+        report_event(router, id, method, LXMF_DELIVERY_QUEUED,
+            stored.delivery.queue_reason, begun, stored.delivery.attempts);
+        return begun;
     }
     stored.delivery.progress = 0u;
     stored.delivery.actual_method = method;
@@ -1100,6 +1399,24 @@ lxmf_status_t lxmf_router_cancel_message(
     lxmf_router_t *router,
     const uint8_t id[LXMF_MESSAGE_ID_LENGTH]) {
     if (router == NULL || id == NULL) return LXMF_ERR_ARGUMENT;
+    if (router->propagation.used &&
+        memcmp(router->propagation.message_id, id, 32u) == 0) {
+        lxmf_delivery_metadata_t metadata;
+        if (lxmf_store_read_delivery(router->config.store, id, &metadata) !=
+            LXMF_OK) return LXMF_ERR_FORMAT;
+        metadata.queue_reason = LXMF_QUEUE_REASON_CANCELLED;
+        metadata.retry_at_ms = 0u; metadata.progress = 0u;
+        if (lxmf_store_update_delivery(router->config.store, id, &metadata) !=
+                LXMF_OK ||
+            lxmf_store_update_status(router->config.store, id,
+                                     LXMF_DELIVERY_FAILED) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
+        propagation_clear(router, true);
+        report_event(router, id, LXMF_DELIVERY_METHOD_PROPAGATED,
+            LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_CANCELLED,
+            LXMF_ERR_CANCELLED, metadata.attempts);
+        return LXMF_OK;
+    }
     lxmf_delivery_metadata_t delivery;
     if (lxmf_store_read_delivery(router->config.store, id, &delivery) == LXMF_OK &&
         delivery.queue_reason == LXMF_QUEUE_REASON_STAMP) {
@@ -1149,6 +1466,7 @@ typedef struct {
 static bool collect_pending(void *context, const lxmf_store_message_t *message) {
     pending_messages_t *pending = context;
     if (message->delivery.queue_reason != LXMF_QUEUE_REASON_CANCELLED &&
+        message->delivery.queue_reason != LXMF_QUEUE_REASON_RETRY_EXHAUSTED &&
         (message->status == LXMF_DELIVERY_QUEUED ||
          message->status == LXMF_DELIVERY_FAILED) && pending->count < pending->limit)
         memcpy(pending->ids[pending->count++], message->message_id,
@@ -1163,6 +1481,7 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
     memset(result, 0, sizeof *result);
     release_receipts(router, false);
     release_resources(router, false);
+    propagation_poll(router);
     for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i) {
         lxmf_router_link_slot_t *slot = &router->links[i];
         if (!slot->used || slot->link == NULL ||
