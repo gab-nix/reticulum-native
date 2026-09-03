@@ -135,6 +135,8 @@ int main(void) {
     assert(settings.rrc_auto_reconnect);
     assert(tui_settings_interval_ms(&settings) == UINT64_C(21600000));
     assert(tui_settings_announce_due(true, 0u, 1u));
+    assert(!tui_settings_announce_due(true, 20u, 19u));
+    assert(tui_settings_announce_due(true, 20u, 20u));
     assert(!tui_settings_announce_due(false, 0u, 1u));
     assert(!tui_settings_announce_due(false, 20u, 19u));
     assert(tui_settings_announce_due(false, 20u, 20u));

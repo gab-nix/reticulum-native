@@ -103,9 +103,9 @@ use I2P or a trusted tunnel when that metadata matters.
 
 ## Run the Nomad TUI
 
-Shared-instance IPC is not implemented, so the TUI cannot reuse a separately
-running C `rnsd`. Stop `rnsd` when it would conflict with the listener, then let
-the TUI open the interface itself:
+The TUI normally opens its configured interfaces itself. Stop another process
+that owns the same TCP listener, or configure the supported local shared-instance
+interface when using a separate C `rnsd`:
 
 ```sh
 ./build/apps/nomad-chat tui --config client.conf my.identity history.lxms
@@ -129,11 +129,12 @@ but live bidirectional interoperability is not yet release-certified.
 ## Current limitations
 
 - One accepted connection is managed per configured TCP server interface.
-- TCP client reconnection and tunnel persistence are not implemented.
-- Shared-instance IPC and daemon reuse are not implemented.
-- The C client does not yet originate periodic Nomad node announces.
-- Remote Nomad page requests, resources and complete multi-hop transport remain
-  work in progress.
+- TCP clients reconnect, but tunnel synthesis and persistence remain WIP.
+- The client advertises its `lxmf.delivery` destination after an interface comes
+  up, periodically, and after a complete disconnect/reconnect. It does not
+  advertise a `nomadnetwork.node` site unless hosting is explicitly configured.
+- Remote Nomad pages and bounded resources work for the implemented subset;
+  multi-segment edge cases and complete multi-hop transport remain WIP.
 - A Network entry proves local announce validation, not full page or messaging
   interoperability. See [FEATURE_STATUS.md](FEATURE_STATUS.md).
 
@@ -144,4 +145,7 @@ but live bidirectional interoperability is not yet release-certified.
 - `interface ... down` means startup failed; keep
   `panic_on_interface_error = Yes` while diagnosing.
 - An empty Network screen means no valid peer announce has arrived yet.
+- Seeing the same ambient nodes does not prove two clients have announced to
+  each other. Wait for the interface to report up, then use Settings → Announce
+  Now when diagnosing a peer that has not appeared.
 - `cannot open node registry` means no registry has been persisted at that path.

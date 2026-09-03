@@ -152,8 +152,8 @@ uint64_t tui_settings_interval_ms(const tui_settings_t *settings) {
 
 bool tui_settings_announce_due(bool startup_pending, uint64_t next_announce_ms,
                                uint64_t now_ms) {
-    return startup_pending ||
-           (next_announce_ms != 0u && now_ms >= next_announce_ms);
+    if (next_announce_ms == 0U) return startup_pending;
+    return now_ms >= next_announce_ms;
 }
 
 lxmf_status_t tui_settings_encode_announce(const tui_settings_t *settings,

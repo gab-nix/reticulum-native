@@ -214,6 +214,7 @@ typedef struct tui_state {
     uint64_t last_announce_ms;
     uint64_t next_announce_ms;
     bool startup_announce_pending;
+    bool network_ready_last_poll;
     bool has_announce_result;
     rns_status_t last_announce_result;
     rns_identity resolved_identity;

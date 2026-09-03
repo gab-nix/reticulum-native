@@ -22,6 +22,7 @@
 #define TUI_ROUTER_INTERVAL_MS 1000u
 #define TUI_ROUTER_BATCH 2u
 #define TUI_RUNTIME_BATCH 32u
+#define TUI_ANNOUNCE_RETRY_MS 1000u
 #define TUI_NODE_LIFETIME 3600.0
 
 static void apply_propagation_route(tui_state_t *state);
@@ -1460,15 +1461,30 @@ void tui_state_poll(tui_state_t *state) {
         (void)rns_node_registry_expire(&state->nodes, (double)now / 1000.0);
         tui_rrc_poll(&state->rrc, now);
         apply_propagation_route(state);
-        if (state->next_announce_ms == 0u)
+        bool network_ready = tui_state_link_ready(state);
+        if (network_ready && !state->network_ready_last_poll &&
+            state->settings.announce_at_start) {
+            /* A nonblocking TCP client normally becomes usable after startup.
+             * Announce on that transition and again after a full disconnect,
+             * instead of consuming the one startup attempt while connecting. */
+            state->startup_announce_pending = true;
+            state->next_announce_ms = 0U;
+        }
+        state->network_ready_last_poll = network_ready;
+        if (state->next_announce_ms == 0u &&
+            !state->startup_announce_pending)
             state->next_announce_ms = now + tui_settings_interval_ms(&state->settings);
         if (tui_settings_announce_due(state->startup_announce_pending,
                                       state->next_announce_ms, now)) {
-            state->startup_announce_pending = false;
-            (void)announce_at(state, now);
-            if (state->next_announce_ms <= now)
-                state->next_announce_ms = now +
-                                          tui_settings_interval_ms(&state->settings);
+            if (!network_ready) {
+                state->next_announce_ms = now + TUI_ANNOUNCE_RETRY_MS;
+            } else if (announce_at(state, now)) {
+                state->startup_announce_pending = false;
+            } else {
+                /* Transient send/interface failures retry promptly instead of
+                 * postponing discovery for the normal six-hour interval. */
+                state->next_announce_ms = now + TUI_ANNOUNCE_RETRY_MS;
+            }
         }
         if (state->router_ready &&
             now - state->router_polled_ms >= TUI_ROUTER_INTERVAL_MS) {
