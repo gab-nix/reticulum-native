@@ -16,7 +16,16 @@ int main(void){
     packed[40]^=1;assert(lxmf_unpack(packed,packed_len,fake_verify,NULL,&u)==LXMF_ERR_SIGNATURE);packed[40]^=1;
     uint8_t ticket[16]={0},stamp[16];lxmf_ticket_stamp(ticket,u.message_id,stamp);assert(lxmf_ticket_stamp_valid(stamp,ticket,u.message_id));stamp[0]^=1;assert(!lxmf_ticket_stamp_valid(stamp,ticket,u.message_id));
     assert(lxmf_unpack(packed,95,NULL,NULL,&u)==LXMF_ERR_FORMAT);
-    rns_identity identity;assert(rns_identity_generate(&identity));memcpy(m.source,identity.hash,16);assert(lxmf_pack(&m,lxmf_identity_signer,&identity,packed,sizeof packed,&packed_len)==LXMF_OK);lxmf_identity_verifier_context_t vc={resolve_one,&identity};assert(lxmf_unpack(packed,packed_len,lxmf_identity_verifier,&vc,&u)==LXMF_OK);u.source[0]^=1;assert(lxmf_identity_verifier(&vc,u.source,packed,1,u.signature)==LXMF_ERR_SIGNATURE);
+    rns_identity identity;assert(rns_identity_generate(&identity));memcpy(m.source,identity.hash,16);assert(lxmf_pack(&m,lxmf_identity_signer,&identity,packed,sizeof packed,&packed_len)==LXMF_OK);lxmf_identity_verifier_context_t vc={resolve_one,&identity};assert(lxmf_unpack(packed,packed_len,lxmf_identity_verifier,&vc,&u)==LXMF_OK);uint8_t known_source[16];memcpy(known_source,u.source,16);
+    /* An identity the resolver does not hold is unknown, not forged. */
+    u.source[0]^=1;assert(lxmf_identity_verifier(&vc,u.source,packed,1,u.signature)==LXMF_ERR_UNKNOWN_SIGNER);
+    /* The same identity with a signature it did not make is forged. */
+    assert(lxmf_identity_verifier(&vc,known_source,packed,1,u.signature)==LXMF_ERR_SIGNATURE);
+    /* An unknown signer still yields a fully parsed message. */
+    memcpy(m.source,identity.hash,16);m.source[0]^=1;assert(lxmf_pack(&m,lxmf_identity_signer,&identity,packed,sizeof packed,&packed_len)==LXMF_OK);lxmf_message_t unknown;assert(lxmf_unpack(packed,packed_len,lxmf_identity_verifier,&vc,&unknown)==LXMF_ERR_UNKNOWN_SIGNER);assert(unknown.content.len==5&&memcmp(unknown.content.data,"hello",5)==0);
+    assert(strcmp(lxmf_status_string(LXMF_ERR_UNKNOWN_SIGNER),lxmf_status_string(LXMF_ERR_SIGNATURE))!=0);
+    assert(strcmp(lxmf_signature_state_string(LXMF_SIGNATURE_UNVERIFIED),lxmf_signature_state_string(LXMF_SIGNATURE_VERIFIED))!=0);
+    memcpy(m.source,identity.hash,16);assert(lxmf_pack(&m,lxmf_identity_signer,&identity,packed,sizeof packed,&packed_len)==LXMF_OK);assert(lxmf_unpack(packed,packed_len,lxmf_identity_verifier,&vc,&u)==LXMF_OK);
     uint8_t pow_stamp[32],value=0;uint64_t attempts=0;assert(lxmf_pow_stamp_generate(u.message_id,0,NULL,NULL,pow_stamp,&value,&attempts)==LXMF_ERR_ARGUMENT);assert(lxmf_pow_stamp_generate(u.message_id,1,cancel_now,NULL,pow_stamp,&value,&attempts)==LXMF_ERR_CANCELLED);assert(lxmf_pow_stamp_generate(u.message_id,1,NULL,NULL,pow_stamp,&value,&attempts)==LXMF_OK);assert(attempts>0&&value>=1);assert(lxmf_pow_stamp_validate(u.message_id,1,pow_stamp,&value)==LXMF_OK);pow_stamp[0]^=1; /* A changed stamp is overwhelmingly likely invalid at a stronger cost. */ assert(lxmf_pow_stamp_validate(u.message_id,255,pow_stamp,&value)==LXMF_ERR_FORMAT);
     puts("test_lxmf: ok");return 0;
 }

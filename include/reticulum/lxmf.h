@@ -26,8 +26,19 @@ typedef enum {
     LXMF_ERR_FORMAT,
     LXMF_ERR_CRYPTO,
     LXMF_ERR_SIGNATURE,
-    LXMF_ERR_CANCELLED
+    LXMF_ERR_CANCELLED,
+    /* The signer's identity is not held locally, so the signature can be
+     * neither confirmed nor refuted. Distinct from LXMF_ERR_SIGNATURE, which
+     * means a known identity did not sign the message. */
+    LXMF_ERR_UNKNOWN_SIGNER
 } lxmf_status_t;
+
+/* Trust carried alongside a retained message. */
+typedef enum {
+    LXMF_SIGNATURE_VERIFIED = 0,
+    LXMF_SIGNATURE_UNVERIFIED = 1,
+    LXMF_SIGNATURE_FAILED = 2
+} lxmf_signature_state_t;
 
 /* Binary slices are borrowed. Callers retain ownership of pointed-to bytes. */
 typedef struct {
@@ -77,7 +88,10 @@ lxmf_status_t lxmf_pack(const lxmf_message_t *message,
                         uint8_t *output, size_t output_capacity,
                         size_t *output_len);
 
-/* Unpacks borrowed slices, computes message_id, and optionally verifies. */
+/* Unpacks borrowed slices, computes message_id, and optionally verifies.
+ * On LXMF_ERR_UNKNOWN_SIGNER the message is fully populated and its borrowed
+ * slices are valid: the payload parsed, only its signer is unknown. Every
+ * other error leaves the message unusable. */
 lxmf_status_t lxmf_unpack(const uint8_t *input, size_t input_len,
                           lxmf_verify_fn verifier, void *verify_context,
                           lxmf_message_t *message);
@@ -102,6 +116,7 @@ lxmf_status_t lxmf_pow_stamp_validate(const uint8_t message_id[32], uint8_t cost
     const uint8_t stamp[LXMF_POW_STAMP_LENGTH], uint8_t *value);
 
 const char *lxmf_status_string(lxmf_status_t status);
+const char *lxmf_signature_state_string(lxmf_signature_state_t state);
 
 #ifdef __cplusplus
 }

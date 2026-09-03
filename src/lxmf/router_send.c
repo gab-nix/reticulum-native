@@ -116,7 +116,13 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
     lxmf_status_t status = lxmf_opportunistic_packet_unpack(
         packet, packet_length, router->config.identity, lxmf_identity_verifier,
         &verifier, plaintext, sizeof plaintext, &plaintext_length, &message);
-    if (status != LXMF_OK) return status;
+    /* An identity we do not hold yet cannot condemn the message: retain it
+     * flagged so it can be shown and checked again after its announce. A
+     * signature that fails against an identity we do hold is forged. */
+    bool unverified = status == LXMF_ERR_UNKNOWN_SIGNER;
+    if (status != LXMF_OK && !unverified) return status;
+    if (unverified && plaintext_length > LXMF_STORE_MAX_PACKED)
+        return LXMF_ERR_BOUNDS;
 
     lxmf_store_message_t stored = {0};
     memcpy(stored.message_id, message.message_id, sizeof stored.message_id);
@@ -125,10 +131,91 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
     stored.timestamp = message.timestamp;
     stored.status = LXMF_DELIVERY_DELIVERED;
     stored.content = message.content;
+    stored.signature_state =
+        unverified ? LXMF_SIGNATURE_UNVERIFIED : LXMF_SIGNATURE_VERIFIED;
+    if (unverified) stored.packed = (lxmf_slice_t){plaintext, plaintext_length};
     bool inserted = false;
     status = lxmf_store_put(router->config.store, &stored, &inserted);
     if (status != LXMF_OK) return status;
     if (inserted && router->config.message_callback != NULL)
         router->config.message_callback(router->config.message_context, &stored);
+    return LXMF_OK;
+}
+
+typedef struct {
+    uint8_t ids[LXMF_STORE_MAX_UNVERIFIED][LXMF_MESSAGE_ID_LENGTH];
+    size_t count;
+    const uint8_t *source;
+} pending_signatures_t;
+
+static bool collect_unverified(void *context,
+                               const lxmf_store_message_t *message) {
+    pending_signatures_t *pending = context;
+    if (message->signature_state != LXMF_SIGNATURE_UNVERIFIED) return true;
+    if (pending->source != NULL &&
+        memcmp(message->source, pending->source, LXMF_SOURCE_LENGTH) != 0)
+        return true;
+    if (pending->count < LXMF_STORE_MAX_UNVERIFIED)
+        memcpy(pending->ids[pending->count++], message->message_id,
+               LXMF_MESSAGE_ID_LENGTH);
+    return pending->count < LXMF_STORE_MAX_UNVERIFIED;
+}
+
+static void report_signature(lxmf_router_t *router,
+                             const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
+                             lxmf_signature_state_t state) {
+    if (router->config.signature_callback != NULL)
+        router->config.signature_callback(router->config.signature_context, id,
+                                          state);
+}
+
+lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
+                                         const uint8_t source[LXMF_SOURCE_LENGTH],
+                                         lxmf_router_verify_result_t *result) {
+    if (router == NULL || result == NULL || router->config.store == NULL)
+        return LXMF_ERR_ARGUMENT;
+    memset(result, 0, sizeof *result);
+    pending_signatures_t pending = {.source = source};
+    lxmf_status_t status =
+        lxmf_store_list(router->config.store, collect_unverified, &pending);
+    if (status != LXMF_OK) return status;
+    lxmf_identity_verifier_context_t verifier = {
+        .resolve = router->config.resolve_identity,
+        .resolve_context = router->config.resolve_context};
+    for (size_t i = 0; i < pending.count; i++) {
+        uint8_t retained[LXMF_STORE_MAX_PACKED];
+        size_t retained_length = 0;
+        lxmf_message_t message;
+        result->examined++;
+        if (lxmf_store_read_packed(router->config.store, pending.ids[i], retained,
+                                   sizeof retained, &retained_length) != LXMF_OK) {
+            result->pending++;
+            continue;
+        }
+        lxmf_status_t checked =
+            lxmf_unpack(retained, retained_length, lxmf_identity_verifier,
+                        &verifier, &message);
+        if (checked == LXMF_ERR_UNKNOWN_SIGNER) {
+            result->pending++;
+            continue;
+        }
+        /* Retained bytes that no longer hash to the stored identifier are as
+         * untrustworthy as a bad signature. */
+        if (checked == LXMF_OK &&
+            memcmp(message.message_id, pending.ids[i], LXMF_MESSAGE_ID_LENGTH) != 0)
+            checked = LXMF_ERR_FORMAT;
+        if (checked == LXMF_OK) {
+            if (lxmf_store_update_signature(router->config.store, pending.ids[i],
+                                            LXMF_SIGNATURE_VERIFIED) != LXMF_OK)
+                return LXMF_ERR_CRYPTO;
+            result->verified++;
+            report_signature(router, pending.ids[i], LXMF_SIGNATURE_VERIFIED);
+        } else {
+            if (lxmf_store_remove(router->config.store, pending.ids[i]) != LXMF_OK)
+                return LXMF_ERR_CRYPTO;
+            result->rejected++;
+            report_signature(router, pending.ids[i], LXMF_SIGNATURE_FAILED);
+        }
+    }
     return LXMF_OK;
 }

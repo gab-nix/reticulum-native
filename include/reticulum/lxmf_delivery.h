@@ -13,6 +13,9 @@ lxmf_status_t lxmf_opportunistic_packet_pack(
     const rns_identity *destination_identity,
     uint8_t *packet, size_t packet_capacity, size_t *packet_length);
 
+/* Decrypts and unpacks one opportunistic packet. LXMF_ERR_UNKNOWN_SIGNER means
+ * the payload parsed and the message is populated, but the verifier holds no
+ * identity for its source, so the signature is neither confirmed nor refuted. */
 lxmf_status_t lxmf_opportunistic_packet_unpack(
     const uint8_t *packet, size_t packet_length,
     const rns_identity *local_identity,

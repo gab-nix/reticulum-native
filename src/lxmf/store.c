@@ -1,40 +1,311 @@
 #include "reticulum/lxmf_store.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+/* Journal records share a 16 byte header: "LXMS", version, type, two reserved
+ * bytes, a big-endian payload length and a CRC32 over the payload.
+ *
+ * TYPE_PUT is the original 77 byte fixed prefix followed by the content. It is
+ * still read so journals written before signature states are carried load
+ * unchanged; such messages are verified by construction, because the only path
+ * that stored an inbound message required a verified signature. It is no longer
+ * written: new messages use TYPE_PUT_V2, which appends the signature state and
+ * the original packed message, and a compaction migrates the whole journal. */
 #define HEADER_SIZE 16u
 #define PUT_FIXED 77u
+#define PUT2_FIXED 80u
 #define STATUS_SIZE 33u
+#define SIGNATURE_SIZE 33u
+#define REMOVE_SIZE 32u
+#define MAX_PAYLOAD (PUT2_FIXED + LXMF_STORE_MAX_CONTENT + LXMF_STORE_MAX_PACKED)
 #define TYPE_PUT 1u
 #define TYPE_STATUS 2u
+#define TYPE_PUT_V2 3u
+#define TYPE_SIGNATURE 4u
+#define TYPE_REMOVE 5u
 
-typedef struct { uint8_t id[32]; uint64_t offset; uint32_t content_len; uint8_t status; } index_entry;
+typedef struct {
+    uint8_t id[32];
+    uint8_t source[16];
+    uint64_t offset;
+    uint32_t content_len;
+    uint16_t packed_len;
+    uint16_t fixed;
+    uint8_t status;
+    uint8_t signature;
+} index_entry;
 typedef struct { FILE *file; char path[LXMF_STORE_PATH_MAX+1]; index_entry index[LXMF_STORE_MAX_MESSAGES]; size_t count; } store_impl;
 
+static void put16(uint8_t *p,uint16_t v){p[0]=(uint8_t)(v>>8);p[1]=(uint8_t)v;}
+static uint16_t get16(const uint8_t *p){return (uint16_t)(((uint16_t)p[0]<<8)|p[1]);}
 static void put32(uint8_t *p,uint32_t v){p[0]=(uint8_t)(v>>24);p[1]=(uint8_t)(v>>16);p[2]=(uint8_t)(v>>8);p[3]=(uint8_t)v;}
 static uint32_t get32(const uint8_t *p){return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];}
 static void put64(uint8_t *p,uint64_t v){for(unsigned i=0;i<8;i++)p[7-i]=(uint8_t)(v>>(8*i));}
 static uint64_t get64(const uint8_t *p){uint64_t v=0;for(unsigned i=0;i<8;i++)v=(v<<8)|p[i];return v;}
 static uint32_t crc32_bytes(const uint8_t *p,size_t n){uint32_t c=0xffffffffu;while(n--){c^=*p++;for(unsigned i=0;i<8;i++)c=(c>>1)^(0xedb88320u&(~(c&1u)+1u));}return ~c;}
 static bool valid_status(uint8_t s){return s<=LXMF_DELIVERY_FAILED;}
+static bool valid_signature(uint8_t s){return s<=LXMF_SIGNATURE_FAILED;}
 static index_entry *find(store_impl *s,const uint8_t id[32]){for(size_t i=0;i<s->count;i++)if(memcmp(s->index[i].id,id,32)==0)return &s->index[i];return NULL;}
 static lxmf_status_t sync_file(FILE *f){if(fflush(f)!=0)return LXMF_ERR_CRYPTO;return fsync(fileno(f))==0?LXMF_OK:LXMF_ERR_CRYPTO;}
-static lxmf_status_t append_record(store_impl *s,uint8_t type,const uint8_t *payload,uint32_t n,uint64_t *offset){if(fseek(s->file,0,SEEK_END)!=0)return LXMF_ERR_CRYPTO;long pos=ftell(s->file);if(pos<0||(uint64_t)pos+HEADER_SIZE+n>LXMF_STORE_MAX_FILE_SIZE)return LXMF_ERR_BOUNDS;uint8_t h[HEADER_SIZE]={'L','X','M','S',1,type,0,0};put32(h+8,n);put32(h+12,crc32_bytes(payload,n));if(fwrite(h,1,sizeof h,s->file)!=sizeof h||fwrite(payload,1,n,s->file)!=n)return LXMF_ERR_CRYPTO;lxmf_status_t st=sync_file(s->file);if(st==LXMF_OK&&offset)*offset=(uint64_t)pos;return st;}
+static lxmf_status_t append_record(FILE *f,uint8_t type,const uint8_t *payload,uint32_t n,uint64_t *offset){if(fseek(f,0,SEEK_END)!=0)return LXMF_ERR_CRYPTO;long pos=ftell(f);if(pos<0||(uint64_t)pos+HEADER_SIZE+n>LXMF_STORE_MAX_FILE_SIZE)return LXMF_ERR_BOUNDS;uint8_t h[HEADER_SIZE]={'L','X','M','S',1,type,0,0};put32(h+8,n);put32(h+12,crc32_bytes(payload,n));if(fwrite(h,1,sizeof h,f)!=sizeof h||fwrite(payload,1,n,f)!=n)return LXMF_ERR_CRYPTO;lxmf_status_t st=sync_file(f);if(st==LXMF_OK&&offset)*offset=(uint64_t)pos;return st;}
 
-static lxmf_status_t scan(store_impl *s){s->count=0;if(fseek(s->file,0,SEEK_SET)!=0)return LXMF_ERR_CRYPTO;uint64_t good=0;for(;;){uint8_t h[HEADER_SIZE];size_t got=fread(h,1,sizeof h,s->file);if(got==0&&feof(s->file))break;if(got!=sizeof h)goto recover;if(memcmp(h,"LXMS",4)!=0||h[4]!=1||(h[5]!=TYPE_PUT&&h[5]!=TYPE_STATUS))goto recover;uint32_t n=get32(h+8);if(n>PUT_FIXED+LXMF_STORE_MAX_CONTENT||n==0)goto recover;uint8_t payload[PUT_FIXED+LXMF_STORE_MAX_CONTENT];if(fread(payload,1,n,s->file)!=n||crc32_bytes(payload,n)!=get32(h+12))goto recover;if(h[5]==TYPE_PUT){if(n<PUT_FIXED||get32(payload+73)!=n-PUT_FIXED||!valid_status(payload[72]))goto recover;index_entry *e=find(s,payload);if(!e){if(s->count>=LXMF_STORE_MAX_MESSAGES)return LXMF_ERR_BOUNDS;e=&s->index[s->count++];memcpy(e->id,payload,32);e->offset=good;e->content_len=n-PUT_FIXED;}e->status=payload[72];}else{if(n!=STATUS_SIZE||!valid_status(payload[32]))goto recover;index_entry *e=find(s,payload);if(e)e->status=payload[32];}good+=HEADER_SIZE+n;}clearerr(s->file);return LXMF_OK;
-recover: clearerr(s->file);if(ftruncate(fileno(s->file),(off_t)good)!=0)return LXMF_ERR_CRYPTO;if(fseek(s->file,0,SEEK_END)!=0)return LXMF_ERR_CRYPTO;return sync_file(s->file);}
+/* Serialises a TYPE_PUT_V2 payload. The caller owns a MAX_PAYLOAD buffer and
+ * has already bounded content and packed against the store limits. */
+static uint32_t encode_put(uint8_t *payload,const lxmf_store_message_t *m){
+    memcpy(payload,m->message_id,32);
+    memcpy(payload+32,m->destination,16);
+    memcpy(payload+48,m->source,16);
+    uint64_t bits;memcpy(&bits,&m->timestamp,8);put64(payload+64,bits);
+    payload[72]=(uint8_t)m->status;
+    put32(payload+73,(uint32_t)m->content.len);
+    payload[77]=(uint8_t)m->signature_state;
+    put16(payload+78,(uint16_t)m->packed.len);
+    if(m->content.len)memcpy(payload+PUT2_FIXED,m->content.data,m->content.len);
+    if(m->packed.len)memcpy(payload+PUT2_FIXED+m->content.len,m->packed.data,m->packed.len);
+    return (uint32_t)(PUT2_FIXED+m->content.len+m->packed.len);
+}
+
+static index_entry *upsert(store_impl *s,const uint8_t *payload,uint64_t offset,uint16_t fixed,uint32_t content_len,uint16_t packed_len){
+    index_entry *e=find(s,payload);
+    if(e)return e;
+    if(s->count>=LXMF_STORE_MAX_MESSAGES)return NULL;
+    e=&s->index[s->count++];
+    memset(e,0,sizeof *e);
+    memcpy(e->id,payload,32);
+    memcpy(e->source,payload+48,16);
+    e->offset=offset;e->fixed=fixed;e->content_len=content_len;e->packed_len=packed_len;
+    return e;
+}
+
+static void drop_index(store_impl *s,size_t i){
+    if(i+1<s->count)memmove(&s->index[i],&s->index[i+1],(s->count-i-1)*sizeof s->index[0]);
+    s->count--;
+    memset(&s->index[s->count],0,sizeof s->index[0]);
+}
+
+static lxmf_status_t scan(store_impl *s){
+    s->count=0;
+    if(fseek(s->file,0,SEEK_SET)!=0)return LXMF_ERR_CRYPTO;
+    uint64_t good=0;
+    for(;;){
+        uint8_t h[HEADER_SIZE];
+        size_t got=fread(h,1,sizeof h,s->file);
+        if(got==0&&feof(s->file))break;
+        if(got!=sizeof h)goto recover;
+        if(memcmp(h,"LXMS",4)!=0||h[4]!=1||h[5]<TYPE_PUT||h[5]>TYPE_REMOVE)goto recover;
+        uint32_t n=get32(h+8);
+        if(n==0||n>MAX_PAYLOAD)goto recover;
+        uint8_t payload[MAX_PAYLOAD];
+        if(fread(payload,1,n,s->file)!=n||crc32_bytes(payload,n)!=get32(h+12))goto recover;
+        if(h[5]==TYPE_PUT){
+            if(n<PUT_FIXED||get32(payload+73)!=n-PUT_FIXED||!valid_status(payload[72]))goto recover;
+            index_entry *e=upsert(s,payload,good,(uint16_t)PUT_FIXED,n-(uint32_t)PUT_FIXED,0u);
+            if(!e)return LXMF_ERR_BOUNDS;
+            e->status=payload[72];
+            e->signature=(uint8_t)LXMF_SIGNATURE_VERIFIED;
+        }else if(h[5]==TYPE_PUT_V2){
+            if(n<PUT2_FIXED||!valid_status(payload[72])||!valid_signature(payload[77]))goto recover;
+            uint32_t content_len=get32(payload+73);
+            uint16_t packed_len=get16(payload+78);
+            if(content_len>LXMF_STORE_MAX_CONTENT||packed_len>LXMF_STORE_MAX_PACKED||
+               n!=PUT2_FIXED+content_len+packed_len)goto recover;
+            index_entry *e=upsert(s,payload,good,(uint16_t)PUT2_FIXED,content_len,packed_len);
+            if(!e)return LXMF_ERR_BOUNDS;
+            e->status=payload[72];
+            e->signature=payload[77];
+        }else if(h[5]==TYPE_STATUS){
+            if(n!=STATUS_SIZE||!valid_status(payload[32]))goto recover;
+            index_entry *e=find(s,payload);
+            if(e)e->status=payload[32];
+        }else if(h[5]==TYPE_SIGNATURE){
+            if(n!=SIGNATURE_SIZE||!valid_signature(payload[32]))goto recover;
+            index_entry *e=find(s,payload);
+            if(e)e->signature=payload[32];
+        }else{
+            if(n!=REMOVE_SIZE)goto recover;
+            index_entry *e=find(s,payload);
+            if(e)drop_index(s,(size_t)(e-s->index));
+        }
+        good+=HEADER_SIZE+n;
+    }
+    clearerr(s->file);
+    return LXMF_OK;
+recover:
+    clearerr(s->file);
+    if(ftruncate(fileno(s->file),(off_t)good)!=0)return LXMF_ERR_CRYPTO;
+    if(fseek(s->file,0,SEEK_END)!=0)return LXMF_ERR_CRYPTO;
+    return sync_file(s->file);
+}
 
 lxmf_status_t lxmf_store_open(lxmf_store_t *store,const char *path){if(!store||!path||store->implementation||strlen(path)>LXMF_STORE_PATH_MAX)return LXMF_ERR_ARGUMENT;store_impl *s=calloc(1,sizeof *s);if(!s)return LXMF_ERR_BOUNDS;memcpy(s->path,path,strlen(path)+1);s->file=fopen(path,"a+b");if(!s->file){free(s);return LXMF_ERR_CRYPTO;}store->implementation=s;lxmf_status_t st=scan(s);if(st!=LXMF_OK){lxmf_store_close(store);return st;}return LXMF_OK;}
 void lxmf_store_close(lxmf_store_t *store){if(!store||!store->implementation)return;store_impl *s=store->implementation;if(s->file)fclose(s->file);free(s);store->implementation=NULL;}
 size_t lxmf_store_count(const lxmf_store_t *store){return store&&store->implementation?((store_impl *)store->implementation)->count:0;}
 
-lxmf_status_t lxmf_store_put(lxmf_store_t *store,const lxmf_store_message_t *m,bool *inserted){if(inserted)*inserted=false;if(!store||!store->implementation||!m||m->content.len>LXMF_STORE_MAX_CONTENT||(m->content.len&&!m->content.data)||!valid_status((uint8_t)m->status))return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;if(find(s,m->message_id)){return LXMF_OK;}if(s->count>=LXMF_STORE_MAX_MESSAGES)return LXMF_ERR_BOUNDS;uint32_t n=(uint32_t)(PUT_FIXED+m->content.len);uint8_t payload[PUT_FIXED+LXMF_STORE_MAX_CONTENT];memcpy(payload,m->message_id,32);memcpy(payload+32,m->destination,16);memcpy(payload+48,m->source,16);uint64_t bits;memcpy(&bits,&m->timestamp,8);put64(payload+64,bits);payload[72]=(uint8_t)m->status;put32(payload+73,(uint32_t)m->content.len);memcpy(payload+PUT_FIXED,m->content.data,m->content.len);uint64_t offset;lxmf_status_t st=append_record(s,TYPE_PUT,payload,n,&offset);if(st!=LXMF_OK)return st;index_entry *e=&s->index[s->count++];memcpy(e->id,m->message_id,32);e->offset=offset;e->content_len=(uint32_t)m->content.len;e->status=(uint8_t)m->status;if(inserted)*inserted=true;return LXMF_OK;}
-lxmf_status_t lxmf_store_update_status(lxmf_store_t *store,const uint8_t id[32],lxmf_delivery_status_t status){if(!store||!store->implementation||!id||!valid_status((uint8_t)status))return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;if(e->status==(uint8_t)status)return LXMF_OK;uint8_t p[STATUS_SIZE];memcpy(p,id,32);p[32]=(uint8_t)status;lxmf_status_t st=append_record(s,TYPE_STATUS,p,sizeof p,NULL);if(st==LXMF_OK)e->status=(uint8_t)status;return st;}
-lxmf_status_t lxmf_store_read(lxmf_store_t *store,const uint8_t id[32],lxmf_store_message_t *m,uint8_t *content,size_t cap){if(!store||!store->implementation||!id||!m)return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;if(e->content_len>cap||(e->content_len&&!content))return LXMF_ERR_BOUNDS;if(fseek(s->file,(long)(e->offset+HEADER_SIZE),SEEK_SET)!=0)return LXMF_ERR_CRYPTO;uint8_t fixed[PUT_FIXED];if(fread(fixed,1,sizeof fixed,s->file)!=sizeof fixed)return LXMF_ERR_CRYPTO;memset(m,0,sizeof *m);memcpy(m->message_id,fixed,32);memcpy(m->destination,fixed+32,16);memcpy(m->source,fixed+48,16);uint64_t bits=get64(fixed+64);memcpy(&m->timestamp,&bits,8);m->status=(lxmf_delivery_status_t)e->status;m->content.data=content;m->content.len=e->content_len;if(e->content_len&&fread(content,1,e->content_len,s->file)!=e->content_len)return LXMF_ERR_CRYPTO;return LXMF_OK;}
+static size_t unverified_total(const store_impl *s){size_t n=0;for(size_t i=0;i<s->count;i++)if(s->index[i].signature!=(uint8_t)LXMF_SIGNATURE_VERIFIED)n++;return n;}
+static size_t unverified_from(const store_impl *s,const uint8_t source[16]){size_t n=0;for(size_t i=0;i<s->count;i++)if(s->index[i].signature!=(uint8_t)LXMF_SIGNATURE_VERIFIED&&memcmp(s->index[i].source,source,16)==0)n++;return n;}
+static size_t unverified_sources(const store_impl *s){
+    size_t n=0;
+    for(size_t i=0;i<s->count;i++){
+        if(s->index[i].signature==(uint8_t)LXMF_SIGNATURE_VERIFIED)continue;
+        bool seen=false;
+        for(size_t j=0;j<i&&!seen;j++)
+            seen=s->index[j].signature!=(uint8_t)LXMF_SIGNATURE_VERIFIED&&
+                 memcmp(s->index[j].source,s->index[i].source,16)==0;
+        if(!seen)n++;
+    }
+    return n;
+}
+
+size_t lxmf_store_unverified_count(const lxmf_store_t *store){return store&&store->implementation?unverified_total(store->implementation):0;}
+
+static lxmf_status_t remove_at(store_impl *s,size_t i){
+    uint8_t payload[REMOVE_SIZE];
+    memcpy(payload,s->index[i].id,32);
+    lxmf_status_t st=append_record(s->file,TYPE_REMOVE,payload,REMOVE_SIZE,NULL);
+    if(st!=LXMF_OK)return st;
+    drop_index(s,i);
+    return LXMF_OK;
+}
+
+/* Evicts the oldest retained message of whichever unknown sender holds the most
+ * of them, so one flooding sender is drained before anyone else's message is.
+ * Ties resolve to the earliest journal position, which makes the choice
+ * identical across restarts. */
+static lxmf_status_t evict_one_unverified(store_impl *s){
+    size_t victim=s->count,best=0;
+    for(size_t i=0;i<s->count;i++){
+        if(s->index[i].signature==(uint8_t)LXMF_SIGNATURE_VERIFIED)continue;
+        size_t n=unverified_from(s,s->index[i].source);
+        if(n>best){best=n;victim=i;}
+    }
+    if(victim==s->count)return LXMF_ERR_BOUNDS;
+    return remove_at(s,victim);
+}
+
+static lxmf_status_t enforce_unverified_caps(store_impl *s,const uint8_t source[16]){
+    for(;;){
+        size_t total=unverified_total(s);
+        bool known=unverified_from(s,source)>0;
+        if(total<LXMF_STORE_MAX_UNVERIFIED&&
+           (known||unverified_sources(s)<LXMF_STORE_MAX_UNVERIFIED_SOURCES))
+            return LXMF_OK;
+        lxmf_status_t st=evict_one_unverified(s);
+        if(st!=LXMF_OK)return st;
+    }
+}
+
+lxmf_status_t lxmf_store_put(lxmf_store_t *store,const lxmf_store_message_t *m,bool *inserted){
+    if(inserted)*inserted=false;
+    if(!store||!store->implementation||!m||m->content.len>LXMF_STORE_MAX_CONTENT||
+       (m->content.len&&!m->content.data)||m->packed.len>LXMF_STORE_MAX_PACKED||
+       (m->packed.len&&!m->packed.data)||!valid_status((uint8_t)m->status)||
+       !valid_signature((uint8_t)m->signature_state))
+        return LXMF_ERR_ARGUMENT;
+    store_impl *s=store->implementation;
+    if(find(s,m->message_id))return LXMF_OK;
+    if(m->signature_state!=LXMF_SIGNATURE_VERIFIED){
+        lxmf_status_t capped=enforce_unverified_caps(s,m->source);
+        if(capped!=LXMF_OK)return capped;
+    }
+    if(s->count>=LXMF_STORE_MAX_MESSAGES)return LXMF_ERR_BOUNDS;
+    uint8_t payload[MAX_PAYLOAD];
+    uint32_t n=encode_put(payload,m);
+    uint64_t offset;
+    lxmf_status_t st=append_record(s->file,TYPE_PUT_V2,payload,n,&offset);
+    if(st!=LXMF_OK)return st;
+    index_entry *e=upsert(s,payload,offset,(uint16_t)PUT2_FIXED,(uint32_t)m->content.len,(uint16_t)m->packed.len);
+    if(!e)return LXMF_ERR_BOUNDS;
+    e->status=(uint8_t)m->status;
+    e->signature=(uint8_t)m->signature_state;
+    if(inserted)*inserted=true;
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_store_update_status(lxmf_store_t *store,const uint8_t id[32],lxmf_delivery_status_t status){if(!store||!store->implementation||!id||!valid_status((uint8_t)status))return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;if(e->status==(uint8_t)status)return LXMF_OK;uint8_t p[STATUS_SIZE];memcpy(p,id,32);p[32]=(uint8_t)status;lxmf_status_t st=append_record(s->file,TYPE_STATUS,p,sizeof p,NULL);if(st==LXMF_OK)e->status=(uint8_t)status;return st;}
+lxmf_status_t lxmf_store_update_signature(lxmf_store_t *store,const uint8_t id[32],lxmf_signature_state_t state){if(!store||!store->implementation||!id||!valid_signature((uint8_t)state))return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;if(e->signature==(uint8_t)state)return LXMF_OK;uint8_t p[SIGNATURE_SIZE];memcpy(p,id,32);p[32]=(uint8_t)state;lxmf_status_t st=append_record(s->file,TYPE_SIGNATURE,p,sizeof p,NULL);if(st==LXMF_OK)e->signature=(uint8_t)state;return st;}
+lxmf_status_t lxmf_store_remove(lxmf_store_t *store,const uint8_t id[32]){if(!store||!store->implementation||!id)return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;return remove_at(s,(size_t)(e-s->index));}
+
+static lxmf_status_t seek_body(store_impl *s,const index_entry *e,uint64_t skip){
+    uint64_t at=e->offset+HEADER_SIZE+skip;
+    if(at>(uint64_t)LONG_MAX)return LXMF_ERR_BOUNDS;
+    return fseek(s->file,(long)at,SEEK_SET)==0?LXMF_OK:LXMF_ERR_CRYPTO;
+}
+
+lxmf_status_t lxmf_store_read(lxmf_store_t *store,const uint8_t id[32],lxmf_store_message_t *m,uint8_t *content,size_t cap){
+    if(!store||!store->implementation||!id||!m)return LXMF_ERR_ARGUMENT;
+    store_impl *s=store->implementation;
+    index_entry *e=find(s,id);
+    if(!e)return LXMF_ERR_FORMAT;
+    if(e->content_len>cap||(e->content_len&&!content))return LXMF_ERR_BOUNDS;
+    lxmf_status_t st=seek_body(s,e,0);
+    if(st!=LXMF_OK)return st;
+    uint8_t fixed[PUT2_FIXED];
+    if(fread(fixed,1,e->fixed,s->file)!=e->fixed)return LXMF_ERR_CRYPTO;
+    memset(m,0,sizeof *m);
+    memcpy(m->message_id,fixed,32);
+    memcpy(m->destination,fixed+32,16);
+    memcpy(m->source,fixed+48,16);
+    uint64_t bits=get64(fixed+64);
+    memcpy(&m->timestamp,&bits,8);
+    m->status=(lxmf_delivery_status_t)e->status;
+    m->signature_state=(lxmf_signature_state_t)e->signature;
+    m->content.data=content;
+    m->content.len=e->content_len;
+    if(e->content_len&&fread(content,1,e->content_len,s->file)!=e->content_len)return LXMF_ERR_CRYPTO;
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_store_read_packed(lxmf_store_t *store,const uint8_t id[32],uint8_t *packed,size_t capacity,size_t *packed_len){
+    if(!store||!store->implementation||!id||!packed||!packed_len)return LXMF_ERR_ARGUMENT;
+    store_impl *s=store->implementation;
+    index_entry *e=find(s,id);
+    if(!e)return LXMF_ERR_FORMAT;
+    if(e->packed_len==0u)return LXMF_ERR_FORMAT;
+    if(e->packed_len>capacity)return LXMF_ERR_BOUNDS;
+    lxmf_status_t st=seek_body(s,e,(uint64_t)e->fixed+e->content_len);
+    if(st!=LXMF_OK)return st;
+    if(fread(packed,1,e->packed_len,s->file)!=e->packed_len)return LXMF_ERR_CRYPTO;
+    *packed_len=e->packed_len;
+    return LXMF_OK;
+}
+
 lxmf_status_t lxmf_store_list(lxmf_store_t *store,lxmf_store_list_fn cb,void *ctx){if(!store||!store->implementation||!cb)return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;uint8_t content[LXMF_STORE_MAX_CONTENT];for(size_t i=0;i<s->count;i++){lxmf_store_message_t m;lxmf_status_t st=lxmf_store_read(store,s->index[i].id,&m,content,sizeof content);if(st!=LXMF_OK)return st;if(!cb(ctx,&m))break;}return LXMF_OK;}
 
-lxmf_status_t lxmf_store_compact(lxmf_store_t *store){if(!store||!store->implementation)return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;char tmp[LXMF_STORE_PATH_MAX+5];if(strlen(s->path)+4>=sizeof tmp)return LXMF_ERR_BOUNDS;snprintf(tmp,sizeof tmp,"%s.tmp",s->path);FILE *out=fopen(tmp,"w+b");if(!out)return LXMF_ERR_CRYPTO;store_impl target={0};target.file=out;uint8_t content[LXMF_STORE_MAX_CONTENT];lxmf_status_t st=LXMF_OK;for(size_t i=0;i<s->count&&st==LXMF_OK;i++){lxmf_store_message_t m;st=lxmf_store_read(store,s->index[i].id,&m,content,sizeof content);if(st!=LXMF_OK)break;m.status=(lxmf_delivery_status_t)s->index[i].status;uint8_t payload[PUT_FIXED+LXMF_STORE_MAX_CONTENT];memcpy(payload,m.message_id,32);memcpy(payload+32,m.destination,16);memcpy(payload+48,m.source,16);uint64_t bits;memcpy(&bits,&m.timestamp,8);put64(payload+64,bits);payload[72]=(uint8_t)m.status;put32(payload+73,(uint32_t)m.content.len);memcpy(payload+PUT_FIXED,m.content.data,m.content.len);st=append_record(&target,TYPE_PUT,payload,(uint32_t)(PUT_FIXED+m.content.len),NULL);}if(st==LXMF_OK)st=sync_file(out);if(fclose(out)!=0&&st==LXMF_OK)st=LXMF_ERR_CRYPTO;if(st!=LXMF_OK){unlink(tmp);return st;}if(rename(tmp,s->path)!=0){unlink(tmp);return LXMF_ERR_CRYPTO;}fclose(s->file);s->file=fopen(s->path,"r+b");if(!s->file)return LXMF_ERR_CRYPTO;return scan(s);}
+lxmf_status_t lxmf_store_compact(lxmf_store_t *store){
+    if(!store||!store->implementation)return LXMF_ERR_ARGUMENT;
+    store_impl *s=store->implementation;
+    char tmp[LXMF_STORE_PATH_MAX+5];
+    if(strlen(s->path)+4>=sizeof tmp)return LXMF_ERR_BOUNDS;
+    snprintf(tmp,sizeof tmp,"%s.tmp",s->path);
+    FILE *out=fopen(tmp,"w+b");
+    if(!out)return LXMF_ERR_CRYPTO;
+    uint8_t content[LXMF_STORE_MAX_CONTENT],packed[LXMF_STORE_MAX_PACKED];
+    lxmf_status_t st=LXMF_OK;
+    for(size_t i=0;i<s->count&&st==LXMF_OK;i++){
+        lxmf_store_message_t m;
+        size_t packed_len=0;
+        st=lxmf_store_read(store,s->index[i].id,&m,content,sizeof content);
+        if(st!=LXMF_OK)break;
+        if(s->index[i].packed_len){
+            st=lxmf_store_read_packed(store,s->index[i].id,packed,sizeof packed,&packed_len);
+            if(st!=LXMF_OK)break;
+            m.packed=(lxmf_slice_t){packed,packed_len};
+        }
+        uint8_t payload[MAX_PAYLOAD];
+        uint32_t n=encode_put(payload,&m);
+        st=append_record(out,TYPE_PUT_V2,payload,n,NULL);
+    }
+    if(st==LXMF_OK)st=sync_file(out);
+    if(fclose(out)!=0&&st==LXMF_OK)st=LXMF_ERR_CRYPTO;
+    if(st!=LXMF_OK){unlink(tmp);return st;}
+    if(rename(tmp,s->path)!=0){unlink(tmp);return LXMF_ERR_CRYPTO;}
+    fclose(s->file);
+    s->file=fopen(s->path,"r+b");
+    if(!s->file)return LXMF_ERR_CRYPTO;
+    return scan(s);
+}
