@@ -19,6 +19,10 @@ static void put32(uint8_t *out, uint32_t value) {
     out[3] = (uint8_t)value;
 }
 
+static uint16_t get16(const uint8_t *in) {
+    return (uint16_t)(((uint16_t)in[0] << 8) | in[1]);
+}
+
 static uint32_t get32(const uint8_t *in) {
     return ((uint32_t)in[0] << 24) | ((uint32_t)in[1] << 16) |
            ((uint32_t)in[2] << 8) | in[3];
@@ -83,6 +87,36 @@ static void add_unknown_record(const char *path) {
     assert(close(fd) == 0);
 }
 
+static void inject_record_nul(const char *path, uint16_t wanted_type) {
+    uint8_t file[4096];
+    FILE *input = fopen(path, "rb");
+    assert(input != NULL);
+    size_t file_length = fread(file, 1u, sizeof file, input);
+    assert(!ferror(input) && fclose(input) == 0 && file_length >= 20u);
+    size_t body_length = get32(file + 12u);
+    assert(file_length == 20u + body_length);
+    size_t offset = 20u;
+    bool found = false;
+    while (offset < file_length) {
+        assert(file_length - offset >= 4u);
+        uint16_t type = get16(file + offset);
+        size_t length = get16(file + offset + 2u);
+        assert(length <= file_length - offset - 4u);
+        if (type == wanted_type) {
+            assert(length >= 2u);
+            file[offset + 5u] = 0u;
+            found = true;
+            break;
+        }
+        offset += 4u + length;
+    }
+    assert(found);
+    put32(file + 16u, v2_crc(file, file + 20u, body_length));
+    int fd = open(path, O_WRONLY | O_TRUNC);
+    assert(fd >= 0 && write(fd, file, file_length) == (ssize_t)file_length);
+    assert(close(fd) == 0);
+}
+
 int main(void) {
     char path[] = "/tmp/nomad-settings-XXXXXX";
     int descriptor = mkstemp(path);
@@ -140,6 +174,21 @@ int main(void) {
     assert(strcmp(loaded.rrc_last_room, "lobby") == 0);
     assert(strcmp(loaded.rrc_draft, "unfinished") == 0);
     assert(!loaded.rrc_auto_reconnect);
+
+    /* Length-delimited text may not hide bytes after an embedded NUL. */
+    static const uint16_t text_records[] = {1u, 10u, 14u};
+    for (size_t i = 0u; i < sizeof text_records / sizeof text_records[0]; ++i) {
+        assert(tui_settings_save(path, &settings));
+        inject_record_nul(path, text_records[i]);
+        tui_settings_t unchanged;
+        tui_settings_defaults(&unchanged);
+        memcpy(unchanged.display_name, "Keep", 5u);
+        unchanged.display_name_len = 4u;
+        tui_settings_t before = unchanged;
+        assert(!tui_settings_load(path, &unchanged, &found));
+        assert(memcmp(&unchanged, &before, sizeof unchanged) == 0);
+    }
+    assert(tui_settings_save(path, &settings));
 
     add_unknown_record(path);
     assert(tui_settings_load(path, &loaded, &found) && found);

@@ -226,7 +226,7 @@ static bool load_v1(FILE *file, tui_settings_t *loaded) {
 
 static bool set_text(char *target, size_t capacity, const uint8_t *data,
                      size_t length) {
-    if (length > capacity) return false;
+    if (length > capacity || memchr(data, '\0', length) != NULL) return false;
     memcpy(target, data, length);
     target[length] = '\0';
     return true;
