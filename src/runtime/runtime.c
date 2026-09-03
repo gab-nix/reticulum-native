@@ -38,9 +38,23 @@ struct rns_runtime_link {
     rns_request_receipt_t *requests[RNS_RUNTIME_MAX_REQUESTS];
     rns_resource_t *resource;
     rns_request_receipt_t *resource_receipt;
+    bool resource_application;
+    double resource_deadline;
+    uint8_t resource_hash[RNS_RESOURCE_HASH_SIZE];
+    rns_runtime_resource_transfer_t *outgoing_resource;
     uint8_t callback_packet_hash[RNS_PROOF_HASH_SIZE];
     bool callback_packet_provable;
     bool remote_identified;
+};
+
+struct rns_runtime_resource_transfer {
+    rns_runtime_link_t *link;
+    rns_resource_sender_t *sender;
+    rns_runtime_resource_options_t options;
+    rns_runtime_resource_state_t state;
+    double deadline;
+    size_t sent_parts;
+    bool part_sent[RNS_RESOURCE_MAX_PARTS];
 };
 
 struct rns_runtime_destination {
@@ -318,6 +332,40 @@ static void resource_release(rns_runtime_link_t *link) {
     rns_resource_destroy(link->resource);
     link->resource = NULL;
     link->resource_receipt = NULL;
+    link->resource_application = false;
+    link->resource_deadline = 0.0;
+    memset(link->resource_hash, 0, sizeof link->resource_hash);
+}
+
+static void outgoing_resource_finish(rns_runtime_resource_transfer_t *transfer,
+                                     rns_runtime_resource_state_t state,
+                                     rns_status_t status) {
+    if (transfer == NULL || transfer->link == NULL) return;
+    rns_runtime_link_t *link = transfer->link;
+    if (link->outgoing_resource == transfer) link->outgoing_resource = NULL;
+    transfer->link = NULL;
+    transfer->state = state;
+    if (transfer->options.callback != NULL)
+        transfer->options.callback(
+            transfer, state, status, transfer->sent_parts,
+            rns_resource_sender_total_parts(transfer->sender),
+            transfer->options.callback_context);
+}
+
+static void incoming_resource_abort(rns_runtime_link_t *link,
+                                    rns_status_t status) {
+    bool application = link->resource_application;
+    uint8_t hash[RNS_RESOURCE_HASH_SIZE];
+    memcpy(hash, link->resource_hash, sizeof hash);
+    rns_request_receipt_t *receipt = link->resource_receipt;
+    resource_release(link);
+    if (receipt != NULL && receipt->state == RNS_REQUEST_PENDING) {
+        receipt->state = RNS_REQUEST_FAILED;
+        request_notify(receipt, status, NULL, 0U);
+    } else if (application && link->options.resource_receive_callback != NULL) {
+        link->options.resource_receive_callback(
+            link, hash, status, NULL, 0U, link->options.callback_context);
+    }
 }
 
 static rns_status_t resource_request_parts(rns_runtime_link_t *link) {
@@ -338,16 +386,44 @@ static bool resource_advertised(rns_runtime_link_t *link, const uint8_t *plainte
     rns_request_receipt_t *receipt =
         advertisement.has_request_id ? find_receipt(link, advertisement.request_id)
                                      : NULL;
-    if (receipt == NULL) return false;
+    bool application = receipt == NULL && !advertisement.is_response;
+    if (!application && receipt == NULL) {
+        (void)link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_RCL,
+                               advertisement.hash, sizeof advertisement.hash);
+        return true;
+    }
+    if (application &&
+        (link->options.resource_accept_callback == NULL ||
+         !link->options.resource_accept_callback(
+             link, &advertisement, link->options.callback_context))) {
+        (void)link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_RCL,
+                               advertisement.hash, sizeof advertisement.hash);
+        return true;
+    }
     if (link->resource != NULL) resource_release(link);
+    size_t maximum = application ? link->options.max_incoming_resource_size
+                                 : receipt->options.max_response_size;
+    if (maximum == 0U) maximum = RNS_RESOURCE_DEFAULT_MAX_SIZE;
     if (rns_resource_accept(&link->resource, &advertisement,
-                            receipt->options.max_response_size) != RNS_OK) {
+                            maximum) != RNS_OK) {
         link->resource = NULL;
-        return false;
+        (void)link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_RCL,
+                               advertisement.hash, sizeof advertisement.hash);
+        if (receipt != NULL) {
+            receipt->state = RNS_REQUEST_FAILED;
+            request_notify(receipt, RNS_ERROR_OVERFLOW, NULL, 0U);
+        }
+        return true;
     }
     link->resource_receipt = receipt;
+    link->resource_application = application;
+    link->resource_deadline = runtime_clock(NULL) +
+        (link->options.timeout_seconds > 0.0 ? link->options.timeout_seconds
+                                             : 30.0);
+    memcpy(link->resource_hash, advertisement.hash,
+           sizeof link->resource_hash);
     if (resource_request_parts(link) != RNS_OK) {
-        resource_release(link);
+        incoming_resource_abort(link, RNS_ERROR_IO);
         return false;
     }
     return true;
@@ -355,57 +431,137 @@ static bool resource_advertised(rns_runtime_link_t *link, const uint8_t *plainte
 
 static void resource_complete(rns_runtime_link_t *link) {
     rns_request_receipt_t *receipt = link->resource_receipt;
+    bool application = link->resource_application;
+    uint8_t resource_hash[RNS_RESOURCE_HASH_SIZE];
+    memcpy(resource_hash, link->resource_hash, sizeof resource_hash);
     uint8_t proof[RNS_RESOURCE_PROOF_SIZE];
-    size_t capacity = receipt->options.max_response_size;
+    size_t capacity = application ? link->options.max_incoming_resource_size
+                                  : receipt->options.max_response_size;
+    if (capacity == 0U) capacity = RNS_RESOURCE_DEFAULT_MAX_SIZE;
     uint8_t *assembled = malloc(capacity != 0U ? capacity : 1U);
     size_t assembled_length = 0U;
     if (assembled == NULL) {
-        receipt->state = RNS_REQUEST_FAILED;
-        request_notify(receipt, RNS_ERROR_NO_MEMORY, NULL, 0U);
-        resource_release(link);
+        incoming_resource_abort(link, RNS_ERROR_NO_MEMORY);
         return;
     }
     rns_status_t status = rns_resource_assemble(link->resource, &link->protocol,
                                                 assembled, capacity,
                                                 &assembled_length);
     if (status != RNS_OK) {
-        receipt->state = RNS_REQUEST_FAILED;
-        request_notify(receipt, status, NULL, 0U);
         free(assembled);
-        resource_release(link);
+        incoming_resource_abort(link, status);
         return;
     }
     if (rns_resource_build_proof(link->resource, proof) == RNS_OK)
         (void)link_send_proof(link, RNS_LINK_CONTEXT_RESOURCE_PRF, proof,
                               sizeof proof);
-    /* A response resource carries the same [request id, response] pair. */
-    rns_response_view_t response;
-    if (rns_response_decode(assembled, assembled_length, &response) == RNS_OK) {
-        receipt->state = RNS_REQUEST_COMPLETE;
-        request_notify(receipt, RNS_OK, response.response, response.response_length);
+    if (application) {
+        resource_release(link);
+        if (link->options.resource_receive_callback != NULL)
+            link->options.resource_receive_callback(
+                link, resource_hash, RNS_OK, assembled, assembled_length,
+                link->options.callback_context);
     } else {
-        receipt->state = RNS_REQUEST_FAILED;
-        request_notify(receipt, RNS_ERROR_PROTOCOL, NULL, 0U);
+        /* A response resource carries the same [request id, response] pair. */
+        rns_response_view_t response;
+        if (rns_response_decode(assembled, assembled_length, &response) == RNS_OK) {
+            receipt->state = RNS_REQUEST_COMPLETE;
+            request_notify(receipt, RNS_OK, response.response,
+                           response.response_length);
+        } else {
+            receipt->state = RNS_REQUEST_FAILED;
+            request_notify(receipt, RNS_ERROR_PROTOCOL, NULL, 0U);
+        }
     }
     free(assembled);
-    resource_release(link);
+    if (!application) resource_release(link);
 }
 
 static bool resource_part(rns_runtime_link_t *link, const uint8_t *plaintext,
                           size_t plaintext_length) {
-    if (link->resource == NULL || link->resource_receipt == NULL) return false;
-    if (link->resource_receipt->state != RNS_REQUEST_PENDING) {
+    if (link->resource == NULL) return false;
+    if (link->resource_receipt != NULL &&
+        link->resource_receipt->state != RNS_REQUEST_PENDING) {
         resource_release(link);
         return false;
     }
     if (rns_resource_receive_part(link->resource, plaintext, plaintext_length) != RNS_OK)
         return false;
     link->last_inbound = runtime_clock(NULL);
+    link->resource_deadline = link->last_inbound +
+        (link->options.timeout_seconds > 0.0 ? link->options.timeout_seconds
+                                             : 30.0);
     if (rns_resource_parts_complete(link->resource)) resource_complete(link);
     else if (resource_request_parts(link) != RNS_OK) {
         /* Nothing outstanding in this window; the sender keeps streaming. */
     }
     return true;
+}
+
+static bool outgoing_resource_request(rns_runtime_link_t *link,
+                                      const uint8_t *request,
+                                      size_t request_length) {
+    rns_runtime_resource_transfer_t *transfer = link->outgoing_resource;
+    size_t indexes[RNS_RESOURCE_MAX_PARTS];
+    size_t count = 0U;
+    if (transfer == NULL ||
+        rns_resource_sender_requested_parts(transfer->sender, request,
+                                            request_length, indexes,
+                                            RNS_RESOURCE_MAX_PARTS,
+                                            &count) != RNS_OK)
+        return false;
+    transfer->deadline = runtime_clock(NULL) +
+        (transfer->options.timeout_seconds > 0.0
+             ? transfer->options.timeout_seconds
+             : 30.0);
+    for (size_t i = 0U; i < count; ++i) {
+        const uint8_t *part = NULL;
+        size_t part_length = 0U;
+        if (rns_resource_sender_part(transfer->sender, indexes[i], &part,
+                                     &part_length) != RNS_OK ||
+            link_send_wire(link, RNS_LINK_CONTEXT_RESOURCE, part, part_length,
+                           NULL) != RNS_OK) {
+            outgoing_resource_finish(transfer, RNS_RUNTIME_RESOURCE_FAILED,
+                                     RNS_ERROR_IO);
+            return true;
+        }
+        if (!transfer->part_sent[indexes[i]]) {
+            transfer->part_sent[indexes[i]] = true;
+            transfer->sent_parts++;
+        }
+    }
+    if (count != 0U && transfer->state == RNS_RUNTIME_RESOURCE_ADVERTISED) {
+        transfer->state = RNS_RUNTIME_RESOURCE_TRANSFERRING;
+        if (transfer->options.callback != NULL)
+            transfer->options.callback(
+                transfer, transfer->state, RNS_OK, transfer->sent_parts,
+                rns_resource_sender_total_parts(transfer->sender),
+                transfer->options.callback_context);
+    }
+    return true;
+}
+
+static bool outgoing_resource_proof(rns_runtime_link_t *link,
+                                    const uint8_t *proof,
+                                    size_t proof_length) {
+    rns_runtime_resource_transfer_t *transfer = link->outgoing_resource;
+    if (transfer == NULL || proof_length != RNS_RESOURCE_PROOF_SIZE ||
+        memcmp(proof, rns_resource_sender_hash(transfer->sender),
+               RNS_RESOURCE_HASH_SIZE) != 0)
+        return false;
+    if (rns_resource_sender_validate_proof(transfer->sender, proof,
+                                           proof_length) != RNS_OK)
+        return false;
+    outgoing_resource_finish(transfer, RNS_RUNTIME_RESOURCE_COMPLETE, RNS_OK);
+    return true;
+}
+
+static void fail_link_resources(rns_runtime_link_t *link,
+                                rns_status_t status) {
+    if (link->resource != NULL) incoming_resource_abort(link, status);
+    if (link->outgoing_resource != NULL)
+        outgoing_resource_finish(link->outgoing_resource,
+                                 RNS_RUNTIME_RESOURCE_FAILED, status);
 }
 
 static rns_runtime_destination_t *find_link_destination(
@@ -520,6 +676,12 @@ static bool link_ingress(rns_runtime_t *runtime, size_t interface_index,
             link_notify(link, RNS_LINK_ACTIVE, RNS_OK);
             return true;
         }
+        if (link->protocol.state == RNS_LINK_ACTIVE && packet.packet_type == 3U &&
+            packet.context == RNS_LINK_CONTEXT_RESOURCE_PRF) {
+            (void)outgoing_resource_proof(link, packet.data,
+                                          packet.data_length);
+            return true;
+        }
         if (link->protocol.state != RNS_LINK_ACTIVE || packet.packet_type != 0U)
             return true;
         if (packet.context == RNS_LINK_CONTEXT_KEEPALIVE) {
@@ -560,6 +722,7 @@ static bool link_ingress(rns_runtime_t *runtime, size_t interface_index,
         if (packet.context == RNS_LINK_CONTEXT_CLOSE) {
             link->protocol.state = RNS_LINK_CLOSED;
             fail_pending_requests(link, RNS_ERROR_INVALID_STATE);
+            fail_link_resources(link, RNS_ERROR_INVALID_STATE);
             link_notify(link, RNS_LINK_CLOSED, RNS_OK);
         } else if (packet.context == RNS_LINK_CONTEXT_IDENTIFY) {
             if (link->protocol.role != RNS_LINK_RESPONDER ||
@@ -584,20 +747,29 @@ static bool link_ingress(rns_runtime_t *runtime, size_t interface_index,
             }
         } else if (packet.context == RNS_LINK_CONTEXT_RESPONSE) {
             (void)handle_response(link, payload, plaintext_length);
-        } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE_ADV &&
-                   resource_advertised(link, payload, plaintext_length)) {
-            /* Taken over by the resource layer. */
+        } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE_ADV) {
+            (void)resource_advertised(link, payload, plaintext_length);
+        } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE_REQ) {
+            (void)outgoing_resource_request(link, payload, plaintext_length);
         } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE &&
                    link->resource != NULL) {
             (void)resource_part(link, payload, plaintext_length);
-        } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE_ICL &&
-                   link->resource != NULL) {
-            rns_request_receipt_t *receipt = link->resource_receipt;
-            resource_release(link);
-            if (receipt != NULL && receipt->state == RNS_REQUEST_PENDING) {
-                receipt->state = RNS_REQUEST_FAILED;
-                request_notify(receipt, RNS_ERROR_IO, NULL, 0U);
-            }
+        } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE_ICL) {
+            if (link->resource != NULL &&
+                plaintext_length == RNS_RESOURCE_HASH_SIZE &&
+                memcmp(payload, link->resource_hash,
+                       RNS_RESOURCE_HASH_SIZE) == 0)
+                incoming_resource_abort(link, RNS_ERROR_INVALID_STATE);
+        } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE_RCL) {
+            if (link->outgoing_resource != NULL &&
+                plaintext_length == RNS_RESOURCE_HASH_SIZE &&
+                memcmp(payload,
+                       rns_resource_sender_hash(
+                           link->outgoing_resource->sender),
+                       RNS_RESOURCE_HASH_SIZE) == 0)
+                outgoing_resource_finish(link->outgoing_resource,
+                                         RNS_RUNTIME_RESOURCE_REJECTED,
+                                         RNS_ERROR_INVALID_STATE);
         } else if (link_encrypted &&
                    link->options.packet_callback != NULL) {
             if (!rns_packet_hash(raw, raw_length, link->callback_packet_hash))
@@ -757,10 +929,7 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
     }
     for (size_t i = 0U; i < RNS_RUNTIME_MAX_LINKS; i++) {
         if (runtime->links[i] != NULL)
-            for (size_t j = 0U; j < RNS_RUNTIME_MAX_REQUESTS; j++)
-                free(runtime->links[i]->requests[j]);
-        free(runtime->links[i]);
-        runtime->links[i] = NULL;
+            rns_runtime_link_destroy(runtime->links[i]);
     }
     for (size_t i = 0U; i < RNS_RUNTIME_MAX_DESTINATIONS; ++i) {
         free(runtime->destinations[i]);
@@ -825,16 +994,26 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
                 request_notify(receipt, RNS_ERROR_TIMEOUT, NULL, 0U);
             }
         }
+        if (link->outgoing_resource != NULL &&
+            now >= link->outgoing_resource->deadline)
+            outgoing_resource_finish(link->outgoing_resource,
+                                     RNS_RUNTIME_RESOURCE_FAILED,
+                                     RNS_ERROR_TIMEOUT);
+        if (link->resource != NULL && link->resource_deadline > 0.0 &&
+            now >= link->resource_deadline)
+            incoming_resource_abort(link, RNS_ERROR_TIMEOUT);
         if ((link->protocol.state == RNS_LINK_PENDING ||
              link->protocol.state == RNS_LINK_HANDSHAKE) &&
             rns_link_check_timeout(&link->protocol)) {
             fail_pending_requests(link, RNS_ERROR_TIMEOUT);
+            fail_link_resources(link, RNS_ERROR_TIMEOUT);
             link_notify(link, RNS_LINK_CLOSED, RNS_ERROR_TIMEOUT);
         } else if (link->protocol.state == RNS_LINK_ACTIVE &&
                  now - link->last_inbound >= 2.0 * link->keepalive_seconds +
                                              link->protocol.rtt * 4.0 + 5.0) {
             link->protocol.state = RNS_LINK_CLOSED;
             fail_pending_requests(link, RNS_ERROR_TIMEOUT);
+            fail_link_resources(link, RNS_ERROR_TIMEOUT);
             link_notify(link, RNS_LINK_CLOSED, RNS_ERROR_TIMEOUT);
         } else if (link->protocol.state == RNS_LINK_ACTIVE &&
                    now - link->last_outbound >= link->keepalive_seconds) {
@@ -1526,6 +1705,112 @@ const uint8_t *rns_runtime_link_id(const rns_runtime_link_t *link) {
     return link != NULL ? link->protocol.link_id : NULL;
 }
 
+rns_status_t rns_runtime_link_send_resource(
+    rns_runtime_link_t *link, const uint8_t *data, size_t data_length,
+    const rns_runtime_resource_options_t *options,
+    rns_runtime_resource_transfer_t **output) {
+    uint8_t advertisement[RNS_MTU];
+    size_t advertisement_length = 0U;
+    rns_resource_sender_options_t sender_options = {0};
+    if (link == NULL || output == NULL ||
+        (data == NULL && data_length != 0U))
+        return RNS_ERROR_INVALID_ARGUMENT;
+    *output = NULL;
+    if (link->protocol.state != RNS_LINK_ACTIVE)
+        return RNS_ERROR_INVALID_STATE;
+    if (link->outgoing_resource != NULL) return RNS_ERROR_OVERFLOW;
+    rns_runtime_resource_transfer_t *transfer =
+        calloc(1U, sizeof *transfer);
+    if (transfer == NULL) return RNS_ERROR_NO_MEMORY;
+    if (options != NULL) transfer->options = *options;
+    sender_options.auto_compress = transfer->options.auto_compress;
+    sender_options.is_response = transfer->options.is_response;
+    sender_options.request_id = transfer->options.request_id;
+    rns_status_t status = rns_resource_sender_create(
+        &transfer->sender, &link->protocol, data, data_length,
+        &sender_options);
+    if (status != RNS_OK) {
+        free(transfer);
+        return status;
+    }
+    transfer->options.request_id = NULL;
+    status = rns_resource_sender_advertisement(
+        transfer->sender, advertisement, sizeof advertisement,
+        &advertisement_length);
+    if (status != RNS_OK) {
+        rns_resource_sender_destroy(transfer->sender);
+        free(transfer);
+        return status;
+    }
+    transfer->link = link;
+    transfer->state = RNS_RUNTIME_RESOURCE_ADVERTISED;
+    double timeout = transfer->options.timeout_seconds;
+    if (timeout <= 0.0) timeout = 30.0;
+    transfer->deadline = runtime_clock(NULL) + timeout;
+    link->outgoing_resource = transfer;
+    status = link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_ADV,
+                              advertisement, advertisement_length);
+    if (status != RNS_OK) {
+        link->outgoing_resource = NULL;
+        rns_resource_sender_destroy(transfer->sender);
+        free(transfer);
+        return status;
+    }
+    *output = transfer;
+    return RNS_OK;
+}
+
+rns_runtime_resource_state_t rns_runtime_resource_transfer_state(
+    const rns_runtime_resource_transfer_t *transfer) {
+    return transfer != NULL ? transfer->state : RNS_RUNTIME_RESOURCE_FAILED;
+}
+
+size_t rns_runtime_resource_transfer_sent_parts(
+    const rns_runtime_resource_transfer_t *transfer) {
+    return transfer != NULL ? transfer->sent_parts : 0U;
+}
+
+size_t rns_runtime_resource_transfer_total_parts(
+    const rns_runtime_resource_transfer_t *transfer) {
+    return transfer != NULL
+               ? rns_resource_sender_total_parts(transfer->sender)
+               : 0U;
+}
+
+const uint8_t *rns_runtime_resource_transfer_hash(
+    const rns_runtime_resource_transfer_t *transfer) {
+    return transfer != NULL ? rns_resource_sender_hash(transfer->sender) : NULL;
+}
+
+void rns_runtime_resource_transfer_cancel(
+    rns_runtime_resource_transfer_t *transfer) {
+    if (transfer == NULL || transfer->link == NULL) return;
+    rns_runtime_link_t *link = transfer->link;
+    (void)link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_ICL,
+                           rns_resource_sender_hash(transfer->sender),
+                           RNS_RESOURCE_HASH_SIZE);
+    outgoing_resource_finish(transfer, RNS_RUNTIME_RESOURCE_CANCELLED,
+                             RNS_OK);
+}
+
+void rns_runtime_resource_transfer_destroy(
+    rns_runtime_resource_transfer_t *transfer) {
+    if (transfer == NULL) return;
+    if (transfer->link != NULL) {
+        rns_runtime_link_t *link = transfer->link;
+        if (link->protocol.state == RNS_LINK_ACTIVE)
+            (void)link_send_plain2(
+                link, RNS_LINK_CONTEXT_RESOURCE_ICL,
+                rns_resource_sender_hash(transfer->sender),
+                RNS_RESOURCE_HASH_SIZE);
+        if (link->outgoing_resource == transfer)
+            link->outgoing_resource = NULL;
+        transfer->link = NULL;
+    }
+    rns_resource_sender_destroy(transfer->sender);
+    free(transfer);
+}
+
 void rns_runtime_link_destroy(rns_runtime_link_t *link) {
     if (link == NULL) return;
     rns_runtime_t *runtime = link->runtime;
@@ -1534,9 +1819,7 @@ void rns_runtime_link_destroy(rns_runtime_link_t *link) {
                                     link->protocol.link_id,
                                     sizeof link->protocol.link_id);
     link->protocol.state = RNS_LINK_CLOSED;
-    rns_resource_destroy(link->resource);
-    link->resource = NULL;
-    link->resource_receipt = NULL;
+    fail_link_resources(link, RNS_ERROR_INVALID_STATE);
     fail_pending_requests(link, RNS_ERROR_INVALID_STATE);
     if (runtime != NULL) {
         for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i) {
