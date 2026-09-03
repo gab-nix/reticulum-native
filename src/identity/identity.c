@@ -93,11 +93,38 @@ done:
 int rns_identity_decrypt(const rns_identity *identity,
                          const uint8_t *ciphertext, size_t ciphertext_length,
                          uint8_t *out, size_t out_capacity, size_t *out_length) {
+    return rns_identity_decrypt_with_ratchets(
+        identity, NULL, 0u, 0, ciphertext, ciphertext_length, out,
+        out_capacity, out_length, NULL, NULL);
+}
+
+void rns_identity_ratchet_id(const uint8_t public_key[32],
+                             uint8_t ratchet_id[16]) {
+    uint8_t digest[32];
+    if (public_key == NULL || ratchet_id == NULL) return;
+    memset(ratchet_id, 0, 16u);
+    if (rns_sha256(public_key, 32u, digest)) memcpy(ratchet_id, digest, 16u);
+    OPENSSL_cleanse(digest, sizeof digest);
+}
+
+int rns_identity_ratchet_generate(uint8_t private_key[32],
+                                  uint8_t public_key[32],
+                                  uint8_t ratchet_id[16]) {
+    if (private_key == NULL || public_key == NULL || ratchet_id == NULL)
+        return 0;
+    if (!rns_x25519_generate(private_key, public_key)) return 0;
+    rns_identity_ratchet_id(public_key, ratchet_id);
+    return 1;
+}
+
+static int decrypt_with_private(const rns_identity *identity,
+                                const uint8_t private_key[32],
+                                const uint8_t *ciphertext,
+                                size_t ciphertext_length, uint8_t *out,
+                                size_t out_capacity, size_t *out_length) {
     uint8_t shared[32], derived[64];
     int ok = 0;
-    if (!identity || !identity->has_private || !ciphertext || ciphertext_length <= 32u ||
-        !out || !out_length) return 0;
-    if (!rns_x25519_exchange(identity->encryption_private, ciphertext, shared) ||
+    if (!rns_x25519_exchange(private_key, ciphertext, shared) ||
         !rns_hkdf_sha256(shared, sizeof(shared), identity->hash, sizeof(identity->hash),
                          NULL, 0, derived, sizeof(derived))) goto done;
     ok = rns_token_decrypt(derived, ciphertext + 32u, ciphertext_length - 32u,
@@ -106,4 +133,44 @@ done:
     OPENSSL_cleanse(shared, sizeof(shared));
     OPENSSL_cleanse(derived, sizeof(derived));
     return ok;
+}
+
+int rns_identity_decrypt_with_ratchets(
+    const rns_identity *identity, const uint8_t *ratchet_private_keys,
+    size_t ratchet_count, int enforce_ratchets, const uint8_t *ciphertext,
+    size_t ciphertext_length, uint8_t *out, size_t out_capacity,
+    size_t *out_length, uint8_t ratchet_id[16], int *used_ratchet) {
+    if (out_length != NULL) *out_length = 0u;
+    if (used_ratchet != NULL) *used_ratchet = 0;
+    if (ratchet_id != NULL) memset(ratchet_id, 0, 16u);
+    if (identity == NULL || !identity->has_private || ciphertext == NULL ||
+        ciphertext_length <= 32u || out == NULL || out_length == NULL ||
+        (ratchet_count != 0u && ratchet_private_keys == NULL) ||
+        ratchet_count > SIZE_MAX / RNS_RATCHET_PRIVATE_SIZE)
+        return 0;
+    for (size_t i = 0u; i < ratchet_count; ++i) {
+        const uint8_t *private_key =
+            ratchet_private_keys + i * RNS_RATCHET_PRIVATE_SIZE;
+        if (decrypt_with_private(identity, private_key, ciphertext,
+                                 ciphertext_length, out, out_capacity,
+                                 out_length)) {
+            if (used_ratchet != NULL) *used_ratchet = 1;
+            if (ratchet_id != NULL) {
+                uint8_t public_key[32];
+                if (!rns_x25519_public_from_private(private_key, public_key)) {
+                    *out_length = 0u;
+                    OPENSSL_cleanse(out, out_capacity);
+                    return 0;
+                }
+                rns_identity_ratchet_id(public_key, ratchet_id);
+                OPENSSL_cleanse(public_key, sizeof public_key);
+            }
+            return 1;
+        }
+        *out_length = 0u;
+    }
+    if (enforce_ratchets) return 0;
+    return decrypt_with_private(identity, identity->encryption_private,
+                                ciphertext, ciphertext_length, out,
+                                out_capacity, out_length);
 }

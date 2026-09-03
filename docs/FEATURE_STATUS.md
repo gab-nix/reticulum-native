@@ -5,7 +5,7 @@ This is the source of truth for implementation progress. `IMPLEMENTED` means cod
 | Area | Status | Evidence and remaining work |
 | --- | --- | --- |
 | C17 build, HAL, buffers, status API | IMPLEMENTED | Warning-as-error builds and unit tests. Embedded adapters remain planned. |
-| Crypto, identities, destinations, packets | IMPLEMENTED | Known-answer and unit tests; full upstream vector matrix remains WIP. |
+| Crypto, identities, destinations, packets | IMPLEMENTED | Known-answer and unit tests. Identity encryption supports announced X25519 ratchets, ordered private-ratchet decryption, ratchet IDs, identity-key fallback and strict ratchet enforcement. Durable local ratchet history and the full upstream vector matrix remain WIP. |
 | Signed announces and paths | WIP | Build/parse/verification, verified runtime callbacks and path snapshots tested. Verified events now expose the borrowed public ratchet bytes, and the bounded registry copies the ratchet plus decoded LXMF delivery name, stamp cost and compression capability while retaining original announce app data. Persistent discovery and upstream bidirectional capture remain. |
 | UDP and TCP interfaces | IMPLEMENTED | Loopback tests, setup guide and a reachability-checked public uplink configuration. Protocol-level upstream testing remains. |
 | AutoInterface, shared IPC, serial KISS, RNode | PLANNED | Framing primitives exist; interface drivers do not. |
