@@ -13,6 +13,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#define RESOURCE_CONTENT_SIZE 2048u
+#define RESOURCE_PACKED_SIZE (RESOURCE_CONTENT_SIZE + 256u)
+
 typedef struct {
     const rns_identity *identity;
     uint8_t destination[LXMF_DESTINATION_LENGTH];
@@ -20,7 +23,7 @@ typedef struct {
 
 typedef struct {
     bool received;
-    uint8_t content[LXMF_STORE_MAX_PACKED];
+    uint8_t content[LXMF_STORE_MAX_CONTENT];
     size_t content_length;
 } inbox_t;
 
@@ -96,21 +99,25 @@ static void delivery_event(void *context,
 static size_t queue_large_message(
     lxmf_store_t *store, const rns_identity *signer,
     const uint8_t destination[16], const uint8_t source[16], double timestamp,
-    uint8_t seed, uint8_t content[380], uint8_t packed[LXMF_STORE_MAX_PACKED],
+    uint8_t seed, uint8_t content[RESOURCE_CONTENT_SIZE],
+    uint8_t packed[RESOURCE_PACKED_SIZE],
     uint8_t message_id[32]) {
-    for (size_t i = 0U; i < 380U; ++i)
+    for (size_t i = 0U; i < RESOURCE_CONTENT_SIZE; ++i)
         content[i] = (uint8_t)(seed + i * 73U + i / 7U);
-    static const uint8_t fields[] = {0x80U};
+    /* Unknown extension fields remain in the exact durable representation. */
+    static const uint8_t fields[] = {
+        0x81U, 0xcdU, 0x04U, 0xd2U, 0xc4U, 0x03U, 0U, 0xffU, 0x42U};
     lxmf_message_t message = {0}, decoded;
     memcpy(message.destination, destination, 16U);
     memcpy(message.source, source, 16U);
     message.timestamp = timestamp;
-    message.content = (lxmf_slice_t){content, 380U};
+    message.content = (lxmf_slice_t){content, RESOURCE_CONTENT_SIZE};
     message.fields_msgpack = (lxmf_slice_t){fields, sizeof fields};
     size_t packed_length = 0U;
     assert(lxmf_pack(&message, lxmf_identity_signer, (void *)signer, packed,
-                     LXMF_STORE_MAX_PACKED, &packed_length) == LXMF_OK);
-    assert(packed_length > 450U && packed_length <= LXMF_STORE_MAX_PACKED);
+                     RESOURCE_PACKED_SIZE, &packed_length) == LXMF_OK);
+    assert(packed_length > RESOURCE_CONTENT_SIZE &&
+           packed_length <= RESOURCE_PACKED_SIZE);
     assert(lxmf_unpack(packed, packed_length, NULL, NULL, &decoded) == LXMF_OK);
     memcpy(message_id, decoded.message_id, 32U);
     lxmf_store_message_t stored = {0};
@@ -120,7 +127,7 @@ static size_t queue_large_message(
     stored.timestamp = timestamp;
     stored.status = LXMF_DELIVERY_QUEUED;
     stored.signature_state = LXMF_SIGNATURE_VERIFIED;
-    stored.content = (lxmf_slice_t){content, 380U};
+    stored.content = (lxmf_slice_t){content, RESOURCE_CONTENT_SIZE};
     stored.packed = (lxmf_slice_t){packed, packed_length};
     bool inserted = false;
     assert(lxmf_store_put(store, &stored, &inserted) == LXMF_OK && inserted);
@@ -215,7 +222,7 @@ int main(void) {
     static const uint8_t body[] = "direct over an authenticated link";
     static const uint8_t title[] = "wire-preserved title";
     static const uint8_t empty_fields[] = {0x80U};
-    uint8_t original_packed[LXMF_STORE_MAX_PACKED];
+    uint8_t original_packed[512u];
     size_t original_packed_length = 0U;
     lxmf_message_t original = {0}, decoded;
     memcpy(original.destination, bob_destination, 16U);
@@ -351,7 +358,8 @@ int main(void) {
 
     /* A representation that cannot fit in one encrypted link packet takes
      * the Resource path without rebuilding or truncating the retained wire. */
-    uint8_t resource_content[380], resource_packed[LXMF_STORE_MAX_PACKED];
+    uint8_t resource_content[RESOURCE_CONTENT_SIZE];
+    uint8_t resource_packed[RESOURCE_PACKED_SIZE];
     uint8_t resource_id[LXMF_MESSAGE_ID_LENGTH];
     size_t resource_packed_length = queue_large_message(
         &alice_store, &alice, bob_destination, alice_destination, 94.0, 0x21U,
@@ -360,7 +368,7 @@ int main(void) {
     bob_inbox.received = false;
     assert(lxmf_router_send_message(&alice_router, resource_id) == LXMF_OK);
     {
-        uint8_t content[380];
+        uint8_t content[RESOURCE_CONTENT_SIZE];
         lxmf_store_message_t stored;
         assert(lxmf_store_read(&alice_store, resource_id, &stored, content,
                                sizeof content) == LXMF_OK);
@@ -377,7 +385,7 @@ int main(void) {
         assert(rns_runtime_poll(bob_runtime, 8U, &processed) == RNS_OK);
         assert(rns_runtime_poll(alice_runtime, 8U, &processed) == RNS_OK);
         assert(lxmf_router_poll(&alice_router, 0U, &resource_poll) == LXMF_OK);
-        uint8_t content[380];
+        uint8_t content[RESOURCE_CONTENT_SIZE];
         lxmf_store_message_t stored;
         assert(lxmf_store_read(&alice_store, resource_id, &stored, content,
                                sizeof content) == LXMF_OK);
@@ -393,7 +401,7 @@ int main(void) {
     assert(alice_delivery.statuses[0] == LXMF_DELIVERY_SENDING);
     assert(alice_delivery.statuses[1] == LXMF_DELIVERY_SENT);
     assert(alice_delivery.statuses[2] == LXMF_DELIVERY_DELIVERED);
-    uint8_t retained[LXMF_STORE_MAX_PACKED];
+    uint8_t retained[RESOURCE_PACKED_SIZE];
     size_t retained_length = 0U;
     assert(lxmf_store_read_packed(&alice_store, resource_id, retained,
                                   sizeof retained, &retained_length) ==
@@ -417,7 +425,7 @@ int main(void) {
         assert(rns_runtime_poll(bob_runtime, 8U, &processed) == RNS_OK);
         assert(rns_runtime_poll(alice_runtime, 8U, &processed) == RNS_OK);
         assert(lxmf_router_poll(&alice_router, 0U, &resource_poll) == LXMF_OK);
-        uint8_t content[380];
+        uint8_t content[RESOURCE_CONTENT_SIZE];
         lxmf_store_message_t stored;
         assert(lxmf_store_read(&alice_store, resource_id, &stored, content,
                                sizeof content) == LXMF_OK);
@@ -443,7 +451,7 @@ int main(void) {
     size_t processed = 0U;
     assert(rns_runtime_poll(alice_runtime, 8U, &processed) == RNS_OK);
     {
-        uint8_t content[380];
+        uint8_t content[RESOURCE_CONTENT_SIZE];
         lxmf_store_message_t stored;
         assert(lxmf_store_read(&alice_store, resource_id, &stored, content,
                                sizeof content) == LXMF_OK);

@@ -187,7 +187,7 @@ int main(void) {
     length = seal(&alice, alice_hash, &bob, "announced hello", packet, sizeof packet);
     assert(lxmf_router_receive_packet(&router, packet, length) == LXMF_OK);
     assert(inbox.count == 3u && inbox.state == LXMF_SIGNATURE_VERIFIED);
-    uint8_t retained[LXMF_STORE_MAX_PACKED];
+    uint8_t retained[512u];
     size_t retained_length = 0;
     assert(lxmf_store_read_packed(&store, inbox.id, retained, sizeof retained,
                                   &retained_length) == LXMF_ERR_FORMAT);

@@ -84,7 +84,7 @@ static size_t retained_from(lxmf_store_t *store, uint8_t source_seed) {
 static void test_round_trip(const char *path) {
     lxmf_store_t store = {0};
     lxmf_store_message_t message, got;
-    uint8_t body[32], retained[LXMF_STORE_MAX_PACKED];
+    uint8_t body[32], retained[512u];
     static const uint8_t packed[] = {0xaa, 0xbb, 0xcc, 0xdd, 0xee};
     size_t retained_length = 0;
     bool inserted = false;
@@ -214,7 +214,7 @@ static void test_caps(const char *path) {
 static void test_legacy_journal(const char *path) {
     lxmf_store_t store = {0};
     lxmf_store_message_t message, got;
-    uint8_t body[32], retained[LXMF_STORE_MAX_PACKED];
+    uint8_t body[32], retained[512u];
     static const uint8_t packed[] = {4u, 5u, 6u};
     size_t retained_length = 0;
     bool inserted = false;

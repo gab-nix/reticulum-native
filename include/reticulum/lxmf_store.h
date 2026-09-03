@@ -11,8 +11,9 @@ extern "C" {
 #define LXMF_STORE_MAX_MESSAGES 1024u
 #define LXMF_STORE_MAX_FILE_SIZE (16u * 1024u * 1024u)
 #define LXMF_STORE_PATH_MAX 1023u
-/* An LXMF opportunistic packet never exceeds the Reticulum MTU. */
-#define LXMF_STORE_MAX_PACKED 512u
+/* Full direct/propagated representations, including opaque extension fields.
+ * This is a storage limit, not a promise that each transport supports it. */
+#define LXMF_STORE_MAX_PACKED (8u * 1024u * 1024u)
 /* Messages retained without a verifiable signature are untrusted input. Both
  * the total retained and the number of distinct unknown senders are capped;
  * admitting one past a cap evicts an already retained one. */
@@ -107,6 +108,11 @@ lxmf_status_t lxmf_store_remove(
 lxmf_status_t lxmf_store_read_packed(
     lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     uint8_t *packed, size_t capacity, size_t *packed_len);
+/* Query retained length before allocating a caller-owned buffer. No bytes are
+ * read; returns LXMF_ERR_FORMAT when no representation exists. */
+lxmf_status_t lxmf_store_packed_size(
+    lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+    size_t *packed_len);
 lxmf_status_t lxmf_store_read_delivery(
     lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     lxmf_delivery_metadata_t *delivery);

@@ -578,10 +578,17 @@ static lxmf_status_t prepare_outbound_representation(
     lxmf_router_t *router, const lxmf_store_message_t *stored,
     const uint8_t id[LXMF_MESSAGE_ID_LENGTH], uint8_t *packed,
     size_t packed_capacity, size_t *packed_length) {
-    uint8_t retained[LXMF_STORE_MAX_PACKED];
+    uint8_t *retained = NULL;
     size_t retained_length = 0u;
-    lxmf_status_t status = lxmf_store_read_packed(
-        router->config.store, id, retained, sizeof retained, &retained_length);
+    lxmf_status_t status = lxmf_store_packed_size(
+        router->config.store, id, &retained_length);
+    if (status == LXMF_OK) {
+        if (retained_length > packed_capacity) return LXMF_ERR_BOUNDS;
+        retained = malloc(retained_length);
+        if (retained == NULL) return LXMF_ERR_BOUNDS;
+        status = lxmf_store_read_packed(router->config.store, id, retained,
+                                         retained_length, &retained_length);
+    }
     lxmf_message_t message = {0};
     bool has_retained_wire = status == LXMF_OK;
     if (status == LXMF_OK) {
@@ -603,7 +610,7 @@ static lxmf_status_t prepare_outbound_representation(
         message.timestamp = stored->timestamp;
         status = LXMF_OK;
     }
-    if (status != LXMF_OK) return status;
+    if (status != LXMF_OK) { free(retained); return status; }
 
     bool added_stamp = false;
     if (has_retained_wire && !message.has_stamp &&
@@ -616,13 +623,14 @@ static lxmf_status_t prepare_outbound_representation(
             message.stamp_len = LXMF_STAMP_LENGTH;
             added_stamp = true;
         } else if (status != LXMF_ERR_PENDING) {
+            free(retained);
             return status;
         }
     }
     if (has_retained_wire && !added_stamp) {
-        if (retained_length > packed_capacity) return LXMF_ERR_BOUNDS;
         memcpy(packed, retained, retained_length);
         *packed_length = retained_length;
+        free(retained);
         return LXMF_OK;
     }
     status = lxmf_pack(&message, lxmf_identity_signer,
@@ -635,6 +643,7 @@ static lxmf_status_t prepare_outbound_representation(
             memcmp(check.message_id, id, LXMF_MESSAGE_ID_LENGTH) != 0)
             status = LXMF_ERR_FORMAT;
     }
+    free(retained);
     return status;
 }
 
@@ -655,16 +664,30 @@ static lxmf_status_t send_direct(
                             : LXMF_QUEUE_REASON_PATH;
         return status;
     }
-    uint8_t packed[LXMF_STORE_MAX_PACKED];
+    size_t packed_capacity = 0U;
+    status = lxmf_store_packed_size(router->config.store, id, &packed_capacity);
+    if (status == LXMF_ERR_FORMAT)
+        packed_capacity = stored->content.len + 256U;
+    else if (status != LXMF_OK)
+        return status;
+    /* Optional ticket stamps add a bounded suffix. */
+    if (packed_capacity <= LXMF_STORE_MAX_PACKED - 64U)
+        packed_capacity += 64U;
+    else
+        packed_capacity = LXMF_STORE_MAX_PACKED;
+    uint8_t *packed = malloc(packed_capacity);
+    if (packed == NULL) return LXMF_ERR_BOUNDS;
     size_t packed_length = 0U;
     status = prepare_outbound_representation(
-        router, stored, id, packed, sizeof packed, &packed_length);
+        router, stored, id, packed, packed_capacity, &packed_length);
     if (status != LXMF_OK) {
+        free(packed);
         *queue_reason = LXMF_QUEUE_REASON_RESOURCE;
         return status == LXMF_ERR_BOUNDS ? LXMF_ERR_PENDING : status;
     }
     lxmf_router_receipt_slot_t *receipt_slot = reserve_receipt(router);
     if (receipt_slot == NULL) {
+        free(packed);
         *queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
         return LXMF_ERR_PENDING;
     }
@@ -682,6 +705,7 @@ static lxmf_status_t send_direct(
         memset(receipt_slot, 0, sizeof *receipt_slot);
         lxmf_router_resource_slot_t *resource_slot = reserve_resource(router);
         if (resource_slot == NULL) {
+            free(packed);
             *queue_reason = LXMF_QUEUE_REASON_RESOURCE;
             return LXMF_ERR_PENDING;
         }
@@ -696,6 +720,7 @@ static lxmf_status_t send_direct(
         sent = rns_runtime_link_send_resource(
             link, packed, packed_length, &resource_options,
             &resource_slot->transfer);
+        free(packed);
         if (sent != RNS_OK) {
             memset(resource_slot, 0, sizeof *resource_slot);
             *queue_reason = sent == RNS_ERROR_OVERFLOW
@@ -711,6 +736,7 @@ static lxmf_status_t send_direct(
         *resource_started = true;
         return LXMF_OK;
     }
+    free(packed);
     if (sent != RNS_OK) {
         memset(receipt_slot, 0, sizeof *receipt_slot);
         *queue_reason = sent == RNS_ERROR_OVERFLOW
@@ -802,7 +828,8 @@ lxmf_status_t lxmf_router_send_message(
                                  &resource_started);
         if (status == LXMF_OK) has_proof_id = true;
     } else {
-        uint8_t representation[LXMF_STORE_MAX_PACKED];
+        /* Opportunistic delivery is intentionally constrained to one packet. */
+        uint8_t representation[RNS_MTU];
         size_t representation_length = 0u;
         lxmf_message_t message;
         status = prepare_outbound_representation(
@@ -1125,12 +1152,20 @@ lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
         .resolve = router->config.resolve_identity,
         .resolve_context = router->config.resolve_context};
     for (size_t i = 0; i < pending.count; i++) {
-        uint8_t retained[LXMF_STORE_MAX_PACKED];
+        uint8_t *retained = NULL;
         size_t retained_length = 0;
         lxmf_message_t message;
         result->examined++;
+        if (lxmf_store_packed_size(router->config.store, pending.ids[i],
+                                    &retained_length) != LXMF_OK) {
+            result->pending++;
+            continue;
+        }
+        retained = malloc(retained_length);
+        if (retained == NULL) return LXMF_ERR_BOUNDS;
         if (lxmf_store_read_packed(router->config.store, pending.ids[i], retained,
-                                   sizeof retained, &retained_length) != LXMF_OK) {
+                                    retained_length, &retained_length) != LXMF_OK) {
+            free(retained);
             result->pending++;
             continue;
         }
@@ -1138,6 +1173,7 @@ lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
             lxmf_unpack(retained, retained_length, lxmf_identity_verifier,
                         &verifier, &message);
         if (checked == LXMF_ERR_UNKNOWN_SIGNER) {
+            free(retained);
             result->pending++;
             continue;
         }
@@ -1149,12 +1185,14 @@ lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
         if (checked == LXMF_OK) checked = validate_inbound_stamp(router, &message);
         if (checked == LXMF_OK) {
             remember_verified_ticket(router, &message);
+            free(retained);
             if (lxmf_store_update_signature(router->config.store, pending.ids[i],
                                             LXMF_SIGNATURE_VERIFIED) != LXMF_OK)
                 return LXMF_ERR_CRYPTO;
             result->verified++;
             report_signature(router, pending.ids[i], LXMF_SIGNATURE_VERIFIED);
         } else {
+            free(retained);
             if (lxmf_store_remove(router->config.store, pending.ids[i]) != LXMF_OK)
                 return LXMF_ERR_CRYPTO;
             result->rejected++;

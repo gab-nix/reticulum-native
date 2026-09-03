@@ -89,7 +89,7 @@ static size_t make_packet(const rns_identity *sender,
     delivery_hash(sender, message.source);
     delivery_hash(recipient, message.destination);
 
-    uint8_t base[LXMF_STORE_MAX_PACKED];
+    uint8_t base[512u];
     size_t base_length = 0u;
     assert(lxmf_pack(&message, lxmf_identity_signer, (void *)sender, base,
                      sizeof base, &base_length) == LXMF_OK);
@@ -240,7 +240,7 @@ int main(void) {
     outbound.content = (lxmf_slice_t){(const uint8_t *)"reply", 5u};
     outbound.fields_msgpack = (lxmf_slice_t){outbound_fields,
                                               sizeof outbound_fields};
-    uint8_t retained[LXMF_STORE_MAX_PACKED];
+    uint8_t retained[512u];
     size_t retained_length = 0u;
     assert(lxmf_pack(&outbound, lxmf_identity_signer, &bob, retained,
                      sizeof retained, &retained_length) == LXMF_OK);
