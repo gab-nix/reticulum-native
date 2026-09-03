@@ -177,6 +177,16 @@ int main(void) {
     assert(narrow.output[sizeof narrow.output - 1u] == '\0');
     assert(narrow.guard == 0xa5u);
 
+    tui_message_metadata_t reply_only = {0};
+    reply_only.state = TUI_METADATA_AVAILABLE;
+    reply_only.present_mask = LXMF_STANDARD_REPLY_TO;
+    struct { char output[1]; unsigned char guard; } one = {{0x55}, 0xa5u};
+    tui_render_message_metadata(&reply_only, one.output, sizeof one.output);
+    assert(one.output[0] == '\0' && one.guard == 0xa5u);
+    struct { char output[2]; unsigned char guard; } two = {{0x55, 0x55}, 0xa5u};
+    tui_render_message_metadata(&reply_only, two.output, sizeof two.output);
+    assert(two.output[1] == '\0' && two.guard == 0xa5u);
+
     assert(tui_dispatch_key(&state, 'v'));
     assert(strstr(state.status, "RETICULUM_ATTACHMENT_DIR") != NULL);
     assert(tui_state_set_attachment_directory(&state, directory));

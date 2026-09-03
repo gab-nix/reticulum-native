@@ -70,17 +70,23 @@ void tui_render_message_metadata(const tui_message_metadata_t *metadata,
         return;
     }
     uint32_t mask = metadata->present_mask;
-    if ((mask & LXMF_STANDARD_RENDERER) != 0u)
-        append_summary(output, capacity, " [renderer:%s",
+    bool has_item = false;
+    if (mask != 0u) append_summary(output, capacity, " [");
+    if ((mask & LXMF_STANDARD_RENDERER) != 0u) {
+        append_summary(output, capacity, "renderer:%s",
                        renderer_name(metadata->renderer));
-    else if (mask != 0u) append_summary(output, capacity, " [");
-    if ((mask & LXMF_STANDARD_REPLY_TO) != 0u)
+        has_item = true;
+    }
+    if ((mask & LXMF_STANDARD_REPLY_TO) != 0u) {
         append_summary(output, capacity, "%sreply:%02x%02x%02x%02x",
-                       output[strlen(output) - 1u] == '[' ? "" : " ",
+                       has_item ? " " : "",
                        metadata->reply_to[0], metadata->reply_to[1],
                        metadata->reply_to[2], metadata->reply_to[3]);
+        has_item = true;
+    }
     if ((mask & LXMF_STANDARD_REPLY_QUOTE) != 0u)
-        append_summary(output, capacity, " quote:\"%s\"", metadata->reply_quote);
+        append_summary(output, capacity, "%squote:\"%s\"",
+                       has_item ? " " : "", metadata->reply_quote);
     if ((mask & LXMF_STANDARD_REACTION) != 0u)
         append_summary(output, capacity, " reaction:%s@%02x%02x%02x%02x",
                        metadata->reaction, metadata->reaction_to[0],
