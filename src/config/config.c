@@ -64,6 +64,17 @@ static bool equal_ignore_case(const char *left, const char *right) {
     return *left == '\0' && *right == '\0';
 }
 
+static bool starts_with_ignore_case(const char *value, const char *prefix) {
+    while (*prefix != '\0') {
+        if (*value == '\0' ||
+            tolower((unsigned char)*value) != tolower((unsigned char)*prefix))
+            return false;
+        value++;
+        prefix++;
+    }
+    return true;
+}
+
 static bool parse_bool(const char *value, bool *result) {
     if (equal_ignore_case(value, "yes") || equal_ignore_case(value, "true") ||
         equal_ignore_case(value, "on") || strcmp(value, "1") == 0) {
@@ -99,6 +110,36 @@ static bool parse_signed(const char *value, int32_t minimum, int32_t maximum, in
         return false;
     }
     *result = (int32_t)parsed;
+    return true;
+}
+
+static bool parse_percent_hundredths(const char *value, uint16_t *result) {
+    uint32_t whole = 0U;
+    uint32_t fraction = 0U;
+    size_t fraction_digits = 0U;
+    const char *cursor = value;
+    if (*cursor == '\0') return false;
+    while (*cursor >= '0' && *cursor <= '9') {
+        if (whole > 100U) return false;
+        whole = whole * 10U + (uint32_t)(*cursor - '0');
+        cursor++;
+    }
+    if (*cursor == '.') {
+        cursor++;
+        while (*cursor >= '0' && *cursor <= '9') {
+            if (fraction_digits < 2U)
+                fraction = fraction * 10U + (uint32_t)(*cursor - '0');
+            fraction_digits++;
+            cursor++;
+        }
+    }
+    if (*cursor != '\0' || (fraction_digits == 0U && value[0] == '.'))
+        return false;
+    if (fraction_digits == 0U) fraction = 0U;
+    else if (fraction_digits == 1U) fraction *= 10U;
+    uint32_t hundredths = whole * 100U + fraction;
+    if (hundredths > 10000U) return false;
+    *result = (uint16_t)hundredths;
     return true;
 }
 
@@ -205,6 +246,8 @@ static rns_status_t parse_interface_value(rns_config_interface_t *interface,
             return RNS_ERROR_UNSUPPORTED;
         }
         interface->type_set = true;
+        if (interface->type == RNS_CONFIG_RNODE && interface->speed == 9600U)
+            interface->speed = 115200U;
         return RNS_OK;
     }
     if (strcmp(key, "enabled") == 0) {
@@ -270,6 +313,18 @@ static rns_status_t parse_interface_value(rns_config_interface_t *interface,
             interface->stop_bits = (uint8_t)number;
             return RNS_OK;
         }
+    } else if (strcmp(key, "airtime_limit_short") == 0) {
+        if (parse_percent_hundredths(value,
+                                     &interface->short_airtime_limit_hundredths)) {
+            interface->short_airtime_limit_set = true;
+            return RNS_OK;
+        }
+    } else if (strcmp(key, "airtime_limit_long") == 0) {
+        if (parse_percent_hundredths(value,
+                                     &interface->long_airtime_limit_hundredths)) {
+            interface->long_airtime_limit_set = true;
+            return RNS_OK;
+        }
     } else if (strcmp(key, "frequency") == 0) {
         if (parse_unsigned(value, UINT32_MAX, &interface->frequency)) return RNS_OK;
     } else if (strcmp(key, "bandwidth") == 0) {
@@ -327,11 +382,38 @@ static rns_status_t validate_interface(const rns_config_interface_t *interface,
                        interface->name);
         return RNS_ERROR_PROTOCOL;
     }
-    if ((interface->type == RNS_CONFIG_KISS || interface->type == RNS_CONFIG_RNODE) &&
+    if (interface->type == RNS_CONFIG_KISS &&
         (interface->device[0] == '\0' || interface->speed == 0U)) {
         set_diagnostic(diagnostic, 0U, RNS_ERROR_PROTOCOL,
                        "enabled serial interface '%s' requires port and speed", interface->name);
         return RNS_ERROR_PROTOCOL;
+    }
+    if (interface->type == RNS_CONFIG_RNODE && interface->device[0] == '\0') {
+        set_diagnostic(diagnostic, 0U, RNS_ERROR_PROTOCOL,
+                       "enabled RNode interface '%s' requires port",
+                       interface->name);
+        return RNS_ERROR_PROTOCOL;
+    }
+    if (interface->type == RNS_CONFIG_RNODE) {
+        if (starts_with_ignore_case(interface->device, "tcp://") ||
+            starts_with_ignore_case(interface->device, "ble://")) {
+            set_diagnostic(diagnostic, 0U, RNS_ERROR_UNSUPPORTED,
+                           "RNode interface '%s' currently supports POSIX serial ports only",
+                           interface->name);
+            return RNS_ERROR_UNSUPPORTED;
+        }
+        if (interface->frequency < 137000000U ||
+            interface->frequency > 3000000000U ||
+            interface->bandwidth < 7800U || interface->bandwidth > 1625000U ||
+            interface->tx_power < 0 || interface->tx_power > 37 ||
+            interface->spreading_factor < 5U ||
+            interface->spreading_factor > 12U ||
+            interface->coding_rate < 5U || interface->coding_rate > 8U) {
+            set_diagnostic(diagnostic, 0U, RNS_ERROR_PROTOCOL,
+                           "RNode interface '%s' has invalid serial or radio parameters",
+                           interface->name);
+            return RNS_ERROR_PROTOCOL;
+        }
     }
     return RNS_OK;
 }
@@ -511,9 +593,12 @@ rns_status_t rns_config_emit(const rns_config_t *config,
                            "    forward_port = %u\n", item->listen_ip,
                   (unsigned int)item->listen_port, item->forward_ip,
                   (unsigned int)item->forward_port)) return RNS_ERROR_OVERFLOW;
-        if ((item->type == RNS_CONFIG_KISS || item->type == RNS_CONFIG_RNODE) &&
+        if (item->type == RNS_CONFIG_KISS &&
             !emit(&emitter, "    port = %s\n    speed = %u\n", item->device,
                   (unsigned int)item->speed)) return RNS_ERROR_OVERFLOW;
+        if (item->type == RNS_CONFIG_RNODE &&
+            !emit(&emitter, "    port = %s\n", item->device))
+            return RNS_ERROR_OVERFLOW;
         if (item->type == RNS_CONFIG_KISS &&
             !emit(&emitter,
                   "    preamble = %u\n    txtail = %u\n    persistence = %u\n"
@@ -528,10 +613,22 @@ rns_status_t rns_config_emit(const rns_config_t *config,
                   (unsigned int)item->stop_bits)) return RNS_ERROR_OVERFLOW;
         if (item->type == RNS_CONFIG_RNODE &&
             !emit(&emitter, "    frequency = %u\n    bandwidth = %u\n    txpower = %d\n"
-                           "    spreadingfactor = %u\n    codingrate = %u\n",
+                           "    spreadingfactor = %u\n    codingrate = %u\n"
+                           "    flow_control = %s\n",
                   (unsigned int)item->frequency, (unsigned int)item->bandwidth,
                   (int)item->tx_power, (unsigned int)item->spreading_factor,
-                  (unsigned int)item->coding_rate)) return RNS_ERROR_OVERFLOW;
+                  (unsigned int)item->coding_rate,
+                  item->flow_control ? "Yes" : "No")) return RNS_ERROR_OVERFLOW;
+        if (item->type == RNS_CONFIG_RNODE && item->short_airtime_limit_set &&
+            !emit(&emitter, "    airtime_limit_short = %u.%02u\n",
+                  (unsigned int)(item->short_airtime_limit_hundredths / 100U),
+                  (unsigned int)(item->short_airtime_limit_hundredths % 100U)))
+            return RNS_ERROR_OVERFLOW;
+        if (item->type == RNS_CONFIG_RNODE && item->long_airtime_limit_set &&
+            !emit(&emitter, "    airtime_limit_long = %u.%02u\n",
+                  (unsigned int)(item->long_airtime_limit_hundredths / 100U),
+                  (unsigned int)(item->long_airtime_limit_hundredths % 100U)))
+            return RNS_ERROR_OVERFLOW;
         if (!emit(&emitter, "\n")) return RNS_ERROR_OVERFLOW;
     }
     *output_length = emitter.length;

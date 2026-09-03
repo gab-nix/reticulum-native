@@ -56,6 +56,10 @@ typedef struct rns_config_interface {
     int32_t tx_power;
     uint8_t spreading_factor;
     uint8_t coding_rate;
+    bool short_airtime_limit_set;
+    bool long_airtime_limit_set;
+    uint16_t short_airtime_limit_hundredths;
+    uint16_t long_airtime_limit_hundredths;
 } rns_config_interface_t;
 
 typedef struct rns_config {

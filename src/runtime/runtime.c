@@ -10,6 +10,7 @@
 #include "reticulum/request.h"
 #include "reticulum/resource.h"
 #include "reticulum/proof.h"
+#include "reticulum/rnode.h"
 #include "reticulum/tcp.h"
 #include "reticulum/udp.h"
 
@@ -30,8 +31,10 @@ typedef struct runtime_interface {
     rns_tcp_endpoint_t *accepted;
     rns_local_instance_t *local;
     rns_kiss_endpoint_t *kiss;
+    rns_rnode_endpoint_t *rnode;
     bool local_server;
     uint64_t kiss_reported_drops;
+    uint64_t rnode_reported_drops;
     double reconnect_at;
     double reconnect_delay;
 } runtime_interface_t;
@@ -246,6 +249,8 @@ static rns_status_t send_internal(rns_runtime_t *runtime, size_t index,
         status = rns_local_instance_send(interface->local, packet, length);
     else if (interface->kiss != NULL)
         status = rns_kiss_endpoint_send(interface->kiss, packet, length);
+    else if (interface->rnode != NULL)
+        status = rns_rnode_endpoint_send(interface->rnode, packet, length);
     if (status == RNS_OK) {
         interface->info.packets_sent++;
         interface->info.bytes_sent += length;
@@ -1068,6 +1073,31 @@ static rns_status_t start_interface(rns_runtime_t *runtime,
                 info.state == RNS_KISS_DOWN)
                 status = info.last_error;
         }
+    } else if (source->type == RNS_CONFIG_RNODE) {
+        rns_rnode_options_t options;
+        rns_rnode_options_init(&options);
+        options.device = source->device;
+        options.frequency = source->frequency;
+        options.bandwidth = source->bandwidth;
+        options.tx_power = (uint8_t)source->tx_power;
+        options.spreading_factor = source->spreading_factor;
+        options.coding_rate = source->coding_rate;
+        options.flow_control = source->flow_control;
+        options.short_airtime_limit_set = source->short_airtime_limit_set;
+        options.long_airtime_limit_set = source->long_airtime_limit_set;
+        options.short_airtime_limit_hundredths =
+            source->short_airtime_limit_hundredths;
+        options.long_airtime_limit_hundredths =
+            source->long_airtime_limit_hundredths;
+        options.clock = runtime->reconnect_clock;
+        options.clock_context = runtime->reconnect_clock_context;
+        status = rns_rnode_endpoint_create(&destination->rnode, &options);
+        if (status == RNS_OK) {
+            rns_rnode_info_t info;
+            if (rns_rnode_endpoint_info(destination->rnode, &info) == RNS_OK &&
+                info.state == RNS_RNODE_DOWN)
+                status = info.last_error;
+        }
     }
     destination->info.last_error = status;
     if (status == RNS_ERROR_UNSUPPORTED) destination->info.state = RNS_RUNTIME_INTERFACE_UNSUPPORTED;
@@ -1088,6 +1118,16 @@ static rns_status_t start_interface(rns_runtime_t *runtime,
                                           : (info.state == RNS_KISS_CONFIGURING
                                                  ? RNS_RUNTIME_INTERFACE_STARTING
                                                  : RNS_RUNTIME_INTERFACE_DOWN);
+            destination->info.last_error = info.last_error;
+        }
+    } else if (source->type == RNS_CONFIG_RNODE && status == RNS_OK) {
+        rns_rnode_info_t info;
+        if (rns_rnode_endpoint_info(destination->rnode, &info) == RNS_OK) {
+            destination->info.state = info.state == RNS_RNODE_UP
+                                          ? RNS_RUNTIME_INTERFACE_UP
+                                          : (info.state == RNS_RNODE_DOWN
+                                                 ? RNS_RUNTIME_INTERFACE_DOWN
+                                                 : RNS_RUNTIME_INTERFACE_STARTING);
             destination->info.last_error = info.last_error;
         }
     } else destination->info.state = status == RNS_OK ? RNS_RUNTIME_INTERFACE_UP : RNS_RUNTIME_INTERFACE_DOWN;
@@ -1248,6 +1288,7 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
         rns_tcp_endpoint_destroy(runtime->interfaces[i].tcp);
         rns_local_instance_destroy(runtime->interfaces[i].local);
         rns_kiss_endpoint_destroy(runtime->interfaces[i].kiss);
+        rns_rnode_endpoint_destroy(runtime->interfaces[i].rnode);
     }
     free(runtime->plain_destinations);
     runtime->plain_destinations = NULL;
@@ -1365,6 +1406,31 @@ static rns_status_t poll_kiss(runtime_interface_t *interface,
     return status;
 }
 
+static rns_status_t poll_rnode(runtime_interface_t *interface,
+                               receive_context_t *context) {
+    size_t processed = 0U;
+    rns_status_t status = rns_rnode_endpoint_poll(
+        interface->rnode, context->remaining, tcp_receive, context, &processed);
+    (void)processed;
+    rns_rnode_info_t info;
+    if (rns_rnode_endpoint_info(interface->rnode, &info) == RNS_OK) {
+        interface->info.state = info.state == RNS_RNODE_UP
+                                    ? RNS_RUNTIME_INTERFACE_UP
+                                    : (info.state == RNS_RNODE_DOWN
+                                           ? RNS_RUNTIME_INTERFACE_DOWN
+                                           : RNS_RUNTIME_INTERFACE_STARTING);
+        interface->info.last_error = info.last_error;
+        interface->info.connection_attempts = info.connection_attempts;
+        interface->info.connections_established = info.connections_established;
+        interface->info.connections_lost = info.connections_lost;
+        if (info.packets_dropped >= interface->rnode_reported_drops)
+            interface->info.packets_dropped +=
+                info.packets_dropped - interface->rnode_reported_drops;
+        interface->rnode_reported_drops = info.packets_dropped;
+    }
+    return status;
+}
+
 rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t *processed) {
     rns_status_t first_error = RNS_OK;
     if (runtime == NULL || processed == NULL) return RNS_ERROR_INVALID_ARGUMENT;
@@ -1430,6 +1496,8 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
             status = poll_local(interface, &context);
         } else if (interface->kiss != NULL) {
             status = poll_kiss(interface, &context);
+        } else if (interface->rnode != NULL) {
+            status = poll_rnode(interface, &context);
         } else if (interface->tcp != NULL &&
             interface->info.state != RNS_RUNTIME_INTERFACE_DISABLED &&
             interface->info.state != RNS_RUNTIME_INTERFACE_UNSUPPORTED) {

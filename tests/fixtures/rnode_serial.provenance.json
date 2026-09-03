@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "evidence": "behavioral source review and local pseudo-terminal tests",
+  "reticulum": {
+    "version": "1.5.2",
+    "commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+    "source": "RNS/Interfaces/RNodeInterface.py"
+  },
+  "reviewed_behavior": [
+    "full-byte RNode command values and escaping",
+    "serial detection and firmware queries",
+    "radio configuration and pinned response validation: bandwidth, TX power, spreading factor and radio state gate startup; frequency is checked only when reported; coding-rate and airtime-lock echoes do not gate startup",
+    "READY flow control and hardware errors",
+    "leave, radio-off and five-second reconnect behavior"
+  ],
+  "limitations": [
+    "no upstream code was copied",
+    "no live Python or physical RNode exchange was performed",
+    "pseudo-terminal tests are local C implementation evidence only",
+    "TCP, BLE, display, framebuffer, beacon and multi-interface behavior is not implemented"
+  ]
+}

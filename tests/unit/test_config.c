@@ -55,6 +55,17 @@ int main(void) {
         "instance_control_port = 48124\n";
     static const char shared_unix[] =
         "[reticulum]\nshare_instance = Yes\nshared_instance_type = unix\n";
+    static const char rnode_config[] =
+        "[reticulum]\nshare_instance = No\n[interfaces]\n[[Radio]]\n"
+        "type = RNodeInterface\nenabled = Yes\nport = /dev/ttyACM0\n"
+        "frequency = 915000000\nbandwidth = 125000\ntxpower = 17\n"
+        "spreadingfactor = 8\ncodingrate = 5\nflow_control = Yes\n"
+        "airtime_limit_short = 25.5\nairtime_limit_long = 50.00\n";
+    static const char rnode_tcp[] =
+        "[interfaces]\n[[Radio]]\ntype = RNodeInterface\nenabled = Yes\n"
+        "port = tcp://127.0.0.1\nfrequency = 915000000\n"
+        "bandwidth = 125000\ntxpower = 17\nspreadingfactor = 8\n"
+        "codingrate = 5\n";
     rns_config_t config;
     rns_config_t reparsed;
     rns_config_diagnostic_t diagnostic;
@@ -118,5 +129,20 @@ int main(void) {
                            &emitted_length) == RNS_OK);
     assert(rns_config_parse(emitted, emitted_length, &reparsed, &diagnostic) ==
            RNS_OK);
+    assert(rns_config_parse(rnode_config, sizeof(rnode_config) - 1U, &config,
+                            &diagnostic) == RNS_OK);
+    assert(config.interfaces[0].speed == 115200U &&
+           config.interfaces[0].short_airtime_limit_set &&
+           config.interfaces[0].short_airtime_limit_hundredths == 2550U &&
+           config.interfaces[0].long_airtime_limit_set &&
+           config.interfaces[0].long_airtime_limit_hundredths == 5000U);
+    assert(rns_config_emit(&config, emitted, sizeof(emitted),
+                           &emitted_length) == RNS_OK);
+    assert(rns_config_parse(emitted, emitted_length, &reparsed, &diagnostic) ==
+           RNS_OK);
+    assert(reparsed.interfaces[0].short_airtime_limit_hundredths == 2550U);
+    assert(rns_config_parse(rnode_tcp, sizeof(rnode_tcp) - 1U, &config,
+                            &diagnostic) == RNS_ERROR_UNSUPPORTED);
+    assert(strstr(diagnostic.message, "POSIX serial") != NULL);
     return 0;
 }
