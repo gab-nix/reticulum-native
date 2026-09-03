@@ -78,7 +78,10 @@ static size_t seal(const rns_identity *signer, const uint8_t claimed[16],
     message.content = (lxmf_slice_t){(const uint8_t *)body, strlen(body)};
     assert(lxmf_pack(&message, lxmf_identity_signer, (void *)signer, plain,
                      sizeof plain, &plain_length) == LXMF_OK);
-    assert(rns_identity_encrypt(recipient, NULL, plain, plain_length, sealed,
+    assert(plain_length >= LXMF_DESTINATION_LENGTH);
+    assert(rns_identity_encrypt(recipient, NULL,
+                                plain + LXMF_DESTINATION_LENGTH,
+                                plain_length - LXMF_DESTINATION_LENGTH, sealed,
                                 sizeof sealed, &sealed_length));
     memcpy(outer.destination_hash, destination, 16);
     outer.data = sealed;

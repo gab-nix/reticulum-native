@@ -34,7 +34,14 @@ lxmf_status_t lxmf_opportunistic_packet_pack(
     status = lxmf_pack(message, lxmf_identity_signer, (void *)source_identity,
                        packed_lxmf, sizeof(packed_lxmf), &packed_length);
     if (status != LXMF_OK) return status;
-    if (!rns_identity_encrypt(destination_identity, NULL, packed_lxmf, packed_length,
+    /* In opportunistic LXMF the Reticulum destination already carries the
+     * first 16 bytes of the packed message. Python LXMF therefore encrypts
+     * only source || signature || payload and reconstructs the destination
+     * prefix at the receiver. */
+    if (packed_length < LXMF_DESTINATION_LENGTH ||
+        !rns_identity_encrypt(destination_identity, NULL,
+                              packed_lxmf + LXMF_DESTINATION_LENGTH,
+                              packed_length - LXMF_DESTINATION_LENGTH,
                               encrypted, sizeof(encrypted), &encrypted_length)) {
         return LXMF_ERR_BOUNDS;
     }
@@ -62,6 +69,8 @@ lxmf_status_t lxmf_opportunistic_packet_unpack(
 
     if (!packet || !local_identity || !local_identity->has_private || !plaintext ||
         !plaintext_length || !message) return LXMF_ERR_ARGUMENT;
+    *plaintext_length = 0u;
+    if (plaintext_capacity < LXMF_DESTINATION_LENGTH) return LXMF_ERR_BOUNDS;
     if (!rns_packet_decode(&outer, packet, packet_length) || outer.header_type != 0 ||
         outer.destination_type != 0 || outer.packet_type != 0 || outer.context != 0) {
         return LXMF_ERR_FORMAT;
@@ -70,9 +79,16 @@ lxmf_status_t lxmf_opportunistic_packet_unpack(
     if (memcmp(outer.destination_hash, expected_destination, 16) != 0) {
         return LXMF_ERR_FORMAT;
     }
-    if (!rns_identity_decrypt(local_identity, outer.data, outer.data_length, plaintext,
-                              plaintext_capacity, plaintext_length)) {
+    size_t decrypted_length = 0u;
+    memcpy(plaintext, outer.destination_hash, LXMF_DESTINATION_LENGTH);
+    if (!rns_identity_decrypt(local_identity, outer.data, outer.data_length,
+                              plaintext + LXMF_DESTINATION_LENGTH,
+                              plaintext_capacity - LXMF_DESTINATION_LENGTH,
+                              &decrypted_length)) {
         return LXMF_ERR_CRYPTO;
     }
+    if (decrypted_length > plaintext_capacity - LXMF_DESTINATION_LENGTH)
+        return LXMF_ERR_BOUNDS;
+    *plaintext_length = LXMF_DESTINATION_LENGTH + decrypted_length;
     return lxmf_unpack(plaintext, *plaintext_length, verifier, verify_context, message);
 }

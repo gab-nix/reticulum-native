@@ -29,8 +29,12 @@ int main(void) {
     lxmf_message_t inbound;
     uint8_t packet[RNS_MTU];
     uint8_t plaintext[RNS_MTU];
+    uint8_t packed[RNS_MTU];
+    uint8_t encrypted_plaintext[RNS_MTU];
     size_t packet_length;
     size_t plaintext_length;
+    size_t packed_length;
+    size_t encrypted_plaintext_length;
     resolver_context resolver;
     lxmf_identity_verifier_context_t verifier;
 
@@ -46,6 +50,23 @@ int main(void) {
 
     assert(lxmf_opportunistic_packet_pack(&outbound, &alice, &bob_public, packet,
                                           sizeof(packet), &packet_length) == LXMF_OK);
+
+    /* Match the pinned Python wire representation exactly: the destination is
+     * in the outer packet, and only the packed tail is encrypted. This check
+     * deliberately decrypts without using the LXMF unpack helper so a matching
+     * encoder/decoder bug cannot hide the incompatibility. */
+    assert(lxmf_pack(&outbound, lxmf_identity_signer, &alice, packed,
+                     sizeof packed, &packed_length) == LXMF_OK);
+    rns_packet outer;
+    assert(rns_packet_decode(&outer, packet, packet_length));
+    assert(memcmp(outer.destination_hash, packed, LXMF_DESTINATION_LENGTH) == 0);
+    assert(rns_identity_decrypt(&bob, outer.data, outer.data_length,
+                                encrypted_plaintext, sizeof encrypted_plaintext,
+                                &encrypted_plaintext_length));
+    assert(encrypted_plaintext_length == packed_length - LXMF_DESTINATION_LENGTH);
+    assert(memcmp(encrypted_plaintext, packed + LXMF_DESTINATION_LENGTH,
+                  encrypted_plaintext_length) == 0);
+
     resolver.identity = &alice;
     delivery_hash(&alice, resolver.hash);
     verifier.resolve = resolve;
@@ -54,6 +75,8 @@ int main(void) {
                                             lxmf_identity_verifier, &verifier,
                                             plaintext, sizeof(plaintext),
                                             &plaintext_length, &inbound) == LXMF_OK);
+    assert(plaintext_length == packed_length);
+    assert(memcmp(plaintext, packed, packed_length) == 0);
     assert(inbound.content.len == outbound.content.len);
     assert(memcmp(inbound.content.data, outbound.content.data, outbound.content.len) == 0);
 
@@ -62,5 +85,10 @@ int main(void) {
                                             lxmf_identity_verifier, &verifier,
                                             plaintext, sizeof(plaintext),
                                             &plaintext_length, &inbound) == LXMF_ERR_CRYPTO);
+    assert(plaintext_length == 0u);
+    assert(lxmf_opportunistic_packet_unpack(packet, packet_length, &bob,
+                                            lxmf_identity_verifier, &verifier,
+                                            plaintext, LXMF_DESTINATION_LENGTH - 1u,
+                                            &plaintext_length, &inbound) == LXMF_ERR_BOUNDS);
     return 0;
 }
