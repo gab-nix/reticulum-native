@@ -196,6 +196,10 @@ rns_status_t rns_resource_accept(rns_resource_t **output,
                                  size_t max_size) {
     if (output == NULL || advertisement == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     *output = NULL;
+    size_t effective_max =
+        max_size != 0u ? max_size : RNS_RESOURCE_DEFAULT_MAX_SIZE;
+    if (advertisement->data_size > effective_max)
+        return RNS_ERROR_OVERFLOW;
     if (advertisement->parts == 0u || advertisement->parts > RNS_RESOURCE_MAX_PARTS)
         return RNS_ERROR_UNSUPPORTED;
     /* Without a complete hashmap the missing part hashes need an HMU exchange. */
@@ -214,7 +218,7 @@ rns_status_t rns_resource_accept(rns_resource_t **output,
     resource->advertisement = *advertisement;
     memcpy(resource->hashmap, advertisement->hashmap, advertisement->hashmap_length);
     resource->advertisement.hashmap = resource->hashmap;
-    resource->max_size = max_size != 0u ? max_size : RNS_RESOURCE_DEFAULT_MAX_SIZE;
+    resource->max_size = effective_max;
     *output = resource;
     return RNS_OK;
 }

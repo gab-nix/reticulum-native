@@ -15,6 +15,7 @@ typedef struct observation {
     size_t accepted;
     size_t received;
     size_t receive_failures;
+    rns_status_t receive_status;
     size_t packet_callbacks;
     uint8_t received_data[2048];
     size_t received_length;
@@ -62,7 +63,7 @@ static bool accept_resource(rns_runtime_link_t *link,
                             void *context) {
     observation_t *observation = context;
     assert(link == observation->accepted_link);
-    assert(advertisement->data_size <= sizeof observation->received_data);
+    assert(advertisement != NULL);
     observation->accepted++;
     return observation->accept_resources;
 }
@@ -76,6 +77,7 @@ static void receive_resource(rns_runtime_link_t *link,
     assert(resource_hash != NULL);
     if (status != RNS_OK) {
         observation->receive_failures++;
+        observation->receive_status = status;
         assert(data == NULL && data_length == 0U);
         return;
     }
@@ -203,6 +205,36 @@ static void test_success_reject_cancel_and_malformed(void) {
     assert(rns_runtime_link_send_resource(fixture.outbound, message,
                                            sizeof message, &options,
                                            &transfer) == RNS_OK);
+    /* A different valid advertisement received while this transfer is active
+     * must not replace or orphan the original receiver. */
+    for (size_t i = 0U; i < 100U && fixture.receiver.accepted == 0U; ++i) {
+        size_t processed = 0U;
+        assert(rns_runtime_poll(fixture.responder, 1U, &processed) == RNS_OK);
+    }
+    assert(fixture.receiver.accepted == 1U);
+    rns_link unrelated_link = {0};
+    unrelated_link.state = RNS_LINK_ACTIVE;
+    unrelated_link.mtu = 500U;
+    memset(unrelated_link.derived_key, 0x5a,
+           sizeof unrelated_link.derived_key);
+    static const uint8_t unrelated_data[] = "concurrent resource";
+    rns_resource_sender_t *unrelated = NULL;
+    assert(rns_resource_sender_create(&unrelated, &unrelated_link,
+                                      unrelated_data,
+                                      sizeof unrelated_data, NULL) == RNS_OK);
+    uint8_t unrelated_advertisement[500U];
+    size_t unrelated_advertisement_length = 0U;
+    assert(rns_resource_sender_advertisement(
+               unrelated, unrelated_advertisement,
+               sizeof unrelated_advertisement,
+               &unrelated_advertisement_length) == RNS_OK);
+    assert(rns_runtime_link_send(fixture.outbound,
+                                 RNS_LINK_CONTEXT_RESOURCE_ADV,
+                                 unrelated_advertisement,
+                                 unrelated_advertisement_length) == RNS_OK);
+    for (size_t i = 0U; i < 20U; ++i) fixture_poll(&fixture);
+    assert(fixture.receiver.accepted == 1U);
+    rns_resource_sender_destroy(unrelated);
     for (size_t i = 0U; i < 1000U &&
          rns_runtime_resource_transfer_state(transfer) !=
              RNS_RUNTIME_RESOURCE_COMPLETE; ++i)
@@ -217,6 +249,25 @@ static void test_success_reject_cancel_and_malformed(void) {
     assert(rns_runtime_resource_transfer_sent_parts(transfer) >=
            rns_runtime_resource_transfer_total_parts(transfer));
     assert(rns_runtime_resource_transfer_hash(transfer) != NULL);
+    rns_runtime_resource_transfer_destroy(transfer);
+
+    /* Policy acceptance followed by an internal size rejection is terminal
+     * and observable by both applications. */
+    uint8_t oversized[3000];
+    memset(oversized, 0x33, sizeof oversized);
+    fixture.sender.transfer_callbacks = 0U;
+    assert(rns_runtime_link_send_resource(fixture.outbound, oversized,
+                                           sizeof oversized, &options,
+                                           &transfer) == RNS_OK);
+    for (size_t i = 0U; i < 1000U &&
+         rns_runtime_resource_transfer_state(transfer) ==
+             RNS_RUNTIME_RESOURCE_ADVERTISED; ++i)
+        fixture_poll(&fixture);
+    assert(rns_runtime_resource_transfer_state(transfer) ==
+           RNS_RUNTIME_RESOURCE_REJECTED);
+    assert(fixture.receiver.receive_failures == 1U);
+    assert(fixture.receiver.receive_status == RNS_ERROR_OVERFLOW);
+    assert(fixture.sender.transfer_callbacks == 1U);
     rns_runtime_resource_transfer_destroy(transfer);
 
     fixture.receiver.accept_resources = false;
@@ -241,7 +292,7 @@ static void test_success_reject_cancel_and_malformed(void) {
            RNS_RUNTIME_RESOURCE_CANCELLED);
     assert(fixture.sender.transfer_callbacks == 1U);
     for (size_t i = 0U; i < 20U; ++i) fixture_poll(&fixture);
-    assert(fixture.receiver.receive_failures == 1U);
+    assert(fixture.receiver.receive_failures == 2U);
     rns_runtime_resource_transfer_destroy(transfer);
 
     static const uint8_t malformed[] = {0xc1U, 0xffU};

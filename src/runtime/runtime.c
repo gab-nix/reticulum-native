@@ -392,6 +392,16 @@ static bool resource_advertised(rns_runtime_link_t *link, const uint8_t *plainte
                                advertisement.hash, sizeof advertisement.hash);
         return true;
     }
+    if (link->resource != NULL) {
+        if (memcmp(link->resource_hash, advertisement.hash,
+                   RNS_RESOURCE_HASH_SIZE) == 0)
+            (void)resource_request_parts(link);
+        else
+            (void)link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_RCL,
+                                   advertisement.hash,
+                                   sizeof advertisement.hash);
+        return true;
+    }
     if (application &&
         (link->options.resource_accept_callback == NULL ||
          !link->options.resource_accept_callback(
@@ -400,19 +410,23 @@ static bool resource_advertised(rns_runtime_link_t *link, const uint8_t *plainte
                                advertisement.hash, sizeof advertisement.hash);
         return true;
     }
-    if (link->resource != NULL) resource_release(link);
     size_t maximum = application ? link->options.max_incoming_resource_size
                                  : receipt->options.max_response_size;
     if (maximum == 0U) maximum = RNS_RESOURCE_DEFAULT_MAX_SIZE;
-    if (rns_resource_accept(&link->resource, &advertisement,
-                            maximum) != RNS_OK) {
+    rns_status_t accept_status = rns_resource_accept(
+        &link->resource, &advertisement, maximum);
+    if (accept_status != RNS_OK) {
         link->resource = NULL;
         (void)link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_RCL,
                                advertisement.hash, sizeof advertisement.hash);
         if (receipt != NULL) {
             receipt->state = RNS_REQUEST_FAILED;
-            request_notify(receipt, RNS_ERROR_OVERFLOW, NULL, 0U);
-        }
+            request_notify(receipt, accept_status, NULL, 0U);
+        } else if (application &&
+                   link->options.resource_receive_callback != NULL)
+            link->options.resource_receive_callback(
+                link, advertisement.hash, accept_status, NULL, 0U,
+                link->options.callback_context);
         return true;
     }
     link->resource_receipt = receipt;
