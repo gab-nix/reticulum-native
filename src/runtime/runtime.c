@@ -1,6 +1,7 @@
 #include "reticulum/runtime.h"
 
 #include "reticulum/announce.h"
+#include "reticulum/crypto.h"
 #include "reticulum/destination.h"
 #include "reticulum/hal.h"
 #include "reticulum/packet.h"
@@ -37,6 +38,8 @@ struct rns_runtime_link {
     rns_request_receipt_t *requests[RNS_RUNTIME_MAX_REQUESTS];
     rns_resource_t *resource;
     rns_request_receipt_t *resource_receipt;
+    uint8_t callback_packet_hash[RNS_PROOF_HASH_SIZE];
+    bool callback_packet_provable;
 };
 
 struct rns_runtime_destination {
@@ -65,6 +68,9 @@ struct rns_packet_receipt {
     double sent_at;
     double concluded_at;
     double deadline;
+    bool link_proof;
+    uint8_t link_id[16];
+    uint8_t link_signing_public[32];
 };
 
 struct rns_runtime {
@@ -113,13 +119,23 @@ static bool packet_receipt_ingress(rns_runtime_t *runtime, const uint8_t *raw,
         return false;
     for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i) {
         rns_packet_receipt_t *receipt = runtime->packet_receipts[i];
-        if (receipt == NULL || receipt->state != RNS_PACKET_RECEIPT_PENDING ||
-            memcmp(packet.destination_hash, receipt->packet_hash, 16U) != 0)
+        if (receipt == NULL || receipt->state != RNS_PACKET_RECEIPT_PENDING)
             continue;
-        if (!rns_proof_validate(&receipt->destination_identity,
-                                receipt->packet_hash, packet.data,
-                                packet.data_length))
-            continue;
+        if (receipt->link_proof) {
+            rns_identity verifier = {0};
+            if (memcmp(packet.destination_hash, receipt->link_id, 16U) != 0)
+                continue;
+            memcpy(verifier.signing_public, receipt->link_signing_public, 32U);
+            if (!rns_proof_validate(&verifier, receipt->packet_hash, packet.data,
+                                    packet.data_length))
+                continue;
+        } else {
+            if (memcmp(packet.destination_hash, receipt->packet_hash, 16U) != 0 ||
+                !rns_proof_validate(&receipt->destination_identity,
+                                    receipt->packet_hash, packet.data,
+                                    packet.data_length))
+                continue;
+        }
         receipt->state = RNS_PACKET_RECEIPT_DELIVERED;
         receipt->concluded_at = runtime_clock(NULL);
         packet_receipt_notify(receipt, RNS_OK);
@@ -181,6 +197,30 @@ static rns_status_t link_send_wire(rns_runtime_link_t *link, uint8_t context,
     if (!rns_packet_encode(&packet, raw, sizeof raw, &raw_length))
         return RNS_ERROR_OVERFLOW;
     if (packet_id != NULL && !rns_packet_truncated_hash(raw, raw_length, packet_id))
+        return RNS_ERROR_CRYPTO;
+    rns_status_t status = send_internal(link->runtime, link->interface_index,
+                                        raw, raw_length);
+    if (status == RNS_OK) link->last_outbound = runtime_clock(NULL);
+    return status;
+}
+
+static rns_status_t link_send_wire_hash(rns_runtime_link_t *link,
+                                        uint8_t context, const uint8_t *data,
+                                        size_t data_length,
+                                        uint8_t packet_hash[32]) {
+    uint8_t raw[RNS_MTU];
+    size_t raw_length = 0U;
+    rns_packet packet = {0};
+    packet.destination_type = 3U;
+    packet.packet_type = 0U;
+    packet.context = context;
+    memcpy(packet.destination_hash, link->protocol.link_id,
+           sizeof packet.destination_hash);
+    packet.data = data;
+    packet.data_length = data_length;
+    if (!rns_packet_encode(&packet, raw, sizeof raw, &raw_length))
+        return RNS_ERROR_OVERFLOW;
+    if (!rns_packet_hash(raw, raw_length, packet_hash))
         return RNS_ERROR_CRYPTO;
     rns_status_t status = send_internal(link->runtime, link->interface_index,
                                         raw, raw_length);
@@ -537,9 +577,15 @@ static bool link_ingress(rns_runtime_t *runtime, size_t interface_index,
             }
         } else if (link_encrypted &&
                    link->options.packet_callback != NULL) {
+            if (!rns_packet_hash(raw, raw_length, link->callback_packet_hash))
+                return true;
+            link->callback_packet_provable = true;
             link->options.packet_callback(link, packet.context, payload,
                                           plaintext_length,
                                           link->options.callback_context);
+            link->callback_packet_provable = false;
+            memset(link->callback_packet_hash, 0,
+                   sizeof link->callback_packet_hash);
         }
         return true;
     }
@@ -1270,6 +1316,80 @@ rns_status_t rns_runtime_link_send(rns_runtime_link_t *link, uint8_t context,
         return link_send_wire(link, context, plaintext, plaintext_length, NULL);
     }
     return link_send_plain(link, context, plaintext, plaintext_length, NULL);
+}
+
+static bool link_receipt_context(uint8_t context) {
+    return context != RNS_LINK_CONTEXT_KEEPALIVE &&
+           context != RNS_LINK_CONTEXT_CLOSE &&
+           context != RNS_LINK_CONTEXT_RTT &&
+           context != RNS_LINK_CONTEXT_PROOF &&
+           context != RNS_LINK_CONTEXT_RESOURCE &&
+           context != RNS_LINK_CONTEXT_RESOURCE_ADV &&
+           context != RNS_LINK_CONTEXT_RESOURCE_REQ &&
+           context != RNS_LINK_CONTEXT_RESOURCE_PRF &&
+           context != RNS_LINK_CONTEXT_RESOURCE_ICL;
+}
+
+rns_status_t rns_runtime_link_send_with_receipt(
+    rns_runtime_link_t *link, uint8_t context, const uint8_t *plaintext,
+    size_t plaintext_length, const rns_packet_receipt_options_t *options,
+    rns_packet_receipt_t **output) {
+    size_t slot = RNS_RUNTIME_MAX_PACKET_RECEIPTS;
+    uint8_t encrypted[RNS_MTU];
+    size_t encrypted_length = 0U;
+    if (link == NULL || output == NULL ||
+        (plaintext == NULL && plaintext_length != 0U) ||
+        link->protocol.state != RNS_LINK_ACTIVE || !link_receipt_context(context))
+        return RNS_ERROR_INVALID_ARGUMENT;
+    *output = NULL;
+    for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i)
+        if (link->runtime->packet_receipts[i] == NULL) {
+            slot = i;
+            break;
+        }
+    if (slot == RNS_RUNTIME_MAX_PACKET_RECEIPTS) return RNS_ERROR_OVERFLOW;
+    if (!rns_link_encrypt(&link->protocol, plaintext, plaintext_length, encrypted,
+                          sizeof encrypted, &encrypted_length))
+        return RNS_ERROR_OVERFLOW;
+    rns_packet_receipt_t *receipt = calloc(1U, sizeof *receipt);
+    if (receipt == NULL) return RNS_ERROR_NO_MEMORY;
+    receipt->runtime = link->runtime;
+    if (options != NULL) receipt->options = *options;
+    receipt->link_proof = true;
+    memcpy(receipt->link_id, link->protocol.link_id, sizeof receipt->link_id);
+    memcpy(receipt->link_signing_public, link->protocol.peer_signing_public,
+           sizeof receipt->link_signing_public);
+    double now = runtime_clock(NULL);
+    double timeout = receipt->options.timeout_seconds;
+    if (timeout <= 0.0) timeout = link->protocol.rtt * 6.0 + 5.0;
+    if (timeout < 10.0) timeout = 10.0;
+    receipt->state = RNS_PACKET_RECEIPT_PENDING;
+    receipt->sent_at = now;
+    receipt->deadline = now + timeout;
+    link->runtime->packet_receipts[slot] = receipt;
+    rns_status_t status = link_send_wire_hash(link, context, encrypted,
+                                              encrypted_length,
+                                              receipt->packet_hash);
+    if (status != RNS_OK) {
+        link->runtime->packet_receipts[slot] = NULL;
+        free(receipt);
+        return status;
+    }
+    *output = receipt;
+    return RNS_OK;
+}
+
+rns_status_t rns_runtime_link_prove_current_packet(rns_runtime_link_t *link) {
+    uint8_t proof[RNS_PROOF_EXPLICIT_SIZE];
+    if (link == NULL || !link->callback_packet_provable ||
+        link->protocol.state != RNS_LINK_ACTIVE)
+        return RNS_ERROR_INVALID_STATE;
+    memcpy(proof, link->callback_packet_hash, RNS_PROOF_HASH_SIZE);
+    if (!rns_ed25519_sign(link->protocol.signing_private,
+                          link->callback_packet_hash, RNS_PROOF_HASH_SIZE,
+                          proof + RNS_PROOF_HASH_SIZE))
+        return RNS_ERROR_CRYPTO;
+    return link_send_proof(link, 0U, proof, sizeof proof);
 }
 
 rns_status_t rns_runtime_link_request(

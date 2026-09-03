@@ -233,6 +233,16 @@ rns_status_t rns_runtime_link_open(
 rns_status_t rns_runtime_link_send(rns_runtime_link_t *link, uint8_t context,
                                    const uint8_t *plaintext,
                                    size_t plaintext_length);
+/* Sends an encrypted link packet and tracks the explicit proof signed by the
+ * remote link endpoint's ephemeral signing key. */
+rns_status_t rns_runtime_link_send_with_receipt(
+    rns_runtime_link_t *link, uint8_t context, const uint8_t *plaintext,
+    size_t plaintext_length, const rns_packet_receipt_options_t *options,
+    rns_packet_receipt_t **receipt);
+/* Proves the authenticated link packet currently being delivered to the
+ * packet callback. This is intentionally callback-scoped so callers cannot
+ * accidentally prove stale or unauthenticated input. */
+rns_status_t rns_runtime_link_prove_current_packet(rns_runtime_link_t *link);
 rns_link_state rns_runtime_link_state(const rns_runtime_link_t *link);
 const uint8_t *rns_runtime_link_id(const rns_runtime_link_t *link);
 void rns_runtime_link_destroy(rns_runtime_link_t *link);

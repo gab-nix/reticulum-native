@@ -16,6 +16,8 @@ typedef struct link_observation {
     uint8_t context;
     uint8_t payload[64];
     size_t payload_length;
+    bool prove_packets;
+    bool receipt_delivered;
 } link_observation_t;
 
 static uint16_t reserve_udp_port(void) {
@@ -62,6 +64,18 @@ static void link_packet_received(rns_runtime_link_t *link, uint8_t context,
     memcpy(observation->payload, plaintext, plaintext_length);
     observation->payload_length = plaintext_length;
     observation->packet_count++;
+    if (observation->prove_packets)
+        assert(rns_runtime_link_prove_current_packet(link) == RNS_OK);
+}
+
+static void receipt_changed(rns_packet_receipt_t *receipt,
+                            rns_packet_receipt_state_t state,
+                            rns_status_t status, void *opaque) {
+    link_observation_t *observation = opaque;
+    assert(receipt != NULL);
+    assert(status == RNS_OK);
+    if (state == RNS_PACKET_RECEIPT_DELIVERED)
+        observation->receipt_delivered = true;
 }
 
 static void inbound_link_accepted(rns_runtime_destination_t *destination,
@@ -173,6 +187,31 @@ int main(void) {
     assert(responder.payload_length == sizeof message - 1U);
     assert(memcmp(responder.payload, message, sizeof message - 1U) == 0);
 
+    responder.prove_packets = true;
+    static const uint8_t proved_message[] = "proved link packet";
+    rns_packet_receipt_t *receipt = NULL;
+    rns_packet_receipt_options_t receipt_options = {
+        .timeout_seconds = 2.0,
+        .callback = receipt_changed,
+        .callback_context = &initiator};
+    assert(rns_runtime_link_send_with_receipt(
+               outbound, 0U, proved_message, sizeof proved_message - 1U,
+               &receipt_options, &receipt) == RNS_OK);
+    assert(receipt != NULL);
+    assert(rns_runtime_link_prove_current_packet(outbound) ==
+           RNS_ERROR_INVALID_STATE);
+    for (size_t attempt = 0U; attempt < 1000U &&
+         !initiator.receipt_delivered; ++attempt) {
+        assert(rns_runtime_poll(responder_runtime, 8U, &processed) == RNS_OK);
+        assert(rns_runtime_poll(initiator_runtime, 8U, &processed) == RNS_OK);
+    }
+    assert(responder.packet_count == 2U);
+    assert(initiator.receipt_delivered);
+    assert(rns_packet_receipt_state(receipt) ==
+           RNS_PACKET_RECEIPT_DELIVERED);
+    assert(rns_packet_receipt_rtt(receipt) >= 0.0);
+    rns_packet_receipt_destroy(receipt);
+
     /* Link keepalives are raw protocol bytes, not token-encrypted payloads,
      * and are never dispatched to the application callback. */
     static const uint8_t keepalive_request = 0xffU;
@@ -183,7 +222,7 @@ int main(void) {
                                  &keepalive_response, 1U) ==
            RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_runtime_poll(responder_runtime, 8U, &processed) == RNS_OK);
-    assert(responder.packet_count == 1U);
+    assert(responder.packet_count == 2U);
     assert(rns_runtime_link_send(responder.accepted,
                                  RNS_LINK_CONTEXT_KEEPALIVE,
                                  &keepalive_response, 1U) == RNS_OK);
