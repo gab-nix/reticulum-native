@@ -18,9 +18,11 @@ extern "C" {
 typedef struct rns_runtime rns_runtime_t;
 typedef struct rns_runtime_link rns_runtime_link_t;
 typedef struct rns_request_receipt rns_request_receipt_t;
+typedef struct rns_packet_receipt rns_packet_receipt_t;
 
 #define RNS_RUNTIME_MAX_LINKS 16u
 #define RNS_RUNTIME_MAX_REQUESTS 8u
+#define RNS_RUNTIME_MAX_PACKET_RECEIPTS 64u
 #define RNS_REQUEST_DEFAULT_MAX_RESPONSE (8u * 1024u * 1024u)
 /* Resource transfer contexts, advertised by peers that answer with a Resource. */
 #define RNS_LINK_CONTEXT_RESOURCE 0x01u
@@ -69,6 +71,23 @@ typedef struct rns_request_options {
     rns_request_callback_t callback;
     void *callback_context;
 } rns_request_options_t;
+
+typedef enum rns_packet_receipt_state {
+    RNS_PACKET_RECEIPT_PENDING = 0,
+    RNS_PACKET_RECEIPT_DELIVERED,
+    RNS_PACKET_RECEIPT_FAILED,
+    RNS_PACKET_RECEIPT_CANCELLED
+} rns_packet_receipt_state_t;
+
+typedef void (*rns_packet_receipt_callback_t)(
+    rns_packet_receipt_t *receipt, rns_packet_receipt_state_t state,
+    rns_status_t status, void *context);
+
+typedef struct rns_packet_receipt_options {
+    double timeout_seconds;
+    rns_packet_receipt_callback_t callback;
+    void *callback_context;
+} rns_packet_receipt_options_t;
 
 typedef enum rns_runtime_interface_state {
     RNS_RUNTIME_INTERFACE_DISABLED = 0,
@@ -131,6 +150,27 @@ rns_status_t rns_runtime_send(rns_runtime_t *runtime,
 rns_status_t rns_runtime_send_routed(rns_runtime_t *runtime,
                                      const uint8_t *packet,
                                      size_t packet_length);
+/* Sends a routed packet and tracks the explicit or implicit Reticulum proof
+ * made by destination_identity. The receipt remains caller-owned until
+ * destroyed, or until its runtime is destroyed. */
+rns_status_t rns_runtime_send_routed_with_receipt(
+    rns_runtime_t *runtime, const uint8_t *packet, size_t packet_length,
+    const rns_identity *destination_identity,
+    const rns_packet_receipt_options_t *options,
+    rns_packet_receipt_t **receipt);
+/* Emits a proof for an immutable packet result received by a runtime callback,
+ * on the same interface. `explicit_proof` selects hash+signature instead of
+ * the 64-byte implicit signature form. */
+rns_status_t rns_runtime_prove_packet(rns_runtime_t *runtime,
+                                      const rns_node_result *received,
+                                      const rns_identity *identity,
+                                      bool explicit_proof);
+rns_packet_receipt_state_t rns_packet_receipt_state(
+    const rns_packet_receipt_t *receipt);
+const uint8_t *rns_packet_receipt_hash(const rns_packet_receipt_t *receipt);
+double rns_packet_receipt_rtt(const rns_packet_receipt_t *receipt);
+void rns_packet_receipt_cancel(rns_packet_receipt_t *receipt);
+void rns_packet_receipt_destroy(rns_packet_receipt_t *receipt);
 /*
  * Broadcasts a signed announce for the destination derived from identity and
  * the given aspects, so peers can discover and route back to it.

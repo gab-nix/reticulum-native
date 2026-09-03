@@ -108,6 +108,7 @@ int rns_node_ingress(rns_node *node, const uint8_t *raw, size_t raw_length,
                      uint8_t *output, size_t output_capacity, rns_node_result *result) {
     rns_packet packet; const rns_path_entry *path; uint8_t received_hops;
     if (!result) return 0; memset(result, 0, sizeof(*result)); result->action = RNS_NODE_DROP;
+    result->received_interface_id = interface_id;
     if (!node || !raw || !rns_packet_decode(&packet, raw, raw_length) ||
         !rns_packet_hash(raw, raw_length, result->packet_hash)) { result->reason = RNS_NODE_REASON_MALFORMED; return 1; }
     memcpy(result->destination_hash, packet.destination_hash, 16);

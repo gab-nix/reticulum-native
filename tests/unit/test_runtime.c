@@ -34,6 +34,19 @@ static void test_routed_and_announce(rns_runtime_t *runtime) {
            RNS_ERROR_NOT_FOUND);
 
     assert(rns_identity_generate(&identity));
+    rns_packet_receipt_t *packet_receipt = (rns_packet_receipt_t *)1;
+    assert(rns_runtime_send_routed_with_receipt(
+               runtime, packet, packet_length, NULL, NULL,
+               &packet_receipt) == RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_runtime_send_routed_with_receipt(
+               runtime, packet, packet_length, &identity, NULL,
+               &packet_receipt) == RNS_ERROR_NOT_FOUND);
+    assert(packet_receipt == NULL);
+    assert(rns_packet_receipt_state(NULL) == RNS_PACKET_RECEIPT_FAILED);
+    assert(rns_packet_receipt_hash(NULL) == NULL);
+    assert(rns_packet_receipt_rtt(NULL) == 0.0);
+    rns_packet_receipt_cancel(NULL);
+    rns_packet_receipt_destroy(NULL);
     assert(rns_runtime_announce(NULL, &identity, "lxmf", aspects, 1U, NULL, 0U) ==
            RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_runtime_announce(runtime, NULL, "lxmf", aspects, 1U, NULL, 0U) ==

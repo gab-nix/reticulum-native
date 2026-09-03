@@ -52,6 +52,7 @@ reticulum_add_test(test_micron unit/test_micron.c)
 reticulum_add_test(test_udp integration/test_udp.c)
 reticulum_add_test(test_tcp integration/test_tcp.c)
 reticulum_add_test(test_udp_lxmf integration/test_udp_lxmf.c)
+reticulum_add_test(test_runtime_receipt integration/test_runtime_receipt.c)
 
 if(TARGET rnid)
     add_test(NAME test_rnid

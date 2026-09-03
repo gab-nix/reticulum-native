@@ -6,6 +6,7 @@
 #include "reticulum/packet.h"
 #include "reticulum/request.h"
 #include "reticulum/resource.h"
+#include "reticulum/proof.h"
 #include "reticulum/tcp.h"
 #include "reticulum/udp.h"
 
@@ -46,6 +47,17 @@ struct rns_request_receipt {
     double deadline;
 };
 
+struct rns_packet_receipt {
+    rns_runtime_t *runtime;
+    rns_packet_receipt_options_t options;
+    rns_packet_receipt_state_t state;
+    rns_identity destination_identity;
+    uint8_t packet_hash[RNS_PROOF_HASH_SIZE];
+    double sent_at;
+    double concluded_at;
+    double deadline;
+};
+
 struct rns_runtime {
     rns_config_t config;
     rns_node node;
@@ -55,6 +67,7 @@ struct rns_runtime {
     rns_runtime_announce_callback_t announce_callback;
     void *callback_context;
     rns_runtime_link_t *links[RNS_RUNTIME_MAX_LINKS];
+    rns_packet_receipt_t *packet_receipts[RNS_RUNTIME_MAX_PACKET_RECEIPTS];
 };
 
 typedef struct receive_context {
@@ -69,6 +82,37 @@ static double runtime_clock(void *context) {
     (void)context;
     (void)rns_hal_monotonic_ms(&milliseconds);
     return (double)milliseconds / 1000.0;
+}
+
+static void packet_receipt_notify(rns_packet_receipt_t *receipt,
+                                  rns_status_t status) {
+    if (receipt->options.callback != NULL)
+        receipt->options.callback(receipt, receipt->state, status,
+                                  receipt->options.callback_context);
+}
+
+static bool packet_receipt_ingress(rns_runtime_t *runtime, const uint8_t *raw,
+                                   size_t raw_length) {
+    rns_packet packet;
+    if (!rns_packet_decode(&packet, raw, raw_length) || packet.packet_type != 3U ||
+        packet.context == RNS_LINK_CONTEXT_PROOF ||
+        packet.context == RNS_LINK_CONTEXT_RESOURCE_PRF)
+        return false;
+    for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i) {
+        rns_packet_receipt_t *receipt = runtime->packet_receipts[i];
+        if (receipt == NULL || receipt->state != RNS_PACKET_RECEIPT_PENDING ||
+            memcmp(packet.destination_hash, receipt->packet_hash, 16U) != 0)
+            continue;
+        if (!rns_proof_validate(&receipt->destination_identity,
+                                receipt->packet_hash, packet.data,
+                                packet.data_length))
+            continue;
+        receipt->state = RNS_PACKET_RECEIPT_DELIVERED;
+        receipt->concluded_at = runtime_clock(NULL);
+        packet_receipt_notify(receipt, RNS_OK);
+        return true;
+    }
+    return false;
 }
 
 static rns_status_t send_internal(rns_runtime_t *runtime, size_t index,
@@ -399,6 +443,7 @@ static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, s
     source->info.packets_received++;
     source->info.bytes_received += length;
     context->processed++;
+    if (packet_receipt_ingress(runtime, packet, length)) return RNS_OK;
     if (!rns_node_ingress(&runtime->node, packet, length, source->info.id, 0,
                           output, sizeof(output), &result)) return RNS_ERROR_INVALID_STATE;
     if (result.action == RNS_NODE_DROP) source->info.packets_dropped++;
@@ -514,6 +559,10 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
 
 void rns_runtime_destroy(rns_runtime_t *runtime) {
     if (runtime == NULL) return;
+    for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i) {
+        free(runtime->packet_receipts[i]);
+        runtime->packet_receipts[i] = NULL;
+    }
     for (size_t i = 0U; i < RNS_RUNTIME_MAX_LINKS; i++) {
         if (runtime->links[i] != NULL)
             for (size_t j = 0U; j < RNS_RUNTIME_MAX_REQUESTS; j++)
@@ -558,6 +607,15 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
     if (max_packets == 0U) max_packets = RUNTIME_DEFAULT_WORK;
     (void)rns_transport_expire(&runtime->node.transport);
     double now = runtime_clock(NULL);
+    for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i) {
+        rns_packet_receipt_t *receipt = runtime->packet_receipts[i];
+        if (receipt != NULL && receipt->state == RNS_PACKET_RECEIPT_PENDING &&
+            now >= receipt->deadline) {
+            receipt->state = RNS_PACKET_RECEIPT_FAILED;
+            receipt->concluded_at = now;
+            packet_receipt_notify(receipt, RNS_ERROR_TIMEOUT);
+        }
+    }
     for (size_t i = 0U; i < RNS_RUNTIME_MAX_LINKS; i++) {
         rns_runtime_link_t *link = runtime->links[i];
         if (link == NULL) continue;
@@ -615,10 +673,17 @@ static size_t interface_for_path(const rns_runtime_t *runtime, uint64_t interfac
     return runtime->interface_count;
 }
 
-rns_status_t rns_runtime_send_routed(rns_runtime_t *runtime, const uint8_t *packet,
-                                     size_t packet_length) {
+static rns_status_t prepare_routed_packet(rns_runtime_t *runtime,
+                                          const uint8_t *packet,
+                                          size_t packet_length,
+                                          uint8_t raw[RNS_MTU],
+                                          size_t *raw_length,
+                                          size_t *interface_index,
+                                          uint8_t *path_hops) {
     rns_packet decoded;
-    if (runtime == NULL || packet == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (runtime == NULL || packet == NULL || raw == NULL || raw_length == NULL ||
+        interface_index == NULL || packet_length > RNS_MTU)
+        return RNS_ERROR_INVALID_ARGUMENT;
     if (!rns_packet_decode(&decoded, packet, packet_length))
         return RNS_ERROR_INVALID_ARGUMENT;
     const rns_path_entry *path = rns_transport_lookup(&runtime->node.transport,
@@ -626,16 +691,150 @@ rns_status_t rns_runtime_send_routed(rns_runtime_t *runtime, const uint8_t *pack
     if (path == NULL) return RNS_ERROR_NOT_FOUND;
     size_t index = interface_for_path(runtime, path->interface_id);
     if (index == runtime->interface_count) return RNS_ERROR_INVALID_STATE;
-    if (path->hops <= 1U) return send_internal(runtime, index, packet, packet_length);
-    uint8_t raw[RNS_MTU];
-    size_t raw_length = 0U;
+    if (path_hops != NULL) *path_hops = path->hops;
+    *interface_index = index;
+    if (path->hops <= 1U) {
+        memcpy(raw, packet, packet_length);
+        *raw_length = packet_length;
+        return RNS_OK;
+    }
     rns_packet routed = decoded;
     routed.header_type = RNS_PACKET_HEADER_2;
     routed.transport_type = 1U;
     memcpy(routed.transport_id, path->next_hop, sizeof routed.transport_id);
-    if (!rns_packet_encode(&routed, raw, sizeof raw, &raw_length))
+    if (!rns_packet_encode(&routed, raw, RNS_MTU, raw_length))
         return RNS_ERROR_OVERFLOW;
+    return RNS_OK;
+}
+
+rns_status_t rns_runtime_send_routed(rns_runtime_t *runtime, const uint8_t *packet,
+                                     size_t packet_length) {
+    uint8_t raw[RNS_MTU];
+    size_t raw_length = 0U;
+    size_t index = 0U;
+    rns_status_t status = prepare_routed_packet(runtime, packet, packet_length,
+                                                raw, &raw_length, &index, NULL);
+    if (status != RNS_OK) return status;
     return send_internal(runtime, index, raw, raw_length);
+}
+
+rns_status_t rns_runtime_send_routed_with_receipt(
+    rns_runtime_t *runtime, const uint8_t *packet, size_t packet_length,
+    const rns_identity *destination_identity,
+    const rns_packet_receipt_options_t *options,
+    rns_packet_receipt_t **output) {
+    uint8_t raw[RNS_MTU];
+    size_t raw_length = 0U;
+    size_t interface_index = 0U;
+    uint8_t hops = 0U;
+    size_t slot = RNS_RUNTIME_MAX_PACKET_RECEIPTS;
+    if (runtime == NULL || packet == NULL || destination_identity == NULL ||
+        output == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    *output = NULL;
+    for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i)
+        if (runtime->packet_receipts[i] == NULL) {
+            slot = i;
+            break;
+        }
+    if (slot == RNS_RUNTIME_MAX_PACKET_RECEIPTS) return RNS_ERROR_OVERFLOW;
+    rns_status_t status = prepare_routed_packet(runtime, packet, packet_length,
+                                                raw, &raw_length,
+                                                &interface_index, &hops);
+    if (status != RNS_OK) return status;
+    rns_packet_receipt_t *receipt = calloc(1U, sizeof *receipt);
+    if (receipt == NULL) return RNS_ERROR_NO_MEMORY;
+    receipt->runtime = runtime;
+    receipt->destination_identity = *destination_identity;
+    if (options != NULL) receipt->options = *options;
+    if (!rns_packet_hash(raw, raw_length, receipt->packet_hash)) {
+        free(receipt);
+        return RNS_ERROR_CRYPTO;
+    }
+    double now = runtime_clock(NULL);
+    double timeout = receipt->options.timeout_seconds;
+    if (timeout <= 0.0) timeout = 10.0 + 6.0 * (double)(hops != 0U ? hops : 1U);
+    receipt->state = RNS_PACKET_RECEIPT_PENDING;
+    receipt->sent_at = now;
+    receipt->deadline = now + timeout;
+    runtime->packet_receipts[slot] = receipt;
+    status = send_internal(runtime, interface_index, raw, raw_length);
+    if (status != RNS_OK) {
+        runtime->packet_receipts[slot] = NULL;
+        free(receipt);
+        return status;
+    }
+    *output = receipt;
+    return RNS_OK;
+}
+
+rns_status_t rns_runtime_prove_packet(rns_runtime_t *runtime,
+                                      const rns_node_result *received,
+                                      const rns_identity *identity,
+                                      bool explicit_proof) {
+    uint8_t proof[RNS_PROOF_EXPLICIT_SIZE];
+    size_t proof_length = explicit_proof ? RNS_PROOF_EXPLICIT_SIZE
+                                         : RNS_PROOF_IMPLICIT_SIZE;
+    uint8_t raw[RNS_MTU];
+    size_t raw_length = 0U;
+    if (runtime == NULL || received == NULL || identity == NULL ||
+        !identity->has_private)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    int generated = explicit_proof
+                        ? rns_proof_generate_explicit(identity,
+                                                      received->packet_hash,
+                                                      proof)
+                        : rns_proof_generate_implicit(identity,
+                                                      received->packet_hash,
+                                                      proof);
+    if (!generated) return RNS_ERROR_CRYPTO;
+    rns_packet packet = {0};
+    packet.destination_type = 0U;
+    packet.packet_type = 3U;
+    memcpy(packet.destination_hash, received->packet_hash, 16U);
+    packet.data = proof;
+    packet.data_length = proof_length;
+    if (!rns_packet_encode(&packet, raw, sizeof raw, &raw_length))
+        return RNS_ERROR_OVERFLOW;
+    size_t interface_index = interface_for_path(runtime,
+                                                received->received_interface_id);
+    if (interface_index == runtime->interface_count)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    return send_internal(runtime, interface_index, raw, raw_length);
+}
+
+rns_packet_receipt_state_t rns_packet_receipt_state(
+    const rns_packet_receipt_t *receipt) {
+    return receipt != NULL ? receipt->state : RNS_PACKET_RECEIPT_FAILED;
+}
+
+const uint8_t *rns_packet_receipt_hash(const rns_packet_receipt_t *receipt) {
+    return receipt != NULL ? receipt->packet_hash : NULL;
+}
+
+double rns_packet_receipt_rtt(const rns_packet_receipt_t *receipt) {
+    if (receipt == NULL || receipt->state != RNS_PACKET_RECEIPT_DELIVERED)
+        return 0.0;
+    return receipt->concluded_at - receipt->sent_at;
+}
+
+void rns_packet_receipt_cancel(rns_packet_receipt_t *receipt) {
+    if (receipt == NULL || receipt->state != RNS_PACKET_RECEIPT_PENDING) return;
+    receipt->state = RNS_PACKET_RECEIPT_CANCELLED;
+    receipt->concluded_at = runtime_clock(NULL);
+    packet_receipt_notify(receipt, RNS_OK);
+}
+
+void rns_packet_receipt_destroy(rns_packet_receipt_t *receipt) {
+    if (receipt == NULL) return;
+    rns_runtime_t *runtime = receipt->runtime;
+    if (runtime != NULL)
+        for (size_t i = 0U; i < RNS_RUNTIME_MAX_PACKET_RECEIPTS; ++i)
+            if (runtime->packet_receipts[i] == receipt) {
+                runtime->packet_receipts[i] = NULL;
+                break;
+            }
+    free(receipt);
 }
 
 rns_status_t rns_runtime_announce(rns_runtime_t *runtime, const rns_identity *identity,
