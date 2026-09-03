@@ -26,6 +26,11 @@ starting an asynchronous attempt is never presented as a failure by itself.
 - `d`: switch the compose delivery mode between direct delivery and an explicit
   propagation-node upload. Direct is the default, and propagated messages never
   silently fall back to direct delivery.
+- `v`: explicitly save the first attachment from the newest message that has
+  one. Saving is disabled unless `RETICULUM_ATTACHMENT_DIR` names an existing
+  absolute directory. The retained packed message is read only for this action;
+  names are reduced to traversal-safe leaf names, symlink directories are
+  rejected, and an existing file is never overwritten.
 - `a`: enter a 32-hex LXMF address, select or create that conversation, and
   open its composer.
 - `Left`/`Right`, `Home`/`End`, `Delete`, and `Backspace`: edit input. Editing

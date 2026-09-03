@@ -9,11 +9,14 @@
 
 #include <stdarg.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #define TUI_ROUTER_INTERVAL_MS 1000u
 #define TUI_ROUTER_BATCH 2u
@@ -33,6 +36,115 @@ static size_t contact_index(const tui_state_t *state,
     for (size_t i = 0u; i < state->contact_count; ++i)
         if (memcmp(state->contacts[i].peer, peer, LXMF_DESTINATION_LENGTH) == 0) return i;
     return state->contact_count;
+}
+
+static void copy_preview(lxmf_slice_t input, char *output, size_t capacity) {
+    if (capacity == 0u) return;
+    (void)tui_text_sanitize(input.data, input.len, output, capacity);
+}
+
+static void copy_media_metadata(const lxmf_media_view_t *media,
+                                lxmf_media_format_kind_t *kind,
+                                uint8_t *integer_format, char *text_format,
+                                size_t text_capacity, size_t *size) {
+    *kind = media->format_kind;
+    *integer_format = media->integer_format;
+    *size = media->data.len;
+    text_format[0] = '\0';
+    if (media->format_kind == LXMF_MEDIA_FORMAT_TEXT)
+        copy_preview(media->text_format, text_format, text_capacity);
+}
+
+static void metadata_from_fields(tui_message_metadata_t *metadata,
+                                 const lxmf_standard_fields_t *fields) {
+    metadata->state = fields->present_mask == 0u ? TUI_METADATA_NONE
+                                                 : TUI_METADATA_AVAILABLE;
+    metadata->present_mask = fields->present_mask;
+    metadata->renderer = fields->renderer;
+    memcpy(metadata->reply_to, fields->reply_to, sizeof metadata->reply_to);
+    copy_preview(fields->reply_quote, metadata->reply_quote,
+                 sizeof metadata->reply_quote);
+    memcpy(metadata->reaction_to, fields->reaction_to,
+           sizeof metadata->reaction_to);
+    copy_preview(fields->reaction_content, metadata->reaction,
+                 sizeof metadata->reaction);
+    memcpy(metadata->thread, fields->thread, sizeof metadata->thread);
+    metadata->attachment_count = fields->attachment_count;
+    for (size_t i = 0u; i < fields->attachment_count; ++i) {
+        tui_attachment_metadata_t *attachment = &metadata->attachments[i];
+        copy_preview(fields->attachments[i].name, attachment->display_name,
+                     sizeof attachment->display_name);
+        size_t safe_length = 0u;
+        if (lxmf_attachment_safe_name(
+                fields->attachments[i].name, (uint8_t *)attachment->safe_name,
+                sizeof attachment->safe_name - 1u, &safe_length) == LXMF_OK)
+            attachment->safe_name[safe_length] = '\0';
+        attachment->size = fields->attachments[i].data.len;
+    }
+    copy_media_metadata(&fields->image, &metadata->image_format_kind,
+                        &metadata->image_integer_format,
+                        metadata->image_text_format,
+                        sizeof metadata->image_text_format,
+                        &metadata->image_size);
+    copy_media_metadata(&fields->audio, &metadata->audio_format_kind,
+                        &metadata->audio_integer_format,
+                        metadata->audio_text_format,
+                        sizeof metadata->audio_text_format,
+                        &metadata->audio_size);
+}
+
+static lxmf_status_t read_message_fields(tui_state_t *state,
+                                         const lxmf_store_message_t *message,
+                                         uint8_t **owned_packed,
+                                         bool *had_packed,
+                                         lxmf_standard_fields_t *fields) {
+    *owned_packed = NULL;
+    *had_packed = message->packed.data != NULL && message->packed.len != 0u;
+    const uint8_t *packed = message->packed.data;
+    size_t packed_length = message->packed.len;
+    if (packed == NULL || packed_length == 0u) {
+        lxmf_status_t status = lxmf_store_packed_size(
+            &state->store, message->message_id, &packed_length);
+        if (status != LXMF_OK) return status;
+        if (packed_length == 0u || packed_length > LXMF_STORE_MAX_PACKED)
+            return LXMF_ERR_BOUNDS;
+        *owned_packed = malloc(packed_length);
+        if (*owned_packed == NULL) return LXMF_ERR_BOUNDS;
+        size_t actual = 0u;
+        status = lxmf_store_read_packed(&state->store, message->message_id,
+                                        *owned_packed, packed_length, &actual);
+        if (status != LXMF_OK || actual != packed_length) {
+            free(*owned_packed);
+            *owned_packed = NULL;
+            return status != LXMF_OK ? status : LXMF_ERR_FORMAT;
+        }
+        packed = *owned_packed;
+        *had_packed = true;
+    }
+    lxmf_message_t decoded;
+    lxmf_status_t status = lxmf_unpack(packed, packed_length, NULL, NULL,
+                                       &decoded);
+    if (status == LXMF_OK)
+        status = lxmf_standard_fields_parse(decoded.fields_msgpack.data,
+                                            decoded.fields_msgpack.len, fields);
+    return status;
+}
+
+static void load_message_metadata(tui_state_t *state, tui_message_t *copy,
+                                  const lxmf_store_message_t *message) {
+    uint8_t *owned = NULL;
+    bool had_packed = false;
+    lxmf_standard_fields_t fields;
+    lxmf_status_t status = read_message_fields(state, message, &owned,
+                                               &had_packed, &fields);
+    if (status == LXMF_OK)
+        metadata_from_fields(&copy->metadata, &fields);
+    else if (status == LXMF_ERR_FORMAT)
+        copy->metadata.state = had_packed ? TUI_METADATA_MALFORMED
+                                         : TUI_METADATA_MISSING_PACKED;
+    else
+        copy->metadata.state = TUI_METADATA_UNAVAILABLE;
+    free(owned);
 }
 
 /* Returns the contact index, or contact_count when the table is full. */
@@ -71,6 +183,7 @@ static bool ingest_message(tui_state_t *state, const lxmf_store_message_t *messa
     /* Full representations belong to the journal, not to this preview cache.
      * Callback and compose-buffer spans expire when their owner returns. */
     copy->value.packed = (lxmf_slice_t){NULL, 0u};
+    load_message_metadata(state, copy, message);
     const uint8_t *peer = message_peer(state, message);
     size_t index = ensure_contact(state, peer);
     if (index == state->contact_count) return false;
@@ -226,6 +339,104 @@ const tui_message_t *tui_state_thread_message(const tui_state_t *state, size_t i
 bool tui_state_outgoing(const tui_state_t *state, const tui_message_t *message) {
     return state != NULL && message != NULL &&
            memcmp(message->value.source, state->local, LXMF_DESTINATION_LENGTH) == 0;
+}
+
+bool tui_state_set_attachment_directory(tui_state_t *state,
+                                        const char *directory) {
+    if (state == NULL || directory == NULL || directory[0] != '/' ||
+        strlen(directory) >= sizeof state->attachment_directory) return false;
+    (void)snprintf(state->attachment_directory,
+                   sizeof state->attachment_directory, "%s", directory);
+    return true;
+}
+
+static bool write_attachment(tui_state_t *state, const char *name,
+                             lxmf_slice_t data) {
+    int directory = open(state->attachment_directory,
+                         O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (directory < 0) {
+        tui_state_set_status(state, "Attachment directory is unavailable");
+        return false;
+    }
+    int file = openat(directory, name,
+                      O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+                      S_IRUSR | S_IWUSR);
+    if (file < 0) {
+        int error = errno;
+        (void)close(directory);
+        tui_state_set_status(state, error == EEXIST
+            ? "Attachment already exists; no file was overwritten"
+            : "Could not create attachment file");
+        return false;
+    }
+    size_t written = 0u;
+    bool ok = true;
+    while (written < data.len) {
+        ssize_t count = write(file, data.data + written, data.len - written);
+        if (count > 0) written += (size_t)count;
+        else if (count < 0 && errno == EINTR) continue;
+        else { ok = false; break; }
+    }
+    if (ok && fsync(file) != 0) ok = false;
+    if (close(file) != 0) ok = false;
+    if (!ok) {
+        (void)unlinkat(directory, name, 0);
+        tui_state_set_status(state,
+                             "Attachment write failed; partial file removed");
+    } else {
+        tui_state_set_status(state, "Saved attachment %s", name);
+    }
+    (void)close(directory);
+    return ok;
+}
+
+bool tui_state_save_latest_attachment(tui_state_t *state) {
+    if (state == NULL) return false;
+    if (state->attachment_directory[0] == '\0') {
+        tui_state_set_status(state,
+            "Set RETICULUM_ATTACHMENT_DIR before saving attachments");
+        return false;
+    }
+    tui_state_refresh(state);
+    const tui_message_t *message = NULL;
+    for (size_t i = state->thread_count; i > 0u; --i) {
+        const tui_message_t *candidate =
+            &state->messages[state->thread[i - 1u]];
+        if (candidate->metadata.attachment_count != 0u) {
+            message = candidate;
+            break;
+        }
+    }
+    if (message == NULL) {
+        tui_state_set_status(state, "No attachment is available in this conversation");
+        return false;
+    }
+    uint8_t *owned = NULL;
+    bool had_packed = false;
+    lxmf_standard_fields_t fields;
+    lxmf_status_t status = read_message_fields(state, &message->value, &owned,
+                                               &had_packed, &fields);
+    if (status != LXMF_OK || fields.attachment_count == 0u) {
+        free(owned);
+        tui_state_set_status(state, had_packed
+            ? "Attachment metadata is malformed"
+            : "Original packed message is unavailable; attachment cannot be saved");
+        return false;
+    }
+    uint8_t safe[LXMF_STANDARD_MAX_NAME_BYTES + 1u];
+    size_t safe_length = 0u;
+    status = lxmf_attachment_safe_name(fields.attachments[0].name, safe,
+                                       sizeof safe - 1u, &safe_length);
+    if (status != LXMF_OK) {
+        free(owned);
+        tui_state_set_status(state, "Attachment filename is invalid");
+        return false;
+    }
+    safe[safe_length] = '\0';
+    bool result = write_attachment(state, (const char *)safe,
+                                   fields.attachments[0].data);
+    free(owned);
+    return result;
 }
 
 /* -------------------------------------------------------------- persistence */
@@ -1033,6 +1244,9 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     state->filter_dirty = true;
     state->messages = calloc(TUI_MAX_MESSAGES, sizeof *state->messages);
     if (state->messages == NULL) return -1;
+    const char *attachment_directory = getenv("RETICULUM_ATTACHMENT_DIR");
+    bool attachment_directory_invalid = attachment_directory != NULL &&
+        !tui_state_set_attachment_directory(state, attachment_directory);
     if (!load_identity(identity_path, &state->identity) ||
         !rns_destination_hash(&state->identity, "lxmf", aspects, 1u, state->local))
         goto fail;
@@ -1071,7 +1285,9 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
         if (!tui_hex_parse(destination_hex, peer, sizeof peer)) goto fail;
         (void)ensure_contact(state, peer);
     }
-    tui_state_set_status(state, "Offline outbox - network delivery is not connected yet");
+    tui_state_set_status(state, attachment_directory_invalid
+        ? "Ignored invalid RETICULUM_ATTACHMENT_DIR; attachment saving is disabled"
+        : "Offline outbox - network delivery is not connected yet");
 
     rns_node_registry_init(&state->nodes, TUI_NODE_LIFETIME);
     written = snprintf(state->node_store_path, sizeof state->node_store_path,

@@ -192,4 +192,22 @@ if(TARGET nomad-chat)
     target_compile_features(test_tui_dispatch PRIVATE c_std_17)
     reticulum_set_project_warnings(test_tui_dispatch)
     add_test(NAME test_tui_dispatch COMMAND test_tui_dispatch)
+
+    add_executable(test_tui_fields_ui
+        unit/test_tui_fields_ui.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
+    target_include_directories(test_tui_fields_ui PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps ${CURSES_INCLUDE_DIRS})
+    target_link_libraries(test_tui_fields_ui PRIVATE
+        reticulum::reticulum ${CURSES_LIBRARIES})
+    target_compile_features(test_tui_fields_ui PRIVATE c_std_17)
+    reticulum_set_project_warnings(test_tui_fields_ui)
+    add_test(NAME test_tui_fields_ui COMMAND test_tui_fields_ui)
 endif()

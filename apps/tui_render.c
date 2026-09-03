@@ -4,6 +4,7 @@
 
 #include <curses.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <string.h>
 
 #define TUI_MIN_ROWS 10
@@ -30,6 +31,87 @@ typedef struct {
     int hint_row;
     int legend_row;
 } tui_layout_t;
+
+static const char *renderer_name(uint8_t renderer) {
+    switch (renderer) {
+        case LXMF_RENDERER_PLAIN: return "plain";
+        case LXMF_RENDERER_MICRON: return "micron";
+        case LXMF_RENDERER_MARKDOWN: return "markdown";
+        case LXMF_RENDERER_BBCODE: return "bbcode";
+    }
+    return "unknown";
+}
+
+static void append_summary(char *output, size_t capacity, const char *format,
+                           ...) {
+    size_t used = strlen(output);
+    if (used >= capacity) return;
+    va_list arguments;
+    va_start(arguments, format);
+    (void)vsnprintf(output + used, capacity - used, format, arguments);
+    va_end(arguments);
+}
+
+void tui_render_message_metadata(const tui_message_metadata_t *metadata,
+                                 char *output, size_t capacity) {
+    if (capacity == 0u) return;
+    output[0] = '\0';
+    if (metadata == NULL) return;
+    if (metadata->state == TUI_METADATA_MISSING_PACKED) {
+        append_summary(output, capacity, " [metadata: packed message unavailable]");
+        return;
+    }
+    if (metadata->state == TUI_METADATA_MALFORMED) {
+        append_summary(output, capacity, " [metadata: malformed]");
+        return;
+    }
+    if (metadata->state == TUI_METADATA_UNAVAILABLE) {
+        append_summary(output, capacity, " [metadata: storage read failed]");
+        return;
+    }
+    uint32_t mask = metadata->present_mask;
+    if ((mask & LXMF_STANDARD_RENDERER) != 0u)
+        append_summary(output, capacity, " [renderer:%s",
+                       renderer_name(metadata->renderer));
+    else if (mask != 0u) append_summary(output, capacity, " [");
+    if ((mask & LXMF_STANDARD_REPLY_TO) != 0u)
+        append_summary(output, capacity, "%sreply:%02x%02x%02x%02x",
+                       output[strlen(output) - 1u] == '[' ? "" : " ",
+                       metadata->reply_to[0], metadata->reply_to[1],
+                       metadata->reply_to[2], metadata->reply_to[3]);
+    if ((mask & LXMF_STANDARD_REPLY_QUOTE) != 0u)
+        append_summary(output, capacity, " quote:\"%s\"", metadata->reply_quote);
+    if ((mask & LXMF_STANDARD_REACTION) != 0u)
+        append_summary(output, capacity, " reaction:%s@%02x%02x%02x%02x",
+                       metadata->reaction, metadata->reaction_to[0],
+                       metadata->reaction_to[1], metadata->reaction_to[2],
+                       metadata->reaction_to[3]);
+    if ((mask & LXMF_STANDARD_THREAD) != 0u)
+        append_summary(output, capacity, " thread:%02x%02x%02x%02x",
+                       metadata->thread[0], metadata->thread[1],
+                       metadata->thread[2], metadata->thread[3]);
+    if ((mask & LXMF_STANDARD_ATTACHMENTS) != 0u)
+        append_summary(output, capacity, " files:%zu", metadata->attachment_count);
+    if ((mask & LXMF_STANDARD_IMAGE) != 0u) {
+        append_summary(output, capacity, " image:%zuB", metadata->image_size);
+        if (metadata->image_format_kind == LXMF_MEDIA_FORMAT_TEXT)
+            append_summary(output, capacity, "/%s",
+                           metadata->image_text_format);
+        else if (metadata->image_format_kind == LXMF_MEDIA_FORMAT_INTEGER)
+            append_summary(output, capacity, "/format-%u",
+                           (unsigned)metadata->image_integer_format);
+    }
+    if ((mask & LXMF_STANDARD_AUDIO) != 0u) {
+        append_summary(output, capacity, " audio:%zuB", metadata->audio_size);
+        if (metadata->audio_format_kind == LXMF_MEDIA_FORMAT_TEXT)
+            append_summary(output, capacity, "/%s",
+                           metadata->audio_text_format);
+        else if (metadata->audio_format_kind == LXMF_MEDIA_FORMAT_INTEGER)
+            append_summary(output, capacity, "/format-%u",
+                           (unsigned)metadata->audio_integer_format);
+    }
+    if (mask != 0u) append_summary(output, capacity, "]");
+}
 
 static tui_layout_t layout_of(int rows, int columns) {
     tui_layout_t layout;
@@ -404,13 +486,17 @@ static void draw_thread(const tui_state_t *state, const tui_layout_t *layout) {
     for (size_t index = first; index < end; ++index) {
         const tui_message_t *message = tui_state_thread_message(state, index);
         char text[LXMF_STORE_MAX_CONTENT + 1u];
-        char rendered[LXMF_STORE_MAX_CONTENT + 32u];
+        char rendered[LXMF_STORE_MAX_CONTENT + 512u];
+        char metadata[448];
         if (message == NULL) break;
         bool outgoing = tui_state_outgoing(state, message);
         (void)tui_text_sanitize(message->value.content.data, message->value.content.len,
                                 text, sizeof text);
-        (void)snprintf(rendered, sizeof rendered, "%s %s %s", outgoing ? ">" : "<",
-                       outgoing ? delivery_marker(message->value.status) : "   ", text);
+        tui_render_message_metadata(&message->metadata, metadata, sizeof metadata);
+        (void)snprintf(rendered, sizeof rendered, "%s %s %s%s",
+                       outgoing ? ">" : "<",
+                       outgoing ? delivery_marker(message->value.status) : "   ",
+                       text, metadata);
         clipped(stdscr, layout->content_top + (int)(index - first), layout->pane_x,
                 layout->pane_width, rendered);
     }
@@ -446,7 +532,7 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
             editor != NULL ? "Enter accept  Esc cancel  Home/End  Ctrl-A/E/U/K/W"
-                           : "d direct/propagated  1/2/3 trust  / search  i info  ? help");
+                           : "d route  v save latest attachment  / search  i info  ? help");
     clipped(stdscr, layout->legend_row, 0, layout->columns,
             "[.] queued  [>] sending  [+] sent  [x] delivered  [!] failed");
 }
@@ -458,6 +544,7 @@ static void draw_conversation_overlay(const tui_state_t *state) {
             "1/2/3: trusted/unknown/untrusted    /: search",
             "Enter: compose    i: peer info    p: pin    x: block",
             "t/u: trust/untrust    n: local note    y: copy fallback",
+            "v: explicitly save newest attachment (RETICULUM_ATTACHMENT_DIR)",
             "d: choose direct or propagated delivery for queued messages",
             "Composer: arrows Home End Del Backspace Ctrl-A/E/U/K/W",
             "Propagated means accepted by the relay, not delivered to the recipient.",
@@ -503,13 +590,24 @@ static const char *node_kind_name(const rns_node_record *node) {
     return "transport";
 }
 
+const char *tui_render_node_propagation_reason(const rns_node_record *node) {
+    if (node == NULL || !node->propagation || !node->lxmf_pn_app_data_valid)
+        return "not a propagation announce";
+    if (!node->reachable) return "stale or unreachable";
+    if (!node->lxmf_pn_enabled) return "propagation is disabled";
+    if (node->lxmf_pn_stamp_cost == 0u ||
+        node->lxmf_pn_stamp_cost == UINT8_MAX)
+        return "invalid propagation cost";
+    return NULL;
+}
+
 /* Renders the node details and the actions that apply to this node. */
 static void draw_node_popup(const tui_state_t *state) {
     rns_node_record node;
     char address[TUI_ADDRESS_DIGITS + 1u];
     char inbox[TUI_ADDRESS_DIGITS + 1u];
-    char lines[12][96];
-    const char *pointers[12];
+    char lines[14][96];
+    const char *pointers[14];
     size_t count = 0u;
     if (!tui_state_selected_node(state, &node)) return;
     tui_hex_format(node.destination, LXMF_DESTINATION_LENGTH, address);
@@ -539,12 +637,16 @@ static void draw_node_popup(const tui_state_t *state) {
                    pages ? "" : "   (unavailable: not a Nomad node)");
     (void)snprintf(lines[count++], sizeof lines[0], "m  Send a message%s",
                    messageable ? "" : "   (unavailable: no LXMF inbox announced)");
-    bool propagation_ready = node.reachable && node.propagation &&
-        node.lxmf_pn_app_data_valid && node.lxmf_pn_enabled &&
-        node.lxmf_pn_stamp_cost > 0u && node.lxmf_pn_stamp_cost < UINT8_MAX;
+    const char *propagation_reason =
+        tui_render_node_propagation_reason(&node);
+    bool propagation_ready = propagation_reason == NULL;
     (void)snprintf(lines[count++], sizeof lines[0],
-                   "p  Use as propagation node%s",
-                   propagation_ready ? "" : "   (unavailable: no enabled announce/cost)");
+                   "p  Use as propagation node");
+    (void)snprintf(lines[count++], sizeof lines[0], "%s",
+                   propagation_ready ? "   available" : "   unavailable");
+    if (!propagation_ready)
+        (void)snprintf(lines[count++], sizeof lines[0], "   %s",
+                       propagation_reason);
     bool selected_propagation = state->settings.has_propagation_node &&
         memcmp(state->settings.propagation_node, node.destination,
                LXMF_DESTINATION_LENGTH) == 0;
@@ -1179,6 +1281,24 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             "Status: %s\n", state->status);
         return ferror(output) ? -1 : 0;
     }
+    if (state->screen == TUI_SCREEN_NETWORK) {
+        rns_node_record nodes[RNS_NODE_REGISTRY_MAX];
+        size_t count = tui_state_node_list(state, nodes,
+                                           RNS_NODE_REGISTRY_MAX);
+        (void)fprintf(output, "Screen: Network\nNodes: %zu\n", count);
+        rns_node_record selected;
+        if (state->overlay == TUI_OVERLAY_NODE_ACTIONS &&
+            tui_state_selected_node(state, &selected)) {
+            const char *reason =
+                tui_render_node_propagation_reason(&selected);
+            (void)fprintf(output, "Propagation action: %s",
+                          reason == NULL ? "available" : "unavailable: ");
+            if (reason != NULL) (void)fputs(reason, output);
+            (void)fputc('\n', output);
+        }
+        (void)fprintf(output, "Status: %s\n", state->status);
+        return ferror(output) ? -1 : 0;
+    }
     if (state->screen == TUI_SCREEN_INTERFACES) {
         size_t count = tui_state_interface_count(state);
         (void)fprintf(output, "Screen: Interfaces\nInterfaces: %zu\n", count);
@@ -1301,12 +1421,21 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
     (void)fprintf(output, "Messages: %zu\n", count);
     for (size_t i = 0u; i < count; ++i) {
         const tui_message_t *message = tui_state_thread_message(state, i);
+        char metadata[448];
         bool outgoing = tui_state_outgoing(state, message);
         (void)fprintf(output, "%s %s ", outgoing ? ">" : "<",
                       outgoing ? delivery_marker(message->value.status) : "   ");
         tui_text_escape(output, message->value.content.data,
                         message->value.content.len);
+        tui_render_message_metadata(&message->metadata, metadata, sizeof metadata);
+        (void)fputs(metadata, output);
         (void)fputc('\n', output);
+        for (size_t j = 0u; j < message->metadata.attachment_count; ++j)
+            (void)fprintf(output, "  attachment %zu: %s (%zu bytes; save as %s)\n",
+                          j + 1u,
+                          message->metadata.attachments[j].display_name,
+                          message->metadata.attachments[j].size,
+                          message->metadata.attachments[j].safe_name);
     }
     (void)fprintf(output, "Status: %s\n", state->status);
     return ferror(output) ? -1 : 0;

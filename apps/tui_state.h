@@ -9,6 +9,7 @@
 #include "reticulum/browser.h"
 #include "reticulum/identity.h"
 #include "reticulum/lxmf_peer_store.h"
+#include "reticulum/lxmf_fields.h"
 #include "reticulum/lxmf_router.h"
 #include "reticulum/lxmf_store.h"
 #include "reticulum/micron.h"
@@ -26,6 +27,8 @@
 #define TUI_SEARCH_CAPACITY 80u
 #define TUI_LOG_CAPACITY 128u
 #define TUI_LOG_TEXT_MAX TUI_STATUS_MAX
+#define TUI_FIELD_PREVIEW_MAX 96u
+#define TUI_ATTACHMENT_DISPLAY_MAX 96u
 
 typedef enum {
     TUI_TRUST_TRUSTED,
@@ -99,8 +102,44 @@ typedef struct {
 } tui_contact_t;
 
 typedef struct {
+    char display_name[TUI_ATTACHMENT_DISPLAY_MAX];
+    char safe_name[LXMF_STANDARD_MAX_NAME_BYTES + 1u];
+    size_t size;
+} tui_attachment_metadata_t;
+
+typedef enum {
+    TUI_METADATA_NONE,
+    TUI_METADATA_AVAILABLE,
+    TUI_METADATA_MISSING_PACKED,
+    TUI_METADATA_MALFORMED,
+    TUI_METADATA_UNAVAILABLE
+} tui_metadata_state_t;
+
+typedef struct {
+    tui_metadata_state_t state;
+    uint32_t present_mask;
+    uint8_t renderer;
+    uint8_t reply_to[LXMF_MESSAGE_ID_LENGTH];
+    char reply_quote[TUI_FIELD_PREVIEW_MAX];
+    uint8_t reaction_to[LXMF_MESSAGE_ID_LENGTH];
+    char reaction[TUI_FIELD_PREVIEW_MAX];
+    uint8_t thread[LXMF_MESSAGE_ID_LENGTH];
+    tui_attachment_metadata_t attachments[LXMF_STANDARD_MAX_ATTACHMENTS];
+    size_t attachment_count;
+    lxmf_media_format_kind_t image_format_kind;
+    uint8_t image_integer_format;
+    char image_text_format[LXMF_STANDARD_MAX_FORMAT_BYTES + 1u];
+    size_t image_size;
+    lxmf_media_format_kind_t audio_format_kind;
+    uint8_t audio_integer_format;
+    char audio_text_format[LXMF_STANDARD_MAX_FORMAT_BYTES + 1u];
+    size_t audio_size;
+} tui_message_metadata_t;
+
+typedef struct {
     lxmf_store_message_t value;
     uint8_t content[LXMF_STORE_MAX_CONTENT];
+    tui_message_metadata_t metadata;
 } tui_message_t;
 
 typedef struct {
@@ -125,6 +164,7 @@ typedef struct tui_state {
     char node_store_path[TUI_PATH_MAX];
     char ticket_store_path[TUI_PATH_MAX];
     char ratchet_store_path[TUI_PATH_MAX];
+    char attachment_directory[TUI_PATH_MAX];
 
     tui_contact_t contacts[TUI_MAX_CONTACTS];
     size_t contact_count;
@@ -230,6 +270,11 @@ const tui_contact_t *tui_state_selected_contact(const tui_state_t *state);
 size_t tui_state_thread_count(const tui_state_t *state);
 const tui_message_t *tui_state_thread_message(const tui_state_t *state, size_t index);
 bool tui_state_outgoing(const tui_state_t *state, const tui_message_t *message);
+/* Configures an existing directory used only by explicit attachment saves. */
+bool tui_state_set_attachment_directory(tui_state_t *state,
+                                        const char *directory);
+/* Saves the first attachment on the newest visible message, without overwrite. */
+bool tui_state_save_latest_attachment(tui_state_t *state);
 
 void tui_state_select_offset(tui_state_t *state, int delta);
 void tui_state_set_tab(tui_state_t *state, tui_trust_t tab);

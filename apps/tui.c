@@ -372,6 +372,10 @@ static bool handle_command_key(tui_state_t *state, int key) {
             tui_state_set_status(state,
                                  "Clipboard unavailable; use history or --dump-ui to copy text");
             break;
+        case 'v': case 'V':
+            if (conversation_selected(state))
+                (void)tui_state_save_latest_attachment(state);
+            break;
         case 'c': case 'C': state->screen = TUI_SCREEN_CONVERSATIONS; break;
         case 'N': state->screen = TUI_SCREEN_NETWORK; break;
         case 'B': state->screen = TUI_SCREEN_BROWSER; break;
