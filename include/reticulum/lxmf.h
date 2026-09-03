@@ -133,6 +133,31 @@ bool lxmf_ticket_stamp_valid(const uint8_t stamp[LXMF_STAMP_LENGTH],
                              const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]);
 
 typedef bool (*lxmf_stamp_progress_fn)(void *context, uint64_t attempts);
+typedef struct lxmf_stamp_job lxmf_stamp_job_t;
+typedef enum {
+    LXMF_STAMP_PREPARING, LXMF_STAMP_SEARCHING, LXMF_STAMP_COMPLETE,
+    LXMF_STAMP_CANCELLED, LXMF_STAMP_FAILED
+} lxmf_stamp_state_t;
+typedef struct {
+    lxmf_stamp_state_t state;
+    uint32_t prepared_rounds;
+    uint64_t attempts;
+    lxmf_status_t result;
+} lxmf_stamp_job_progress_t;
+/* One work unit performs one bounded HKDF preparation round or one candidate
+ * hash. Each poll accepts at most this budget, including preparation. */
+#define LXMF_STAMP_POLL_MAX_UNITS 64u
+/* initial_nonce may be NULL for secure random selection, or a caller-owned
+ * 32-byte nonce for reproducible diagnostics. The job copies all inputs. */
+lxmf_status_t lxmf_stamp_job_create(const uint8_t message_id[32], uint8_t cost,
+    const uint8_t initial_nonce[32], lxmf_stamp_job_t **job);
+lxmf_status_t lxmf_stamp_job_poll(lxmf_stamp_job_t *job, uint32_t work_units);
+void lxmf_stamp_job_cancel(lxmf_stamp_job_t *job);
+void lxmf_stamp_job_destroy(lxmf_stamp_job_t *job);
+lxmf_status_t lxmf_stamp_job_progress(const lxmf_stamp_job_t *job,
+    lxmf_stamp_job_progress_t *progress);
+lxmf_status_t lxmf_stamp_job_result(const lxmf_stamp_job_t *job,
+    uint8_t stamp[LXMF_POW_STAMP_LENGTH], uint8_t *value);
 lxmf_status_t lxmf_pow_stamp_generate(const uint8_t message_id[32], uint8_t cost,
     lxmf_stamp_progress_fn progress, void *progress_context,
     uint8_t stamp[LXMF_POW_STAMP_LENGTH], uint8_t *value, uint64_t *attempts);

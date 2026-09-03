@@ -216,6 +216,99 @@ static lxmf_status_t stamp_workblock(const uint8_t id[32],uint8_t **out){size_t 
 static uint8_t digest_value(const uint8_t d[32]){uint8_t v=0;for(size_t i=0;i<32;i++){if(d[i]==0){v=(uint8_t)(v+8);continue;}uint8_t b=d[i];while((b&0x80)==0){v++;b<<=1;}break;}return v;}
 static bool digest_meets(const uint8_t d[32],uint8_t cost){uint8_t target[32]={0};unsigned bit=256u-cost;target[31u-bit/8u]=(uint8_t)(1u<<(bit%8u));return memcmp(d,target,32)<=0;}
 static void hash_work_stamp(const uint8_t *wb,const uint8_t stamp[32],uint8_t digest[32]){sha_ctx c;sha_init(&c);sha_update(&c,wb,(size_t)LXMF_STAMP_WORKBLOCK_ROUNDS*256u);sha_update(&c,stamp,32);sha_final(&c,digest);}
+struct lxmf_stamp_job {
+    uint8_t id[32], nonce[32], cost, value;
+    sha_ctx prefix;
+    lxmf_stamp_job_progress_t progress;
+};
+
+lxmf_status_t lxmf_stamp_job_create(const uint8_t id[32], uint8_t cost,
+    const uint8_t nonce[32], lxmf_stamp_job_t **out) {
+    if (!out) return LXMF_ERR_ARGUMENT;
+    *out = NULL;
+    if (!id || cost == 0) return LXMF_ERR_ARGUMENT;
+    lxmf_stamp_job_t *job = calloc(1, sizeof *job);
+    if (!job) return LXMF_ERR_BOUNDS;
+    memcpy(job->id, id, 32);
+    job->cost = cost;
+    if (nonce) memcpy(job->nonce, nonce, 32);
+    else if (!rns_random_bytes(job->nonce, 32)) {
+        free(job);
+        return LXMF_ERR_CRYPTO;
+    }
+    sha_init(&job->prefix);
+    job->progress.state = LXMF_STAMP_PREPARING;
+    job->progress.result = LXMF_ERR_PENDING;
+    *out = job;
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_stamp_job_poll(lxmf_stamp_job_t *job, uint32_t budget) {
+    if (!job || budget > LXMF_STAMP_POLL_MAX_UNITS) return LXMF_ERR_ARGUMENT;
+    while (budget-- && job->progress.result == LXMF_ERR_PENDING) {
+        if (job->progress.state == LXMF_STAMP_PREPARING) {
+            uint8_t packed[5], input[37], salt[32], block[256];
+            size_t length = msgpack_uint(job->progress.prepared_rounds, packed);
+            memcpy(input, job->id, 32);
+            memcpy(input + 32, packed, length);
+            lxmf_sha256(input, 32 + length, salt);
+            if (!rns_hkdf_sha256(job->id, 32, salt, 32, NULL, 0,
+                                 block, sizeof block)) {
+                job->progress.state = LXMF_STAMP_FAILED;
+                job->progress.result = LXMF_ERR_CRYPTO;
+                break;
+            }
+            /* Hashing the prefix incrementally gives exactly the same SHA-256
+             * state as hashing the entire materialized upstream workblock. */
+            sha_update(&job->prefix, block, sizeof block);
+            if (++job->progress.prepared_rounds == LXMF_STAMP_WORKBLOCK_ROUNDS)
+                job->progress.state = LXMF_STAMP_SEARCHING;
+        } else {
+            sha_ctx candidate = job->prefix;
+            uint8_t digest[32];
+            sha_update(&candidate, job->nonce, 32);
+            sha_final(&candidate, digest);
+            if (job->progress.attempts == UINT64_MAX) {
+                job->progress.state = LXMF_STAMP_FAILED;
+                job->progress.result = LXMF_ERR_BOUNDS;
+                break;
+            }
+            job->progress.attempts++;
+            if (digest_meets(digest, job->cost)) {
+                job->value = digest_value(digest);
+                job->progress.state = LXMF_STAMP_COMPLETE;
+                job->progress.result = LXMF_OK;
+            } else {
+                for (int i = 31; i >= 0; --i) {
+                    if (++job->nonce[i]) break;
+                }
+            }
+        }
+    }
+    return job->progress.result;
+}
+
+void lxmf_stamp_job_cancel(lxmf_stamp_job_t *job) {
+    if (job && job->progress.result == LXMF_ERR_PENDING) {
+        job->progress.state = LXMF_STAMP_CANCELLED;
+        job->progress.result = LXMF_ERR_CANCELLED;
+    }
+}
+void lxmf_stamp_job_destroy(lxmf_stamp_job_t *job) { free(job); }
+lxmf_status_t lxmf_stamp_job_progress(const lxmf_stamp_job_t *job,
+    lxmf_stamp_job_progress_t *progress) {
+    if (!job || !progress) return LXMF_ERR_ARGUMENT;
+    *progress = job->progress;
+    return LXMF_OK;
+}
+lxmf_status_t lxmf_stamp_job_result(const lxmf_stamp_job_t *job,
+    uint8_t stamp[32], uint8_t *value) {
+    if (!job || !stamp) return LXMF_ERR_ARGUMENT;
+    if (job->progress.result != LXMF_OK) return job->progress.result;
+    memcpy(stamp, job->nonce, 32);
+    if (value) *value = job->value;
+    return LXMF_OK;
+}
 lxmf_status_t lxmf_pow_stamp_validate(const uint8_t id[32],uint8_t cost,const uint8_t stamp[32],uint8_t *value){if(!id||!stamp||cost<1||cost>255)return LXMF_ERR_ARGUMENT;uint8_t *wb=NULL;lxmf_status_t st=stamp_workblock(id,&wb);if(st!=LXMF_OK)return st;uint8_t d[32];hash_work_stamp(wb,stamp,d);free(wb);if(value)*value=digest_value(d);return digest_meets(d,cost)?LXMF_OK:LXMF_ERR_FORMAT;}
 lxmf_status_t lxmf_pow_stamp_generate(const uint8_t id[32],uint8_t cost,lxmf_stamp_progress_fn progress,void *ctx,uint8_t stamp[32],uint8_t *value,uint64_t *attempts){if(!id||!stamp||cost<1||cost>255)return LXMF_ERR_ARGUMENT;if(progress&&!progress(ctx,0))return LXMF_ERR_CANCELLED;uint8_t *wb=NULL;lxmf_status_t st=stamp_workblock(id,&wb);if(st!=LXMF_OK)return st;if(!rns_random_bytes(stamp,32)){free(wb);return LXMF_ERR_CRYPTO;}uint64_t rounds=0;for(;;){uint8_t d[32];hash_work_stamp(wb,stamp,d);rounds++;if(digest_meets(d,cost)){if(value)*value=digest_value(d);if(attempts)*attempts=rounds;free(wb);return LXMF_OK;}for(int i=31;i>=0;i--){stamp[i]++;if(stamp[i])break;}if((rounds&1023u)==0&&progress&&!progress(ctx,rounds)){if(attempts)*attempts=rounds;free(wb);return LXMF_ERR_CANCELLED;}}}
 
