@@ -74,11 +74,11 @@ static void store64be(uint8_t output[8], uint64_t value) {
 }
 
 static size_t ticket_fields(uint64_t expiry, const uint8_t ticket[16],
-                            uint8_t output[30]) {
+                            uint8_t output[33]) {
     double as_double = (double)expiry;
     uint64_t bits;
     memcpy(&bits, &as_double, sizeof bits);
-    output[0] = 0x81u;
+    output[0] = 0x82u;
     output[1] = LXMF_FIELD_TICKET;
     output[2] = 0x92u;
     output[3] = 0xcbu;
@@ -86,7 +86,10 @@ static size_t ticket_fields(uint64_t expiry, const uint8_t ticket[16],
     output[12] = 0xc4u;
     output[13] = LXMF_TICKET_LENGTH;
     memcpy(output + 14u, ticket, LXMF_TICKET_LENGTH);
-    return 30u;
+    output[30] = 0x2au; /* Unknown extension retained beside the ticket. */
+    output[31] = 0xa1u;
+    output[32] = 'x';
+    return 33u;
 }
 
 typedef enum { NO_STAMP, TICKET_STAMP, POW_STAMP } stamp_kind_t;
@@ -97,6 +100,7 @@ static size_t make_packet(const rns_identity *sender,
                           stamp_kind_t kind, const uint8_t ticket[16],
                           uint8_t packet[RNS_MTU], uint8_t message_id[32]) {
     lxmf_message_t message = {.timestamp = timestamp};
+    message.title = (lxmf_slice_t){(const uint8_t *)"incoming title", 14u};
     message.content = (lxmf_slice_t){(const uint8_t *)"hello", 5u};
     message.fields_msgpack = (lxmf_slice_t){fields, fields_length};
     delivery_hash(sender, message.source);
@@ -212,7 +216,7 @@ int main(void) {
 
     uint8_t remote_ticket[16];
     memset(remote_ticket, 0xa5, sizeof remote_ticket);
-    uint8_t fields[30];
+    uint8_t fields[33];
     size_t fields_length = ticket_fields(state.now + 5000u, remote_ticket,
                                          fields);
     lxmf_ticket_field_t parsed_field;
@@ -233,6 +237,32 @@ int main(void) {
                                           &remembered) == LXMF_OK);
     assert(remembered.expires_at == state.now + 5000u &&
            memcmp(remembered.ticket, remote_ticket, 16u) == 0);
+    /* Verified incoming messages preserve the same full bytes as unknown
+     * senders: title, arbitrary fields, signatures and stamp metadata. */
+    uint8_t incoming[512], incoming_plaintext[512];
+    size_t incoming_length = 0u, incoming_plaintext_length = 0u;
+    lxmf_message_t incoming_message;
+    assert(lxmf_opportunistic_packet_unpack(packet, length, &bob, NULL, NULL,
+        incoming_plaintext, sizeof incoming_plaintext, &incoming_plaintext_length,
+        &incoming_message) == LXMF_OK);
+    assert(lxmf_store_read_packed(&messages, message_id, incoming,
+        sizeof incoming, &incoming_length) == LXMF_OK &&
+        incoming_length == incoming_plaintext_length &&
+        memcmp(incoming, incoming_plaintext, incoming_length) == 0);
+    assert(lxmf_unpack(incoming, incoming_length, NULL, NULL, &incoming_message) ==
+           LXMF_OK && incoming_message.title.len == 14u &&
+           memcmp(incoming_message.title.data, "incoming title", 14u) == 0 &&
+           incoming_message.fields_msgpack.len == fields_length &&
+           memcmp(incoming_message.fields_msgpack.data, fields, fields_length) == 0 &&
+           incoming_message.has_stamp &&
+           lxmf_ticket_stamp_valid(incoming_message.stamp, issued.ticket, message_id));
+    assert(lxmf_store_compact(&messages) == LXMF_OK);
+    lxmf_store_close(&messages);
+    assert(lxmf_store_open(&messages, message_path) == LXMF_OK);
+    assert(lxmf_store_read_packed(&messages, message_id, incoming,
+        sizeof incoming, &incoming_length) == LXMF_OK &&
+        incoming_length == incoming_plaintext_length &&
+        memcmp(incoming, incoming_plaintext, incoming_length) == 0);
 
     /* A malformed optional ticket field is ignored, but cannot poison or
      * replace the valid ticket already retained for this peer. */

@@ -1302,7 +1302,9 @@ static lxmf_status_t receive_representation(
         unverified ? LXMF_SIGNATURE_UNVERIFIED : LXMF_SIGNATURE_VERIFIED;
     stored.delivery.actual_method = method;
     stored.delivery.progress = LXMF_DELIVERY_PROGRESS_COMPLETE;
-    if (unverified) stored.packed = (lxmf_slice_t){packed, packed_length};
+    /* Keep the complete representation regardless of signature state. The
+     * preview alone cannot preserve title, extensions, media or stamp data. */
+    stored.packed = (lxmf_slice_t){packed, packed_length};
     bool inserted = false;
     status = lxmf_store_put(router->config.store, &stored, &inserted);
     if (status != LXMF_OK) return status;

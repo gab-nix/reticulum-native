@@ -182,15 +182,19 @@ int main(void) {
     assert(lxmf_store_read(&store, alice_message, &got, body, sizeof body) == LXMF_OK);
     assert(got.signature_state == LXMF_SIGNATURE_VERIFIED);
 
-    /* A message from a known sender is stored verified and keeps no packed
-     * copy to re-check. */
+    /* A known sender also retains full bytes for later metadata/media access,
+     * even when there is no deferred signature check to perform. */
     length = seal(&alice, alice_hash, &bob, "announced hello", packet, sizeof packet);
     assert(lxmf_router_receive_packet(&router, packet, length) == LXMF_OK);
     assert(inbox.count == 3u && inbox.state == LXMF_SIGNATURE_VERIFIED);
     uint8_t retained[512u];
     size_t retained_length = 0;
     assert(lxmf_store_read_packed(&store, inbox.id, retained, sizeof retained,
-                                  &retained_length) == LXMF_ERR_FORMAT);
+                                  &retained_length) == LXMF_OK);
+    lxmf_message_t retained_message;
+    assert(lxmf_unpack(retained, retained_length, NULL, NULL,
+                       &retained_message) == LXMF_OK &&
+           memcmp(retained_message.message_id, inbox.id, 32) == 0);
 
     lxmf_store_close(&store);
     unlink(path);

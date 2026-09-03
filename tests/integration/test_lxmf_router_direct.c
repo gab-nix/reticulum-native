@@ -117,6 +117,7 @@ static size_t queue_large_message(
     memcpy(message.destination, destination, 16U);
     memcpy(message.source, source, 16U);
     message.timestamp = timestamp;
+    message.title = (lxmf_slice_t){(const uint8_t *)"Resource title", 14u};
     message.content = (lxmf_slice_t){content, RESOURCE_CONTENT_SIZE};
     message.fields_msgpack = (lxmf_slice_t){fields, sizeof fields};
     size_t packed_length = 0U;
@@ -125,6 +126,12 @@ static size_t queue_large_message(
     assert(packed_length > RESOURCE_CONTENT_SIZE &&
            packed_length <= RESOURCE_PACKED_SIZE);
     assert(lxmf_unpack(packed, packed_length, NULL, NULL, &decoded) == LXMF_OK);
+    message.has_stamp = true;
+    message.stamp_len = LXMF_POW_STAMP_LENGTH;
+    assert(lxmf_pow_stamp_generate(decoded.message_id, 1u, NULL, NULL,
+                                   message.stamp, NULL, NULL) == LXMF_OK);
+    assert(lxmf_pack(&message, lxmf_identity_signer, (void *)signer, packed,
+                     RESOURCE_PACKED_SIZE, &packed_length) == LXMF_OK);
     memcpy(message_id, decoded.message_id, 32U);
     lxmf_store_message_t stored = {0};
     memcpy(stored.message_id, message_id, 32U);
@@ -416,6 +423,20 @@ int main(void) {
            LXMF_OK);
     assert(retained_length == resource_packed_length);
     assert(memcmp(retained, resource_packed, retained_length) == 0);
+    assert(lxmf_store_read_packed(&bob_store, resource_id, retained,
+                                  sizeof retained, &retained_length) == LXMF_OK);
+    assert(retained_length == resource_packed_length &&
+           memcmp(retained, resource_packed, retained_length) == 0);
+    lxmf_message_t received_resource;
+    assert(lxmf_unpack(retained, retained_length, NULL, NULL,
+                       &received_resource) == LXMF_OK &&
+           received_resource.title.len == 14u &&
+           memcmp(received_resource.title.data, "Resource title", 14u) == 0 &&
+           received_resource.fields_msgpack.len > 1u &&
+           received_resource.has_stamp &&
+           received_resource.stamp_len == LXMF_POW_STAMP_LENGTH);
+    assert(lxmf_pow_stamp_validate(resource_id, 1u, received_resource.stamp,
+                                   NULL) == LXMF_OK);
 
     /* Remote policy rejection is terminal and never creates a SENT state. */
     bob_router.config.max_incoming_message_size = 400U;
