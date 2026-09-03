@@ -18,14 +18,14 @@ static void report_event(lxmf_router_t *router,
                          lxmf_delivery_method_t method,
                          lxmf_delivery_status_t state,
                          lxmf_queue_reason_t queue_reason,
-                         lxmf_status_t result) {
+                         lxmf_status_t result, uint32_t attempt) {
     if (router->config.event_callback == NULL) return;
     lxmf_router_event_t event = {
         .method = method,
         .state = state,
         .queue_reason = queue_reason,
         .result = result,
-        .attempt = 0u
+        .attempt = attempt
     };
     memcpy(event.message_id, id, sizeof event.message_id);
     router->config.event_callback(router->config.event_context, &event);
@@ -47,6 +47,39 @@ static void direct_link_accepted(rns_runtime_destination_t *destination,
 static void direct_link_identified(rns_runtime_link_t *link,
                                    const rns_identity *identity,
                                    void *context);
+
+typedef struct {
+    lxmf_store_t *store;
+    lxmf_status_t status;
+} recovery_context_t;
+
+static bool recover_interrupted(void *context,
+                                const lxmf_store_message_t *message) {
+    recovery_context_t *recovery = context;
+    bool interrupted = message->status == LXMF_DELIVERY_SENDING ||
+                       (message->status == LXMF_DELIVERY_SENT &&
+                        message->delivery.has_proof_id);
+    if (!interrupted) return true;
+    lxmf_delivery_metadata_t delivery = message->delivery;
+    delivery.queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
+    delivery.retry_at_ms = 0u;
+    delivery.progress = 0u;
+    delivery.has_proof_id = false;
+    memset(delivery.proof_id, 0, sizeof delivery.proof_id);
+    recovery->status = lxmf_store_update_delivery(
+        recovery->store, message->message_id, &delivery);
+    if (recovery->status == LXMF_OK)
+        recovery->status = lxmf_store_update_status(
+            recovery->store, message->message_id, LXMF_DELIVERY_QUEUED);
+    return recovery->status == LXMF_OK;
+}
+
+static lxmf_status_t recover_interrupted_deliveries(lxmf_store_t *store) {
+    recovery_context_t recovery = {.store = store, .status = LXMF_OK};
+    lxmf_status_t status = lxmf_store_list(store, recover_interrupted,
+                                           &recovery);
+    return status == LXMF_OK ? recovery.status : status;
+}
 
 const char *lxmf_delivery_method_string(lxmf_delivery_method_t method) {
     switch (method) {
@@ -77,10 +110,16 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
     if (router == NULL || config == NULL || config->identity == NULL ||
         !config->identity->has_private || config->store == NULL ||
         config->resolve_identity == NULL ||
+        config->preferred_delivery_method < LXMF_DELIVERY_METHOD_UNKNOWN ||
+        config->preferred_delivery_method > LXMF_DELIVERY_METHOD_PROPAGATED ||
         (config->runtime == NULL && config->send_packet == NULL))
         return LXMF_ERR_ARGUMENT;
     memset(router, 0, sizeof *router);
     router->config = *config;
+    if (recover_interrupted_deliveries(config->store) != LXMF_OK) {
+        memset(router, 0, sizeof *router);
+        return LXMF_ERR_CRYPTO;
+    }
     if (config->runtime != NULL && config->accept_inbound_links) {
         static const char *const aspects[] = {"delivery"};
         uint8_t hash[LXMF_DESTINATION_LENGTH];
@@ -159,26 +198,43 @@ static void receipt_changed(rns_packet_receipt_t *receipt,
         delivery = LXMF_DELIVERY_FAILED;
         result = status == RNS_ERROR_TIMEOUT ? LXMF_ERR_TIMEOUT : LXMF_ERR_CRYPTO;
     }
+    lxmf_delivery_metadata_t metadata;
+    if (lxmf_store_read_delivery(router->config.store, slot->message_id,
+                                 &metadata) == LXMF_OK) {
+        metadata.actual_method = slot->method;
+        metadata.queue_reason = delivery == LXMF_DELIVERY_DELIVERED
+                                    ? LXMF_QUEUE_REASON_NONE
+                                    : LXMF_QUEUE_REASON_RETRY_BACKOFF;
+        metadata.progress = delivery == LXMF_DELIVERY_DELIVERED
+                                ? LXMF_DELIVERY_PROGRESS_COMPLETE
+                                : metadata.progress;
+        (void)lxmf_store_update_delivery(router->config.store,
+                                         slot->message_id, &metadata);
+    }
     (void)lxmf_store_update_status(router->config.store, slot->message_id,
                                    delivery);
     report(router, slot->message_id, delivery, result);
     report_event(router, slot->message_id,
                  slot->method, delivery,
-                 result == LXMF_ERR_TIMEOUT ? LXMF_QUEUE_REASON_RETRY_BACKOFF
-                                            : LXMF_QUEUE_REASON_NONE,
-                 result);
+                 delivery == LXMF_DELIVERY_DELIVERED
+                     ? LXMF_QUEUE_REASON_NONE
+                     : LXMF_QUEUE_REASON_RETRY_BACKOFF,
+                 result, slot->attempt);
 }
 
 static lxmf_status_t send_with_receipt(
     lxmf_router_t *router, const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
     const uint8_t destination_hash[LXMF_DESTINATION_LENGTH],
     const rns_identity *destination, const uint8_t *packet,
-    size_t packet_length, lxmf_queue_reason_t *queue_reason) {
+    size_t packet_length, uint32_t attempt,
+    lxmf_queue_reason_t *queue_reason,
+    uint8_t proof_id[LXMF_MESSAGE_ID_LENGTH]) {
     *queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
     lxmf_router_receipt_slot_t *slot = reserve_receipt(router);
     if (slot == NULL) return LXMF_ERR_PENDING;
     memcpy(slot->message_id, id, sizeof slot->message_id);
     slot->method = LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
+    slot->attempt = attempt;
     rns_packet_receipt_options_t options = {
         .timeout_seconds = 30.0,
         .callback = receipt_changed,
@@ -197,6 +253,8 @@ static lxmf_status_t send_with_receipt(
         }
         return LXMF_ERR_CRYPTO;
     }
+    memcpy(proof_id, rns_packet_receipt_hash(slot->receipt),
+           LXMF_MESSAGE_ID_LENGTH);
     return LXMF_OK;
 }
 
@@ -320,7 +378,8 @@ static lxmf_status_t ensure_direct_link(
 static lxmf_status_t send_direct(
     lxmf_router_t *router, const lxmf_store_message_t *stored,
     const uint8_t id[LXMF_MESSAGE_ID_LENGTH], const rns_identity *destination,
-    lxmf_queue_reason_t *queue_reason) {
+    uint32_t attempt, lxmf_queue_reason_t *queue_reason,
+    uint8_t proof_id[LXMF_MESSAGE_ID_LENGTH]) {
     rns_runtime_link_t *link = NULL;
     lxmf_status_t status = ensure_direct_link(
         router, stored->destination, destination, &link);
@@ -373,6 +432,7 @@ static lxmf_status_t send_direct(
     memcpy(receipt_slot->message_id, id, LXMF_MESSAGE_ID_LENGTH);
     receipt_slot->method = LXMF_DELIVERY_METHOD_DIRECT;
     receipt_slot->link = link;
+    receipt_slot->attempt = attempt;
     rns_packet_receipt_options_t options = {
         .timeout_seconds = 30.0,
         .callback = receipt_changed,
@@ -386,6 +446,8 @@ static lxmf_status_t send_direct(
                             : LXMF_QUEUE_REASON_LINK;
         return sent == RNS_ERROR_OVERFLOW ? LXMF_ERR_PENDING : LXMF_ERR_CRYPTO;
     }
+    memcpy(proof_id, rns_packet_receipt_hash(receipt_slot->receipt),
+           LXMF_MESSAGE_ID_LENGTH);
     return LXMF_OK;
 }
 
@@ -400,17 +462,43 @@ lxmf_status_t lxmf_router_send_message(
     if (stored.status != LXMF_DELIVERY_QUEUED &&
         stored.status != LXMF_DELIVERY_FAILED)
         return LXMF_ERR_ARGUMENT;
+    lxmf_delivery_method_t method = stored.delivery.desired_method;
+    if (method == LXMF_DELIVERY_METHOD_UNKNOWN) {
+        method = router->config.preferred_delivery_method;
+        if (method == LXMF_DELIVERY_METHOD_UNKNOWN)
+            method = LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
+    }
+    stored.delivery.desired_method = method;
+    stored.delivery.actual_method = LXMF_DELIVERY_METHOD_UNKNOWN;
+    stored.delivery.queue_reason = LXMF_QUEUE_REASON_NONE;
+    stored.delivery.retry_at_ms = 0u;
+    stored.delivery.progress = 0u;
+    stored.delivery.has_proof_id = false;
+    memset(stored.delivery.proof_id, 0, sizeof stored.delivery.proof_id);
+    if (lxmf_store_update_delivery(router->config.store, id,
+                                   &stored.delivery) != LXMF_OK)
+        return LXMF_ERR_CRYPTO;
+    if (method == LXMF_DELIVERY_METHOD_PROPAGATED) {
+        stored.delivery.queue_reason = LXMF_QUEUE_REASON_PROPAGATION_NODE;
+        if (lxmf_store_update_delivery(router->config.store, id,
+                                       &stored.delivery) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
+        report_event(router, id, method, LXMF_DELIVERY_QUEUED,
+                     LXMF_QUEUE_REASON_PROPAGATION_NODE, LXMF_ERR_PENDING,
+                     stored.delivery.attempts);
+        return LXMF_ERR_PENDING;
+    }
     const rns_identity *destination = router->config.resolve_identity(
         router->config.resolve_context, stored.destination);
-    lxmf_delivery_method_t method =
-        router->config.preferred_delivery_method == LXMF_DELIVERY_METHOD_DIRECT
-            ? LXMF_DELIVERY_METHOD_DIRECT
-            : LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
     /* A missing announce is a normal discovery state, not a delivery failure. */
     if (destination == NULL) {
+        stored.delivery.queue_reason = LXMF_QUEUE_REASON_PEER_IDENTITY;
+        if (lxmf_store_update_delivery(router->config.store, id,
+                                       &stored.delivery) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
         report_event(router, id, method,
                      LXMF_DELIVERY_QUEUED, LXMF_QUEUE_REASON_PEER_IDENTITY,
-                     LXMF_ERR_PENDING);
+                     LXMF_ERR_PENDING, stored.delivery.attempts);
         return LXMF_ERR_PENDING;
     }
     lxmf_message_t message = {0};
@@ -419,21 +507,32 @@ lxmf_status_t lxmf_router_send_message(
     memcpy(message.source, stored.source, sizeof message.source);
     message.timestamp = stored.timestamp;
     memcpy(message.message_id, stored.message_id, sizeof message.message_id);
+    stored.delivery.actual_method = method;
+    if (lxmf_store_update_delivery(router->config.store, id,
+                                   &stored.delivery) != LXMF_OK)
+        return LXMF_ERR_CRYPTO;
     if (lxmf_store_update_status(router->config.store, id,
                                  LXMF_DELIVERY_SENDING) != LXMF_OK)
         return LXMF_ERR_CRYPTO;
     report(router, id, LXMF_DELIVERY_SENDING, LXMF_OK);
+    uint32_t attempt = stored.delivery.attempts == UINT32_MAX
+                           ? UINT32_MAX
+                           : stored.delivery.attempts + 1u;
     report_event(router, id, method,
-                 LXMF_DELIVERY_SENDING, LXMF_QUEUE_REASON_NONE, LXMF_OK);
+                 LXMF_DELIVERY_SENDING, LXMF_QUEUE_REASON_NONE, LXMF_OK,
+                 attempt);
     size_t packet_length = 0;
+    uint8_t proof_id[LXMF_MESSAGE_ID_LENGTH] = {0};
+    bool has_proof_id = false;
     lxmf_queue_reason_t pending_reason = LXMF_QUEUE_REASON_NONE;
     lxmf_status_t status;
     if (method == LXMF_DELIVERY_METHOD_DIRECT) {
         if (router->config.runtime == NULL)
             status = LXMF_ERR_ARGUMENT;
         else
-            status = send_direct(router, &stored, id, destination,
-                                 &pending_reason);
+            status = send_direct(router, &stored, id, destination, attempt,
+                                 &pending_reason, proof_id);
+        if (status == LXMF_OK) has_proof_id = true;
     } else {
         status = lxmf_opportunistic_packet_pack(
             &message, router->config.identity, destination, packet,
@@ -442,20 +541,39 @@ lxmf_status_t lxmf_router_send_message(
             if (router->config.runtime != NULL)
                 status = send_with_receipt(router, id, stored.destination,
                                            destination, packet, packet_length,
-                                           &pending_reason);
+                                           attempt,
+                                           &pending_reason, proof_id);
             else
                 status = router->config.send_packet(
                     router->config.send_context, packet, packet_length);
+            if (status == LXMF_OK && router->config.runtime != NULL)
+                has_proof_id = true;
         }
     }
     if (status == LXMF_ERR_PENDING) {
+        stored.delivery.queue_reason = pending_reason;
+        if (lxmf_store_update_delivery(router->config.store, id,
+                                       &stored.delivery) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
         (void)lxmf_store_update_status(router->config.store, id,
                                        LXMF_DELIVERY_QUEUED);
         report(router, id, LXMF_DELIVERY_QUEUED, status);
         report_event(router, id, method,
                      LXMF_DELIVERY_QUEUED,
-                     pending_reason, status);
+                     pending_reason, status, stored.delivery.attempts);
         return status;
+    }
+    if (status == LXMF_OK) {
+        stored.delivery.attempts = attempt;
+        stored.delivery.queue_reason = LXMF_QUEUE_REASON_NONE;
+        stored.delivery.progress = LXMF_DELIVERY_PROGRESS_COMPLETE;
+        stored.delivery.has_proof_id = has_proof_id;
+        if (has_proof_id)
+            memcpy(stored.delivery.proof_id, proof_id,
+                   sizeof stored.delivery.proof_id);
+        if (lxmf_store_update_delivery(router->config.store, id,
+                                       &stored.delivery) != LXMF_OK)
+            status = LXMF_ERR_CRYPTO;
     }
     if (status == LXMF_OK && lxmf_store_update_status(router->config.store, id,
                                                        LXMF_DELIVERY_SENT) != LXMF_OK)
@@ -463,13 +581,20 @@ lxmf_status_t lxmf_router_send_message(
     if (status == LXMF_OK) {
         report(router, id, LXMF_DELIVERY_SENT, LXMF_OK);
         report_event(router, id, method,
-                     LXMF_DELIVERY_SENT, LXMF_QUEUE_REASON_NONE, LXMF_OK);
+                     LXMF_DELIVERY_SENT, LXMF_QUEUE_REASON_NONE, LXMF_OK,
+                     stored.delivery.attempts);
     } else {
+        stored.delivery.attempts = attempt;
+        stored.delivery.queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
+        (void)lxmf_store_update_delivery(router->config.store, id,
+                                         &stored.delivery);
         (void)lxmf_store_update_status(router->config.store, id,
                                        LXMF_DELIVERY_FAILED);
         report(router, id, LXMF_DELIVERY_FAILED, status);
         report_event(router, id, method,
-                     LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_NONE, status);
+                     LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_RETRY_BACKOFF,
+                     status,
+                     stored.delivery.attempts);
     }
     return status;
 }
@@ -577,6 +702,8 @@ static lxmf_status_t receive_representation(
     stored.content = message.content;
     stored.signature_state =
         unverified ? LXMF_SIGNATURE_UNVERIFIED : LXMF_SIGNATURE_VERIFIED;
+    stored.delivery.actual_method = method;
+    stored.delivery.progress = LXMF_DELIVERY_PROGRESS_COMPLETE;
     if (unverified) stored.packed = (lxmf_slice_t){packed, packed_length};
     bool inserted = false;
     status = lxmf_store_put(router->config.store, &stored, &inserted);
@@ -585,7 +712,8 @@ static lxmf_status_t receive_representation(
         router->config.message_callback(router->config.message_context, &stored);
     if (inserted)
         report_event(router, stored.message_id, method,
-                     LXMF_DELIVERY_DELIVERED, LXMF_QUEUE_REASON_NONE, LXMF_OK);
+                     LXMF_DELIVERY_DELIVERED, LXMF_QUEUE_REASON_NONE, LXMF_OK,
+                     stored.delivery.attempts);
     return LXMF_OK;
 }
 

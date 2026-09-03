@@ -107,10 +107,16 @@ int main(void) {
     assert(state.last_event.method == LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
     assert(state.last_event.state == LXMF_DELIVERY_SENT);
     assert(state.last_event.queue_reason == LXMF_QUEUE_REASON_NONE);
+    assert(state.last_event.attempt == 1u);
     lxmf_store_message_t got;
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_SENT);
+    assert(got.delivery.desired_method == LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
+    assert(got.delivery.actual_method == LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
+    assert(got.delivery.attempts == 1u);
+    assert(got.delivery.progress == LXMF_DELIVERY_PROGRESS_COMPLETE);
+    assert(!got.delivery.has_proof_id);
 
     char receive_path[] = "/tmp/lxmf-router-receive-XXXXXX";
     fd = mkstemp(receive_path);
@@ -148,6 +154,8 @@ int main(void) {
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_QUEUED);
+    assert(got.delivery.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY);
+    assert(got.delivery.attempts == 0u);
     lxmf_router_poll_result_t result;
     assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK);
     assert(result.attempted == 1u && result.deferred == 1u);
@@ -172,6 +180,8 @@ int main(void) {
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_FAILED);
+    assert(got.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_BACKOFF);
+    assert(got.delivery.attempts == 1u);
 
     state.fail = false;
     assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK);
@@ -179,6 +189,7 @@ int main(void) {
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_SENT);
+    assert(got.delivery.attempts == 2u);
     lxmf_store_close(&received_store);
     unlink(receive_path);
     lxmf_store_close(&store);

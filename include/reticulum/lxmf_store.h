@@ -27,6 +27,40 @@ typedef enum {
     LXMF_DELIVERY_FAILED = 4
 } lxmf_delivery_status_t;
 
+typedef enum {
+    LXMF_DELIVERY_METHOD_UNKNOWN = 0,
+    LXMF_DELIVERY_METHOD_DIRECT,
+    LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+    LXMF_DELIVERY_METHOD_PROPAGATED
+} lxmf_delivery_method_t;
+
+typedef enum {
+    LXMF_QUEUE_REASON_NONE = 0,
+    LXMF_QUEUE_REASON_PEER_IDENTITY,
+    LXMF_QUEUE_REASON_PATH,
+    LXMF_QUEUE_REASON_STAMP,
+    LXMF_QUEUE_REASON_LINK,
+    LXMF_QUEUE_REASON_RESOURCE,
+    LXMF_QUEUE_REASON_PROPAGATION_NODE,
+    LXMF_QUEUE_REASON_RETRY_BACKOFF
+} lxmf_queue_reason_t;
+
+#define LXMF_DELIVERY_PROGRESS_COMPLETE 1000000u
+
+typedef struct {
+    lxmf_delivery_method_t desired_method;
+    lxmf_delivery_method_t actual_method;
+    uint32_t attempts;
+    lxmf_queue_reason_t queue_reason;
+    /* Absolute application-clock time for the next eligible retry. Zero means
+     * no scheduled deadline has been assigned yet. */
+    uint64_t retry_at_ms;
+    /* Integer millionths avoid platform-dependent floating-point storage. */
+    uint32_t progress;
+    bool has_proof_id;
+    uint8_t proof_id[LXMF_MESSAGE_ID_LENGTH];
+} lxmf_delivery_metadata_t;
+
 typedef struct {
     uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
     uint8_t destination[LXMF_DESTINATION_LENGTH];
@@ -41,6 +75,7 @@ typedef struct {
      * arrives; never populated by read or list, which leave it empty. Read it
      * back with lxmf_store_read_packed. */
     lxmf_slice_t packed;
+    lxmf_delivery_metadata_t delivery;
 } lxmf_store_message_t;
 
 typedef struct { void *implementation; } lxmf_store_t;
@@ -59,6 +94,10 @@ lxmf_status_t lxmf_store_update_status(
 lxmf_status_t lxmf_store_update_signature(
     lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     lxmf_signature_state_t state);
+/* Atomically appends the complete mutable delivery metadata for a message. */
+lxmf_status_t lxmf_store_update_delivery(
+    lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+    const lxmf_delivery_metadata_t *delivery);
 /* Drops a message from the index. The bytes leave the file on the next
  * compaction. */
 lxmf_status_t lxmf_store_remove(
@@ -68,6 +107,9 @@ lxmf_status_t lxmf_store_remove(
 lxmf_status_t lxmf_store_read_packed(
     lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     uint8_t *packed, size_t capacity, size_t *packed_len);
+lxmf_status_t lxmf_store_read_delivery(
+    lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+    lxmf_delivery_metadata_t *delivery);
 lxmf_status_t lxmf_store_read(
     lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     lxmf_store_message_t *message, uint8_t *content, size_t content_capacity);

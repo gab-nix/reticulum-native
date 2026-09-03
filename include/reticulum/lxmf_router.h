@@ -79,24 +79,6 @@ typedef void (*lxmf_router_signature_callback_fn)(
     void *context, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     lxmf_signature_state_t state);
 
-typedef enum {
-    LXMF_DELIVERY_METHOD_UNKNOWN = 0,
-    LXMF_DELIVERY_METHOD_DIRECT,
-    LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
-    LXMF_DELIVERY_METHOD_PROPAGATED
-} lxmf_delivery_method_t;
-
-typedef enum {
-    LXMF_QUEUE_REASON_NONE = 0,
-    LXMF_QUEUE_REASON_PEER_IDENTITY,
-    LXMF_QUEUE_REASON_PATH,
-    LXMF_QUEUE_REASON_STAMP,
-    LXMF_QUEUE_REASON_LINK,
-    LXMF_QUEUE_REASON_RESOURCE,
-    LXMF_QUEUE_REASON_PROPAGATION_NODE,
-    LXMF_QUEUE_REASON_RETRY_BACKOFF
-} lxmf_queue_reason_t;
-
 /* Privacy-safe delivery diagnostics. This deliberately contains no message
  * title, content, fields, key material or packet bytes. */
 typedef struct {
@@ -147,6 +129,7 @@ typedef struct {
     rns_runtime_link_t *link;
     uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
     lxmf_delivery_method_t method;
+    uint32_t attempt;
 } lxmf_router_receipt_slot_t;
 
 typedef struct {

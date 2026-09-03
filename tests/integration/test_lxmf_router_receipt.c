@@ -179,6 +179,16 @@ int main(void) {
     assert(lxmf_store_read(&alice_store, outbound.message_id, &stored, content,
                            sizeof content) == LXMF_OK);
     assert(stored.status == LXMF_DELIVERY_SENT);
+    assert(stored.delivery.desired_method ==
+           LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
+    assert(stored.delivery.actual_method ==
+           LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
+    assert(stored.delivery.attempts == 1U);
+    assert(stored.delivery.progress == LXMF_DELIVERY_PROGRESS_COMPLETE);
+    assert(stored.delivery.has_proof_id);
+    assert(memcmp(stored.delivery.proof_id,
+                  rns_packet_receipt_hash(alice_router.receipts[0].receipt),
+                  LXMF_MESSAGE_ID_LENGTH) == 0);
 
     assert(rns_hal_monotonic_ms(&start) == RNS_OK);
     bool delivered = false;
@@ -192,6 +202,8 @@ int main(void) {
         assert(rns_hal_monotonic_ms(&now) == RNS_OK);
     } while (!delivered && now - start < 1000U);
     assert(receiver.received && delivered);
+    assert(stored.delivery.has_proof_id);
+    assert(stored.delivery.progress == LXMF_DELIVERY_PROGRESS_COMPLETE);
     assert(alice_events.last.state == LXMF_DELIVERY_DELIVERED);
     assert(alice_events.last.result == LXMF_OK);
 

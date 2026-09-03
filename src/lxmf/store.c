@@ -14,20 +14,25 @@
  * still read so journals written before signature states are carried load
  * unchanged; such messages are verified by construction, because the only path
  * that stored an inbound message required a verified signature. It is no longer
- * written: new messages use TYPE_PUT_V2, which appends the signature state and
- * the original packed message, and a compaction migrates the whole journal. */
+ * written. TYPE_PUT_V2 added the signature state and original packed message.
+ * TYPE_PUT_V3 adds restart-safe delivery metadata; compaction migrates older
+ * records without discarding their representable state. */
 #define HEADER_SIZE 16u
 #define PUT_FIXED 77u
 #define PUT2_FIXED 80u
+#define PUT3_FIXED 132u
 #define STATUS_SIZE 33u
 #define SIGNATURE_SIZE 33u
 #define REMOVE_SIZE 32u
-#define MAX_PAYLOAD (PUT2_FIXED + LXMF_STORE_MAX_CONTENT + LXMF_STORE_MAX_PACKED)
+#define DELIVERY_SIZE 84u
+#define MAX_PAYLOAD (PUT3_FIXED + LXMF_STORE_MAX_CONTENT + LXMF_STORE_MAX_PACKED)
 #define TYPE_PUT 1u
 #define TYPE_STATUS 2u
 #define TYPE_PUT_V2 3u
 #define TYPE_SIGNATURE 4u
 #define TYPE_REMOVE 5u
+#define TYPE_PUT_V3 6u
+#define TYPE_DELIVERY 7u
 
 typedef struct {
     uint8_t id[32];
@@ -38,6 +43,7 @@ typedef struct {
     uint16_t fixed;
     uint8_t status;
     uint8_t signature;
+    lxmf_delivery_metadata_t delivery;
 } index_entry;
 typedef struct { FILE *file; char path[LXMF_STORE_PATH_MAX+1]; index_entry index[LXMF_STORE_MAX_MESSAGES]; size_t count; } store_impl;
 
@@ -50,11 +56,60 @@ static uint64_t get64(const uint8_t *p){uint64_t v=0;for(unsigned i=0;i<8;i++)v=
 static uint32_t crc32_bytes(const uint8_t *p,size_t n){uint32_t c=0xffffffffu;while(n--){c^=*p++;for(unsigned i=0;i<8;i++)c=(c>>1)^(0xedb88320u&(~(c&1u)+1u));}return ~c;}
 static bool valid_status(uint8_t s){return s<=LXMF_DELIVERY_FAILED;}
 static bool valid_signature(uint8_t s){return s<=LXMF_SIGNATURE_FAILED;}
+static bool valid_method(uint8_t method){return method<=LXMF_DELIVERY_METHOD_PROPAGATED;}
+static bool valid_queue_reason(uint8_t reason){return reason<=LXMF_QUEUE_REASON_RETRY_BACKOFF;}
+static bool valid_delivery(const lxmf_delivery_metadata_t *delivery){return delivery&&delivery->desired_method>=LXMF_DELIVERY_METHOD_UNKNOWN&&delivery->desired_method<=LXMF_DELIVERY_METHOD_PROPAGATED&&delivery->actual_method>=LXMF_DELIVERY_METHOD_UNKNOWN&&delivery->actual_method<=LXMF_DELIVERY_METHOD_PROPAGATED&&delivery->queue_reason>=LXMF_QUEUE_REASON_NONE&&delivery->queue_reason<=LXMF_QUEUE_REASON_RETRY_BACKOFF&&delivery->progress<=LXMF_DELIVERY_PROGRESS_COMPLETE;}
 static index_entry *find(store_impl *s,const uint8_t id[32]){for(size_t i=0;i<s->count;i++)if(memcmp(s->index[i].id,id,32)==0)return &s->index[i];return NULL;}
 static lxmf_status_t sync_file(FILE *f){if(fflush(f)!=0)return LXMF_ERR_CRYPTO;return fsync(fileno(f))==0?LXMF_OK:LXMF_ERR_CRYPTO;}
 static lxmf_status_t append_record(FILE *f,uint8_t type,const uint8_t *payload,uint32_t n,uint64_t *offset){if(fseek(f,0,SEEK_END)!=0)return LXMF_ERR_CRYPTO;long pos=ftell(f);if(pos<0||(uint64_t)pos+HEADER_SIZE+n>LXMF_STORE_MAX_FILE_SIZE)return LXMF_ERR_BOUNDS;uint8_t h[HEADER_SIZE]={'L','X','M','S',1,type,0,0};put32(h+8,n);put32(h+12,crc32_bytes(payload,n));if(fwrite(h,1,sizeof h,f)!=sizeof h||fwrite(payload,1,n,f)!=n)return LXMF_ERR_CRYPTO;lxmf_status_t st=sync_file(f);if(st==LXMF_OK&&offset)*offset=(uint64_t)pos;return st;}
 
-/* Serialises a TYPE_PUT_V2 payload. The caller owns a MAX_PAYLOAD buffer and
+static void encode_delivery(uint8_t *payload,
+                            const lxmf_delivery_metadata_t *delivery) {
+    memset(payload, 0, 52u);
+    payload[0] = (uint8_t)delivery->desired_method;
+    payload[1] = (uint8_t)delivery->actual_method;
+    payload[2] = (uint8_t)delivery->queue_reason;
+    payload[3] = delivery->has_proof_id ? 1u : 0u;
+    put32(payload + 4, delivery->attempts);
+    put64(payload + 8, delivery->retry_at_ms);
+    put32(payload + 16, delivery->progress);
+    if (delivery->has_proof_id)
+        memcpy(payload + 20, delivery->proof_id, LXMF_MESSAGE_ID_LENGTH);
+}
+
+static bool decode_delivery(const uint8_t *payload,
+                            lxmf_delivery_metadata_t *delivery) {
+    if (!valid_method(payload[0]) || !valid_method(payload[1]) ||
+        !valid_queue_reason(payload[2]) || payload[3] > 1u)
+        return false;
+    memset(delivery, 0, sizeof *delivery);
+    delivery->desired_method = (lxmf_delivery_method_t)payload[0];
+    delivery->actual_method = (lxmf_delivery_method_t)payload[1];
+    delivery->queue_reason = (lxmf_queue_reason_t)payload[2];
+    delivery->has_proof_id = payload[3] != 0u;
+    delivery->attempts = get32(payload + 4);
+    delivery->retry_at_ms = get64(payload + 8);
+    delivery->progress = get32(payload + 16);
+    if (delivery->has_proof_id)
+        memcpy(delivery->proof_id, payload + 20, LXMF_MESSAGE_ID_LENGTH);
+    return valid_delivery(delivery);
+}
+
+static bool same_delivery(const lxmf_delivery_metadata_t *left,
+                          const lxmf_delivery_metadata_t *right) {
+    return left->desired_method == right->desired_method &&
+           left->actual_method == right->actual_method &&
+           left->attempts == right->attempts &&
+           left->queue_reason == right->queue_reason &&
+           left->retry_at_ms == right->retry_at_ms &&
+           left->progress == right->progress &&
+           left->has_proof_id == right->has_proof_id &&
+           (!left->has_proof_id ||
+            memcmp(left->proof_id, right->proof_id,
+                   LXMF_MESSAGE_ID_LENGTH) == 0);
+}
+
+/* Serialises a TYPE_PUT_V3 payload. The caller owns a MAX_PAYLOAD buffer and
  * has already bounded content and packed against the store limits. */
 static uint32_t encode_put(uint8_t *payload,const lxmf_store_message_t *m){
     memcpy(payload,m->message_id,32);
@@ -65,9 +120,10 @@ static uint32_t encode_put(uint8_t *payload,const lxmf_store_message_t *m){
     put32(payload+73,(uint32_t)m->content.len);
     payload[77]=(uint8_t)m->signature_state;
     put16(payload+78,(uint16_t)m->packed.len);
-    if(m->content.len)memcpy(payload+PUT2_FIXED,m->content.data,m->content.len);
-    if(m->packed.len)memcpy(payload+PUT2_FIXED+m->content.len,m->packed.data,m->packed.len);
-    return (uint32_t)(PUT2_FIXED+m->content.len+m->packed.len);
+    encode_delivery(payload+80,&m->delivery);
+    if(m->content.len)memcpy(payload+PUT3_FIXED,m->content.data,m->content.len);
+    if(m->packed.len)memcpy(payload+PUT3_FIXED+m->content.len,m->packed.data,m->packed.len);
+    return (uint32_t)(PUT3_FIXED+m->content.len+m->packed.len);
 }
 
 static index_entry *upsert(store_impl *s,const uint8_t *payload,uint64_t offset,uint16_t fixed,uint32_t content_len,uint16_t packed_len){
@@ -97,7 +153,7 @@ static lxmf_status_t scan(store_impl *s){
         size_t got=fread(h,1,sizeof h,s->file);
         if(got==0&&feof(s->file))break;
         if(got!=sizeof h)goto recover;
-        if(memcmp(h,"LXMS",4)!=0||h[4]!=1||h[5]<TYPE_PUT||h[5]>TYPE_REMOVE)goto recover;
+        if(memcmp(h,"LXMS",4)!=0||h[4]!=1||h[5]<TYPE_PUT||h[5]>TYPE_DELIVERY)goto recover;
         uint32_t n=get32(h+8);
         if(n==0||n>MAX_PAYLOAD)goto recover;
         uint8_t payload[MAX_PAYLOAD];
@@ -118,6 +174,22 @@ static lxmf_status_t scan(store_impl *s){
             if(!e)return LXMF_ERR_BOUNDS;
             e->status=payload[72];
             e->signature=payload[77];
+        }else if(h[5]==TYPE_PUT_V3){
+            if(n<PUT3_FIXED||!valid_status(payload[72])||
+               !valid_signature(payload[77]))goto recover;
+            uint32_t content_len=get32(payload+73);
+            uint16_t packed_len=get16(payload+78);
+            lxmf_delivery_metadata_t delivery;
+            if(content_len>LXMF_STORE_MAX_CONTENT||
+               packed_len>LXMF_STORE_MAX_PACKED||
+               n!=PUT3_FIXED+content_len+packed_len||
+               !decode_delivery(payload+80,&delivery))goto recover;
+            index_entry *e=upsert(s,payload,good,(uint16_t)PUT3_FIXED,
+                                  content_len,packed_len);
+            if(!e)return LXMF_ERR_BOUNDS;
+            e->status=payload[72];
+            e->signature=payload[77];
+            e->delivery=delivery;
         }else if(h[5]==TYPE_STATUS){
             if(n!=STATUS_SIZE||!valid_status(payload[32]))goto recover;
             index_entry *e=find(s,payload);
@@ -126,10 +198,16 @@ static lxmf_status_t scan(store_impl *s){
             if(n!=SIGNATURE_SIZE||!valid_signature(payload[32]))goto recover;
             index_entry *e=find(s,payload);
             if(e)e->signature=payload[32];
-        }else{
+        }else if(h[5]==TYPE_REMOVE){
             if(n!=REMOVE_SIZE)goto recover;
             index_entry *e=find(s,payload);
             if(e)drop_index(s,(size_t)(e-s->index));
+        }else{
+            if(n!=DELIVERY_SIZE)goto recover;
+            lxmf_delivery_metadata_t delivery;
+            if(!decode_delivery(payload+32,&delivery))goto recover;
+            index_entry *e=find(s,payload);
+            if(e)e->delivery=delivery;
         }
         good+=HEADER_SIZE+n;
     }
@@ -204,7 +282,8 @@ lxmf_status_t lxmf_store_put(lxmf_store_t *store,const lxmf_store_message_t *m,b
     if(!store||!store->implementation||!m||m->content.len>LXMF_STORE_MAX_CONTENT||
        (m->content.len&&!m->content.data)||m->packed.len>LXMF_STORE_MAX_PACKED||
        (m->packed.len&&!m->packed.data)||!valid_status((uint8_t)m->status)||
-       !valid_signature((uint8_t)m->signature_state))
+       !valid_signature((uint8_t)m->signature_state)||
+       !valid_delivery(&m->delivery))
         return LXMF_ERR_ARGUMENT;
     store_impl *s=store->implementation;
     if(find(s,m->message_id))return LXMF_OK;
@@ -216,18 +295,20 @@ lxmf_status_t lxmf_store_put(lxmf_store_t *store,const lxmf_store_message_t *m,b
     uint8_t payload[MAX_PAYLOAD];
     uint32_t n=encode_put(payload,m);
     uint64_t offset;
-    lxmf_status_t st=append_record(s->file,TYPE_PUT_V2,payload,n,&offset);
+    lxmf_status_t st=append_record(s->file,TYPE_PUT_V3,payload,n,&offset);
     if(st!=LXMF_OK)return st;
-    index_entry *e=upsert(s,payload,offset,(uint16_t)PUT2_FIXED,(uint32_t)m->content.len,(uint16_t)m->packed.len);
+    index_entry *e=upsert(s,payload,offset,(uint16_t)PUT3_FIXED,(uint32_t)m->content.len,(uint16_t)m->packed.len);
     if(!e)return LXMF_ERR_BOUNDS;
     e->status=(uint8_t)m->status;
     e->signature=(uint8_t)m->signature_state;
+    e->delivery=m->delivery;
     if(inserted)*inserted=true;
     return LXMF_OK;
 }
 
 lxmf_status_t lxmf_store_update_status(lxmf_store_t *store,const uint8_t id[32],lxmf_delivery_status_t status){if(!store||!store->implementation||!id||!valid_status((uint8_t)status))return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;if(e->status==(uint8_t)status)return LXMF_OK;uint8_t p[STATUS_SIZE];memcpy(p,id,32);p[32]=(uint8_t)status;lxmf_status_t st=append_record(s->file,TYPE_STATUS,p,sizeof p,NULL);if(st==LXMF_OK)e->status=(uint8_t)status;return st;}
 lxmf_status_t lxmf_store_update_signature(lxmf_store_t *store,const uint8_t id[32],lxmf_signature_state_t state){if(!store||!store->implementation||!id||!valid_signature((uint8_t)state))return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;if(e->signature==(uint8_t)state)return LXMF_OK;uint8_t p[SIGNATURE_SIZE];memcpy(p,id,32);p[32]=(uint8_t)state;lxmf_status_t st=append_record(s->file,TYPE_SIGNATURE,p,sizeof p,NULL);if(st==LXMF_OK)e->signature=(uint8_t)state;return st;}
+lxmf_status_t lxmf_store_update_delivery(lxmf_store_t *store,const uint8_t id[32],const lxmf_delivery_metadata_t *delivery){if(!store||!store->implementation||!id||!valid_delivery(delivery))return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;if(same_delivery(&e->delivery,delivery))return LXMF_OK;uint8_t p[DELIVERY_SIZE];memcpy(p,id,32);encode_delivery(p+32,delivery);lxmf_status_t st=append_record(s->file,TYPE_DELIVERY,p,sizeof p,NULL);if(st==LXMF_OK)e->delivery=*delivery;return st;}
 lxmf_status_t lxmf_store_remove(lxmf_store_t *store,const uint8_t id[32]){if(!store||!store->implementation||!id)return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;return remove_at(s,(size_t)(e-s->index));}
 
 static lxmf_status_t seek_body(store_impl *s,const index_entry *e,uint64_t skip){
@@ -244,7 +325,7 @@ lxmf_status_t lxmf_store_read(lxmf_store_t *store,const uint8_t id[32],lxmf_stor
     if(e->content_len>cap||(e->content_len&&!content))return LXMF_ERR_BOUNDS;
     lxmf_status_t st=seek_body(s,e,0);
     if(st!=LXMF_OK)return st;
-    uint8_t fixed[PUT2_FIXED];
+    uint8_t fixed[PUT3_FIXED];
     if(fread(fixed,1,e->fixed,s->file)!=e->fixed)return LXMF_ERR_CRYPTO;
     memset(m,0,sizeof *m);
     memcpy(m->message_id,fixed,32);
@@ -254,6 +335,7 @@ lxmf_status_t lxmf_store_read(lxmf_store_t *store,const uint8_t id[32],lxmf_stor
     memcpy(&m->timestamp,&bits,8);
     m->status=(lxmf_delivery_status_t)e->status;
     m->signature_state=(lxmf_signature_state_t)e->signature;
+    m->delivery=e->delivery;
     m->content.data=content;
     m->content.len=e->content_len;
     if(e->content_len&&fread(content,1,e->content_len,s->file)!=e->content_len)return LXMF_ERR_CRYPTO;
@@ -273,6 +355,8 @@ lxmf_status_t lxmf_store_read_packed(lxmf_store_t *store,const uint8_t id[32],ui
     *packed_len=e->packed_len;
     return LXMF_OK;
 }
+
+lxmf_status_t lxmf_store_read_delivery(lxmf_store_t *store,const uint8_t id[32],lxmf_delivery_metadata_t *delivery){if(!store||!store->implementation||!id||!delivery)return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;index_entry *e=find(s,id);if(!e)return LXMF_ERR_FORMAT;*delivery=e->delivery;return LXMF_OK;}
 
 lxmf_status_t lxmf_store_list(lxmf_store_t *store,lxmf_store_list_fn cb,void *ctx){if(!store||!store->implementation||!cb)return LXMF_ERR_ARGUMENT;store_impl *s=store->implementation;uint8_t content[LXMF_STORE_MAX_CONTENT];for(size_t i=0;i<s->count;i++){lxmf_store_message_t m;lxmf_status_t st=lxmf_store_read(store,s->index[i].id,&m,content,sizeof content);if(st!=LXMF_OK)return st;if(!cb(ctx,&m))break;}return LXMF_OK;}
 
@@ -298,7 +382,7 @@ lxmf_status_t lxmf_store_compact(lxmf_store_t *store){
         }
         uint8_t payload[MAX_PAYLOAD];
         uint32_t n=encode_put(payload,&m);
-        st=append_record(out,TYPE_PUT_V2,payload,n,NULL);
+        st=append_record(out,TYPE_PUT_V3,payload,n,NULL);
     }
     if(st==LXMF_OK)st=sync_file(out);
     if(fclose(out)!=0&&st==LXMF_OK)st=LXMF_ERR_CRYPTO;
