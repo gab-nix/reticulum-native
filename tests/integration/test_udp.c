@@ -1,4 +1,5 @@
 #include "reticulum/packet.h"
+#include "reticulum/hal.h"
 #include "reticulum/udp.h"
 
 #include <assert.h>
@@ -33,7 +34,7 @@ int main(void) {
     capture_t capture = {{0U}, 0U, 0U, {RNS_UDP_IPV4, {0U}, 0U, 0U}};
     uint8_t oversized[RNS_MTU + 1U] = {0U};
     size_t received = 0U;
-    size_t attempt;
+    uint64_t started_ms, current_ms;
 
     assert(rns_udp_endpoint_create(&receiver, RNS_UDP_IPV4) == RNS_OK);
     assert(rns_udp_endpoint_create(&sender, RNS_UDP_IPV4) == RNS_OK);
@@ -43,9 +44,14 @@ int main(void) {
     assert(rns_udp_connect(sender, "127.0.0.1", receiver_address.port) == RNS_OK);
     assert(rns_udp_send(sender, message, sizeof(message)) == RNS_OK);
 
-    for (attempt = 0U; attempt < 100U && capture.calls == 0U; ++attempt) {
+    /* Polling is non-blocking: an iteration budget can expire before the
+     * kernel schedules delivery under concurrent build/test load. */
+    assert(rns_hal_monotonic_ms(&started_ms) == RNS_OK);
+    do {
         assert(rns_udp_poll(receiver, 1U, receive_packet, &capture, &received) == RNS_OK);
-    }
+        if (capture.calls != 0U) break;
+        assert(rns_hal_monotonic_ms(&current_ms) == RNS_OK);
+    } while (current_ms - started_ms < 1000U);
     assert(capture.calls == 1U && received == 1U);
     assert(capture.source.family == RNS_UDP_IPV4 && capture.source.port != 0U);
     assert(capture.length == sizeof(message));
@@ -57,4 +63,3 @@ int main(void) {
     rns_udp_endpoint_destroy(receiver);
     return 0;
 }
-
