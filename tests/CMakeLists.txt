@@ -18,6 +18,12 @@ target_link_libraries(lxmf_propagation_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(lxmf_propagation_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(lxmf_propagation_live_driver)
 
+# Explicit opt-in pinned-Python RRC protocol fixture hub acceptance driver.
+add_executable(rrc_live_driver interop/rrc_live_driver.c)
+target_link_libraries(rrc_live_driver PRIVATE reticulum::reticulum)
+target_compile_features(rrc_live_driver PRIVATE c_std_17)
+reticulum_set_project_warnings(rrc_live_driver)
+
 reticulum_add_test(test_buffer test_buffer.c)
 reticulum_add_test(test_hal test_hal.c)
 reticulum_add_test(test_crypto unit/test_crypto.c)

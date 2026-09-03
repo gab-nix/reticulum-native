@@ -260,7 +260,10 @@ static rns_status_t send_envelope(rns_rrc_session_t *session,
     rns_rrc_envelope_t envelope = {0};
     envelope.version = RNS_RRC_VERSION;
     envelope.type = type;
-    envelope.timestamp_ms = session->now_ms;
+    /* RRC timestamps are Unix wall-clock milliseconds. The caller-provided
+     * monotonic clock is only for local deadlines and retry scheduling. */
+    if (rns_hal_wallclock_ms(&envelope.timestamp_ms) != RNS_OK)
+        return RNS_ERROR_INVALID_STATE;
     memcpy(envelope.source, session->local.hash, sizeof envelope.source);
     if (rns_hal_random_bytes(envelope.message_id,
                              sizeof envelope.message_id) != RNS_OK)

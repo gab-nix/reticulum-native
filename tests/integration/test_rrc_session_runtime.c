@@ -1,5 +1,6 @@
 #include "reticulum/config.h"
 #include "reticulum/destination.h"
+#include "reticulum/hal.h"
 #include "reticulum/rrc_session.h"
 #include "reticulum/udp.h"
 
@@ -77,6 +78,10 @@ static void hub_packet(rns_runtime_link_t *link, uint8_t context,
     assert(rns_rrc_envelope_parse(plaintext, plaintext_length, &envelope) ==
            RNS_OK);
     if (envelope.type == RNS_RRC_HELLO) {
+        uint64_t wallclock_ms = 0u;
+        assert(rns_hal_wallclock_ms(&wallclock_ms) == RNS_OK);
+        assert(envelope.timestamp_ms <= wallclock_ms + 1000u);
+        assert(envelope.timestamp_ms + 1000u >= wallclock_ms);
         assert(envelope.body_cbor.length ==
                sizeof nomadnet_rrc_session_hello_body);
         assert(memcmp(envelope.body_cbor.data,

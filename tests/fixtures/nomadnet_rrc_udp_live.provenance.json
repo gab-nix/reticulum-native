@@ -1,0 +1,42 @@
+{
+  "client_fields_valid": true,
+  "driver": {
+    "connected": true,
+    "envelopes": 5,
+    "identified_flow": true,
+    "joined": true,
+    "message_id": "f72efcd2b2f968bb",
+    "message_received": true,
+    "ok": true,
+    "parted": true,
+    "pong": true
+  },
+  "driver_sha256": "fbc6a90b876c7b25ebf4a40004fc254d1d2ca465c78de182fc764be8a73c8cbe",
+  "driver_source_sha256": "0917dfa14d0ef93f086428ba6bb3fc05ce9765c5d3425b7a6b8d76cc586acf49",
+  "endpoint": "pinned RNS fixture hub using NomadNet RRC schema APIs",
+  "errors": [],
+  "hello_valid": true,
+  "identified": true,
+  "join_valid": true,
+  "limitations": [
+    "NomadNet 1.2.0 contains an RRC client but no stock hub server",
+    "fixture hub is not a live rrcd deployment",
+    "no Resource envelopes, reconnect, relay hop or TCP coverage"
+  ],
+  "message_id_correlated": true,
+  "message_valid": true,
+  "native_base_revision": "4f424a8333e5399b6fe8b0d8fd870a71f5900309",
+  "native_exit": 0,
+  "nomadnet_commit": "475c0ee2a0388cf8470e7f1e90d5decb67b579ea",
+  "nomadnet_source_evidence": "git checkout",
+  "nomadnet_version": "1.2.0",
+  "ok": true,
+  "part_valid": true,
+  "ping_valid": true,
+  "rns_commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+  "rns_source_evidence": "recorded clean source tree",
+  "rns_version": "1.5.2",
+  "run_utc": "2026-09-03T20:32:26.261148+00:00",
+  "schema": 1,
+  "transport": "loopback UDP"
+}
