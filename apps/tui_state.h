@@ -217,4 +217,11 @@ void tui_state_setting_cancel(tui_state_t *state);
 bool tui_state_save_settings(tui_state_t *state);
 bool tui_state_announce(tui_state_t *state);
 
+/* Pure state updates used by router callbacks and unit tests. */
+void tui_state_apply_router_event(tui_state_t *state,
+                                  const lxmf_router_event_t *event);
+void tui_state_apply_signature(tui_state_t *state,
+                               const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+                               lxmf_signature_state_t signature);
+
 #endif

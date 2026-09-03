@@ -208,11 +208,126 @@ void tui_state_persist_contacts(tui_state_t *state) {
 
 /* ------------------------------------------------------------ runtime hooks */
 
+static tui_message_t *find_message(tui_state_t *state,
+                                   const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
+                                   size_t *position) {
+    for (size_t i = 0u; i < state->message_count; ++i) {
+        if (memcmp(state->messages[i].value.message_id, id,
+                   LXMF_MESSAGE_ID_LENGTH) != 0)
+            continue;
+        if (position != NULL) *position = i;
+        return &state->messages[i];
+    }
+    return NULL;
+}
+
+static void recalculate_contact(tui_state_t *state, size_t contact) {
+    tui_contact_t *entry = &state->contacts[contact];
+    entry->messages = 0u;
+    entry->latest = 0.0;
+    for (size_t i = 0u; i < state->message_count; ++i) {
+        const lxmf_store_message_t *message = &state->messages[i].value;
+        if (memcmp(message_peer(state, message), entry->peer,
+                   LXMF_DESTINATION_LENGTH) != 0)
+            continue;
+        entry->messages++;
+        if (message->timestamp > entry->latest) entry->latest = message->timestamp;
+    }
+}
+
+void tui_state_apply_router_event(tui_state_t *state,
+                                  const lxmf_router_event_t *event) {
+    if (state == NULL || event == NULL) return;
+    tui_message_t *message = find_message(state, event->message_id, NULL);
+    if (message != NULL) {
+        message->value.status = event->state;
+        state->filter_dirty = true;
+    }
+    if (event->state == LXMF_DELIVERY_QUEUED) {
+        tui_state_set_status(state, "Queued via %s; waiting for %s",
+                             lxmf_delivery_method_string(event->method),
+                             lxmf_queue_reason_string(event->queue_reason));
+    } else if (event->state == LXMF_DELIVERY_SENDING) {
+        tui_state_set_status(state, "Sending via %s",
+                             lxmf_delivery_method_string(event->method));
+    } else if (event->state == LXMF_DELIVERY_SENT) {
+        tui_state_set_status(state, "Sent via %s; awaiting delivery proof",
+                             lxmf_delivery_method_string(event->method));
+    } else if (event->state == LXMF_DELIVERY_DELIVERED) {
+        tui_state_set_status(state, "Delivered via %s",
+                             lxmf_delivery_method_string(event->method));
+    } else {
+        tui_state_set_status(state, "Delivery via %s failed: %s",
+                             lxmf_delivery_method_string(event->method),
+                             lxmf_status_string(event->result));
+    }
+}
+
+void tui_state_apply_signature(tui_state_t *state,
+                               const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
+                               lxmf_signature_state_t signature) {
+    size_t position = 0u;
+    if (state == NULL || id == NULL) return;
+    tui_message_t *message = find_message(state, id, &position);
+    if (message == NULL) return;
+    if (signature != LXMF_SIGNATURE_FAILED) {
+        message->value.signature_state = signature;
+        state->filter_dirty = true;
+        tui_state_set_status(state, signature == LXMF_SIGNATURE_VERIFIED
+                                        ? "Previously unverified message is now verified"
+                                        : "Message sender is not verified yet");
+        return;
+    }
+    uint8_t peer[LXMF_DESTINATION_LENGTH];
+    memcpy(peer, message_peer(state, &message->value), sizeof peer);
+    bool incoming = memcmp(message->value.source, state->local,
+                           LXMF_DESTINATION_LENGTH) != 0;
+    if (position + 1u < state->message_count)
+        memmove(&state->messages[position], &state->messages[position + 1u],
+                (state->message_count - position - 1u) * sizeof state->messages[0]);
+    state->message_count--;
+    memset(&state->messages[state->message_count], 0, sizeof state->messages[0]);
+    size_t contact = contact_index(state, peer);
+    if (contact < state->contact_count) {
+        if (incoming && state->contacts[contact].unread > 0u)
+            state->contacts[contact].unread--;
+        recalculate_contact(state, contact);
+    }
+    state->filter_dirty = true;
+    tui_state_set_status(state, "Rejected message with an invalid signature");
+}
+
+static void on_delivery(void *context,
+                        const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+                        lxmf_delivery_status_t status, lxmf_status_t result) {
+    tui_state_t *state = context;
+    tui_message_t *message = find_message(state, message_id, NULL);
+    if (message != NULL) message->value.status = status;
+    state->send_attempted = true;
+    state->send_ok = result == LXMF_OK;
+    state->filter_dirty = true;
+}
+
+static void on_router_event(void *context, const lxmf_router_event_t *event) {
+    tui_state_apply_router_event(context, event);
+}
+
+static void on_signature(void *context,
+                         const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+                         lxmf_signature_state_t signature) {
+    tui_state_apply_signature(context, message_id, signature);
+}
+
 static void on_announce(rns_runtime_t *runtime, const rns_node_result *announce,
                         void *context) {
     tui_state_t *state = context;
     (void)runtime;
-    (void)rns_node_registry_consider_announce(&state->nodes, announce);
+    if (!rns_node_registry_consider_announce(&state->nodes, announce) ||
+        !state->router_ready)
+        return;
+    lxmf_router_verify_result_t verified;
+    (void)lxmf_router_verify_pending(&state->router,
+                                     announce->destination_hash, &verified);
 }
 
 static const rns_identity *resolve_peer(void *context,
@@ -251,10 +366,9 @@ static void on_message(void *context, const lxmf_store_message_t *message) {
 static void on_packet(rns_runtime_t *runtime, const uint8_t *packet, size_t length,
                       const rns_node_result *result, void *context) {
     tui_state_t *state = context;
-    (void)runtime;
-    (void)result;
-    if (state->router_ready)
-        (void)lxmf_router_receive_packet(&state->router, packet, length);
+    if (state->router_ready &&
+        lxmf_router_receive_packet(&state->router, packet, length) == LXMF_OK)
+        (void)rns_runtime_prove_packet(runtime, result, &state->identity, true);
 }
 
 static char *read_text_file(const char *path, size_t *length) {
@@ -321,12 +435,19 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
         lxmf_router_config_t router = {
             .identity = &state->identity,
             .store = &state->store,
+            .runtime = state->runtime,
             .resolve_identity = resolve_peer,
             .resolve_context = state,
             .send_packet = send_via_runtime,
             .send_context = state,
             .message_callback = on_message,
-            .message_context = state
+            .message_context = state,
+            .delivery_callback = on_delivery,
+            .delivery_context = state,
+            .signature_callback = on_signature,
+            .signature_context = state,
+            .event_callback = on_router_event,
+            .event_context = state
         };
         state->router_ready = lxmf_router_init(&state->router, &router) == LXMF_OK;
         if (state->router_ready &&
@@ -466,6 +587,8 @@ void tui_state_close(tui_state_t *state) {
         (void)tui_settings_save(state->settings_path, &state->settings);
     rns_browser_destroy(state->browser);
     state->browser = NULL;
+    if (state->router_ready) lxmf_router_destroy(&state->router);
+    state->router_ready = false;
     rns_runtime_destroy(state->runtime);
     state->runtime = NULL;
     tui_state_persist_contacts(state);

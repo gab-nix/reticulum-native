@@ -339,6 +339,36 @@ static void test_settings_navigation_and_edits(void) {
     destroy_state(state);
 }
 
+static void test_router_events_update_visible_state(void) {
+    tui_state_t *state = make_state();
+    add_contact(state, 0xa1u, TUI_TRUST_UNKNOWN);
+    add_message(state, 0xa1u, true, "pending message");
+    state->messages[0].value.message_id[0] = 0x42u;
+    lxmf_router_event_t event = {
+        .method = LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+        .state = LXMF_DELIVERY_SENT,
+        .queue_reason = LXMF_QUEUE_REASON_NONE,
+        .result = LXMF_OK
+    };
+    event.message_id[0] = 0x42u;
+    tui_state_apply_router_event(state, &event);
+    assert(state->messages[0].value.status == LXMF_DELIVERY_SENT);
+    assert(strstr(state->status, "awaiting delivery proof") != NULL);
+    event.state = LXMF_DELIVERY_DELIVERED;
+    tui_state_apply_router_event(state, &event);
+    assert(state->messages[0].value.status == LXMF_DELIVERY_DELIVERED);
+    assert(strstr(state->status, "Delivered") != NULL);
+
+    state->messages[0].value.signature_state = LXMF_SIGNATURE_UNVERIFIED;
+    tui_state_apply_signature(state, event.message_id, LXMF_SIGNATURE_VERIFIED);
+    assert(state->messages[0].value.signature_state == LXMF_SIGNATURE_VERIFIED);
+    tui_state_apply_signature(state, event.message_id, LXMF_SIGNATURE_FAILED);
+    assert(state->message_count == 0u);
+    assert(state->contacts[0].messages == 0u);
+    assert(strstr(state->status, "invalid signature") != NULL);
+    destroy_state(state);
+}
+
 int main(void) {
     test_node_selection_survives_resort();
     test_node_move_clamps();
@@ -346,6 +376,7 @@ int main(void) {
     test_empty_registry_has_no_selection();
     test_browser_links_and_scroll();
     test_settings_navigation_and_edits();
+    test_router_events_update_visible_state();
     test_trust_tabs();
     test_thread_and_search();
     test_selection_cycles();
