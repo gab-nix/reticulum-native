@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "evidence": "behavioral source review and deterministic local C tests",
+  "reticulum": {
+    "version": "1.5.2",
+    "commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+    "source": "RNS/Resource.py"
+  },
+  "reviewed_behavior": [
+    "74-entry advertisement hashmap pages and RESOURCE_HMU MessagePack updates",
+    "exhausted-map request marker and last-known-map-hash sequencing",
+    "bounded part windows, duplicate retransmission and reordered delivery",
+    "per-segment compression, encryption, resource hashes and completion proofs",
+    "sequential split-resource advertisements with original-hash correlation"
+  ],
+  "local_evidence": [
+    "test_resource_sender transfers more than 2200 parts across two segments",
+    "test_runtime_resource reassembles the same split payload over loopback UDP",
+    "malformed, conflicting, duplicate and out-of-range hashmap updates are covered"
+  ],
+  "limitations": [
+    "no upstream Python exchange was performed",
+    "no persistent transfer resume is implemented",
+    "adaptive window sizing and pinned retry timing remain incomplete",
+    "metadata-bearing file segmentation and very-low-MTU links remain unverified"
+  ]
+}

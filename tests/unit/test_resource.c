@@ -52,7 +52,7 @@ static size_t build_advertisement(uint8_t *out, size_t payload_length, size_t pa
                                   const uint8_t random_hash[4],
                                   const uint8_t hash[32], const uint8_t *hashmap) {
     size_t o = 0u;
-    out[o++] = 0x88u; /* map of 8 */
+    out[o++] = 0x8au; /* map of 10 */
     out[o++] = 0xa1u; out[o++] = 't'; out[o++] = 0xcdu;
     out[o++] = (uint8_t)(payload_length >> 8); out[o++] = (uint8_t)payload_length;
     out[o++] = 0xa1u; out[o++] = 'd'; out[o++] = 0xcdu;
@@ -62,8 +62,11 @@ static size_t build_advertisement(uint8_t *out, size_t payload_length, size_t pa
     memcpy(out + o, hash, 32u); o += 32u;
     out[o++] = 0xa1u; out[o++] = 'r'; out[o++] = 0xc4u; out[o++] = 4u;
     memcpy(out + o, random_hash, 4u); o += 4u;
+    out[o++] = 0xa1u; out[o++] = 'o'; out[o++] = 0xc4u; out[o++] = 32u;
+    memcpy(out + o, hash, 32u); o += 32u;
     out[o++] = 0xa1u; out[o++] = 'i'; out[o++] = 1u;
     out[o++] = 0xa1u; out[o++] = 'l'; out[o++] = 1u;
+    out[o++] = 0xa1u; out[o++] = 'f'; out[o++] = 0u;
     out[o++] = 0xa1u; out[o++] = 'm'; out[o++] = 0xc4u;
     out[o++] = (uint8_t)(parts * RNS_RESOURCE_MAPHASH_LEN);
     memcpy(out + o, hashmap, parts * RNS_RESOURCE_MAPHASH_LEN);

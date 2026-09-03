@@ -6,6 +6,7 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -17,7 +18,8 @@ typedef struct observation {
     size_t receive_failures;
     rns_status_t receive_status;
     size_t packet_callbacks;
-    uint8_t received_data[2048];
+    uint8_t *received_data;
+    size_t received_capacity;
     size_t received_length;
     size_t transfer_callbacks;
     rns_runtime_resource_state_t transfer_state;
@@ -81,7 +83,7 @@ static void receive_resource(rns_runtime_link_t *link,
         assert(data == NULL && data_length == 0U);
         return;
     }
-    assert(data != NULL && data_length <= sizeof observation->received_data);
+    assert(data != NULL && data_length <= observation->received_capacity);
     memcpy(observation->received_data, data, data_length);
     observation->received_length = data_length;
     observation->received++;
@@ -117,9 +119,12 @@ static void transfer_changed(rns_runtime_resource_transfer_t *transfer,
 }
 
 static void fixture_init(fixture_t *fixture, rns_identity *responder_identity,
-                         uint8_t destination_hash[16]) {
+                         uint8_t destination_hash[16], size_t receive_capacity) {
     memset(fixture, 0, sizeof *fixture);
     fixture->receiver.accept_resources = true;
+    fixture->receiver.received_data = malloc(receive_capacity);
+    assert(fixture->receiver.received_data != NULL);
+    fixture->receiver.received_capacity = receive_capacity;
     uint16_t initiator_port = reserve_udp_port();
     uint16_t responder_port = reserve_udp_port();
     assert(initiator_port != responder_port);
@@ -141,7 +146,7 @@ static void fixture_init(fixture_t *fixture, rns_identity *responder_identity,
         .packet_callback = packet_received,
         .resource_accept_callback = accept_resource,
         .resource_receive_callback = receive_resource,
-        .max_incoming_resource_size = sizeof fixture->receiver.received_data,
+        .max_incoming_resource_size = receive_capacity,
         .callback_context = &fixture->receiver};
     assert(rns_runtime_register_link_destination(
                fixture->responder, destination_hash, responder_identity,
@@ -187,13 +192,14 @@ static void fixture_destroy(fixture_t *fixture) {
     rns_runtime_destination_destroy(fixture->destination);
     rns_runtime_destroy(fixture->initiator);
     rns_runtime_destroy(fixture->responder);
+    free(fixture->receiver.received_data);
 }
 
 static void test_success_reject_cancel_and_malformed(void) {
     fixture_t fixture;
     rns_identity identity;
     uint8_t destination_hash[16];
-    fixture_init(&fixture, &identity, destination_hash);
+    fixture_init(&fixture, &identity, destination_hash, 2048U);
     uint8_t message[900];
     for (size_t i = 0U; i < sizeof message; ++i)
         message[i] = (uint8_t)(i * 29U + 7U);
@@ -312,7 +318,7 @@ static void test_timeout_and_teardown(void) {
     fixture_t fixture;
     rns_identity identity;
     uint8_t destination_hash[16];
-    fixture_init(&fixture, &identity, destination_hash);
+    fixture_init(&fixture, &identity, destination_hash, 2048U);
     static const uint8_t message[] = "timeout resource";
     rns_runtime_resource_options_t options = {
         .timeout_seconds = 0.002,
@@ -346,8 +352,43 @@ static void test_timeout_and_teardown(void) {
     fixture_destroy(&fixture);
 }
 
+static void test_multisegment_runtime_transfer(void) {
+    fixture_t fixture;
+    rns_identity identity;
+    uint8_t destination_hash[16];
+    size_t message_length = RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE + 257U;
+    fixture_init(&fixture, &identity, destination_hash, message_length);
+    uint8_t *message = malloc(message_length);
+    assert(message != NULL);
+    for (size_t i = 0U; i < message_length; ++i)
+        message[i] = (uint8_t)(i * 37U + i / 251U);
+    rns_runtime_resource_options_t options = {
+        .auto_compress = false,
+        .timeout_seconds = 10.0,
+        .callback = transfer_changed,
+        .callback_context = &fixture.sender};
+    rns_runtime_resource_transfer_t *transfer = NULL;
+    assert(rns_runtime_link_send_resource(fixture.outbound, message,
+                                           message_length, &options,
+                                           &transfer) == RNS_OK);
+    for (size_t i = 0U; i < 50000U &&
+         rns_runtime_resource_transfer_state(transfer) !=
+             RNS_RUNTIME_RESOURCE_COMPLETE; ++i)
+        fixture_poll(&fixture);
+    assert(rns_runtime_resource_transfer_state(transfer) ==
+           RNS_RUNTIME_RESOURCE_COMPLETE);
+    assert(fixture.receiver.accepted == 1U);
+    assert(fixture.receiver.received == 1U);
+    assert(fixture.receiver.received_length == message_length);
+    assert(memcmp(fixture.receiver.received_data, message, message_length) == 0);
+    rns_runtime_resource_transfer_destroy(transfer);
+    free(message);
+    fixture_destroy(&fixture);
+}
+
 int main(void) {
     test_success_reject_cancel_and_malformed();
     test_timeout_and_teardown();
+    test_multisegment_runtime_transfer();
     return 0;
 }

@@ -19,11 +19,13 @@ extern "C" {
 #define RNS_RESOURCE_PROOF_SIZE (2u * RNS_RESOURCE_HASH_SIZE)
 #define RNS_RESOURCE_WINDOW 4u
 /* One advertisement carries floor((Link MDU - 134) / 4) map hashes. */
-#define RNS_RESOURCE_MAX_PARTS 74u
+#define RNS_RESOURCE_HASHMAP_MAX_ENTRIES 74u
+#define RNS_RESOURCE_MAX_PARTS 18000u
 #define RNS_RESOURCE_WIRE_OVERHEAD 36u
 #define RNS_RESOURCE_PART_MAX 464u
-#define RNS_RESOURCE_DEFAULT_MAX_SIZE (1024u * 1024u)
+#define RNS_RESOURCE_DEFAULT_MAX_SIZE (8u * 1024u * 1024u)
 #define RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE ((1024u * 1024u) - 1u)
+#define RNS_RESOURCE_MAX_SIZE (8u * 1024u * 1024u)
 
 #define RNS_RESOURCE_FLAG_ENCRYPTED 0x01u
 #define RNS_RESOURCE_FLAG_COMPRESSED 0x02u
@@ -79,12 +81,18 @@ rns_status_t rns_resource_accept(rns_resource_t **resource,
 void rns_resource_destroy(rns_resource_t *resource);
 
 /* Builds the next RESOURCE_REQ body for outstanding parts in the window. */
-rns_status_t rns_resource_build_request(const rns_resource_t *resource,
+rns_status_t rns_resource_build_request(rns_resource_t *resource,
                                         uint8_t *output, size_t capacity,
                                         size_t *output_length);
 /* Accepts one RESOURCE part payload, matching it against the hashmap. */
 rns_status_t rns_resource_receive_part(rns_resource_t *resource,
                                        const uint8_t *data, size_t length);
+/* Applies a RESOURCE_HMU body: resource hash followed by MessagePack
+ * [zero-based map page, map-hash bytes]. */
+rns_status_t rns_resource_apply_hashmap_update(rns_resource_t *resource,
+                                               const uint8_t *update,
+                                               size_t update_length);
+bool rns_resource_waiting_for_hashmap(const rns_resource_t *resource);
 bool rns_resource_parts_complete(const rns_resource_t *resource);
 size_t rns_resource_received_parts(const rns_resource_t *resource);
 size_t rns_resource_total_parts(const rns_resource_t *resource);
@@ -122,6 +130,11 @@ rns_status_t rns_resource_sender_requested_parts(
     const rns_resource_sender_t *sender, const uint8_t *request,
     size_t request_length, size_t *part_indexes, size_t capacity,
     size_t *part_count);
+/* Builds the RESOURCE_HMU body requested by an exhausted-map request. */
+rns_status_t rns_resource_sender_hashmap_update(
+    const rns_resource_sender_t *sender, const uint8_t *request,
+    size_t request_length, uint8_t *output, size_t capacity,
+    size_t *output_length);
 rns_status_t rns_resource_sender_part(
     const rns_resource_sender_t *sender, size_t part_index,
     const uint8_t **data, size_t *length);
@@ -132,6 +145,11 @@ const uint8_t *rns_resource_sender_hash(const rns_resource_sender_t *sender);
 size_t rns_resource_sender_total_parts(const rns_resource_sender_t *sender);
 size_t rns_resource_sender_data_size(const rns_resource_sender_t *sender);
 size_t rns_resource_sender_transfer_size(const rns_resource_sender_t *sender);
+size_t rns_resource_sender_segment_index(const rns_resource_sender_t *sender);
+size_t rns_resource_sender_total_segments(const rns_resource_sender_t *sender);
+size_t rns_resource_sender_total_data_parts(const rns_resource_sender_t *sender);
+rns_status_t rns_resource_sender_advance_segment(rns_resource_sender_t *sender,
+                                                 const rns_link *link);
 
 /* True when this build can decompress bz2 resource payloads. */
 bool rns_resource_decompression_available(void);

@@ -37,6 +37,7 @@ typedef struct rns_runtime_request_handler rns_runtime_request_handler_t;
 #define RNS_LINK_CONTEXT_RESOURCE 0x01u
 #define RNS_LINK_CONTEXT_RESOURCE_ADV 0x02u
 #define RNS_LINK_CONTEXT_RESOURCE_REQ 0x03u
+#define RNS_LINK_CONTEXT_RESOURCE_HMU 0x04u
 #define RNS_LINK_CONTEXT_RESOURCE_PRF 0x05u
 #define RNS_LINK_CONTEXT_RESOURCE_ICL 0x06u
 #define RNS_LINK_CONTEXT_RESOURCE_RCL 0x07u

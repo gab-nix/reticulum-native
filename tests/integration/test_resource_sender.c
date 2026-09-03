@@ -2,6 +2,7 @@
 #include "reticulum/packet.h"
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void initialise_link(rns_link *link) {
@@ -136,11 +137,137 @@ static void test_compression_and_bounds(void) {
     assert(rns_resource_sender_create(&sender, &link, compressible,
                                       sizeof compressible, &invalid) ==
            RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_resource_sender_create(&sender, &link, compressible,
+                                      RNS_RESOURCE_MAX_SIZE + 1u, NULL) ==
+           RNS_ERROR_INVALID_ARGUMENT);
+}
+
+static void receive_current_segment(rns_resource_sender_t *sender,
+                                    const rns_link *link, uint8_t *output,
+                                    size_t capacity, size_t *output_length) {
+    uint8_t advertisement_bytes[RNS_MTU];
+    size_t advertisement_length = 0u;
+    assert(rns_resource_sender_advertisement(
+               sender, advertisement_bytes, sizeof advertisement_bytes,
+               &advertisement_length) == RNS_OK);
+    rns_resource_advertisement_t advertisement;
+    assert(rns_resource_advertisement_parse(
+               advertisement_bytes, advertisement_length, &advertisement) ==
+           RNS_OK);
+    assert(advertisement.hashmap_length <=
+           RNS_RESOURCE_HASHMAP_MAX_ENTRIES * RNS_RESOURCE_MAPHASH_LEN);
+    rns_resource_t *receiver = NULL;
+    assert(rns_resource_accept(&receiver, &advertisement,
+                               RNS_RESOURCE_MAX_SIZE) == RNS_OK);
+    bool duplicated = false;
+    while (!rns_resource_parts_complete(receiver)) {
+        uint8_t request[RNS_MTU];
+        size_t request_length = 0u;
+        assert(rns_resource_build_request(receiver, request, sizeof request,
+                                          &request_length) == RNS_OK);
+        size_t indexes[RNS_RESOURCE_WINDOW];
+        size_t count = 0u;
+        assert(rns_resource_sender_requested_parts(
+                   sender, request, request_length, indexes,
+                   RNS_RESOURCE_WINDOW, &count) == RNS_OK);
+        for (size_t i = count; i > 0u; --i) {
+            const uint8_t *part = NULL;
+            size_t part_length = 0u;
+            assert(rns_resource_sender_part(sender, indexes[i - 1u], &part,
+                                            &part_length) == RNS_OK);
+            assert(rns_resource_receive_part(receiver, part, part_length) ==
+                   RNS_OK);
+            if (!duplicated) {
+                size_t received = rns_resource_received_parts(receiver);
+                assert(rns_resource_receive_part(receiver, part, part_length) ==
+                       RNS_OK);
+                assert(rns_resource_received_parts(receiver) == received);
+                duplicated = true;
+            }
+        }
+        if (rns_resource_waiting_for_hashmap(receiver)) {
+            uint8_t update[RNS_MTU];
+            size_t update_length = 0u;
+            assert(rns_resource_sender_hashmap_update(
+                       sender, request, request_length, update, sizeof update,
+                       &update_length) == RNS_OK);
+            uint8_t corrupt[RNS_MTU];
+            memcpy(corrupt, update, update_length);
+            corrupt[0] ^= 1u;
+            assert(rns_resource_apply_hashmap_update(receiver, corrupt,
+                                                      update_length) ==
+                   RNS_ERROR_PROTOCOL);
+            memcpy(corrupt, update, update_length);
+            assert(corrupt[RNS_RESOURCE_HASH_SIZE] == 0x92U);
+            corrupt[RNS_RESOURCE_HASH_SIZE + 1U] = 0x7fU;
+            assert(rns_resource_apply_hashmap_update(receiver, corrupt,
+                                                      update_length) ==
+                   RNS_ERROR_PROTOCOL);
+            assert(rns_resource_apply_hashmap_update(receiver, update,
+                                                      update_length) == RNS_OK);
+            /* An identical reordered/duplicate HMU is harmless. */
+            assert(rns_resource_apply_hashmap_update(receiver, update,
+                                                      update_length) == RNS_OK);
+            memcpy(corrupt, update, update_length);
+            corrupt[update_length - 1U] ^= 1U;
+            assert(rns_resource_apply_hashmap_update(receiver, corrupt,
+                                                      update_length) ==
+                   RNS_ERROR_PROTOCOL);
+        }
+    }
+    assert(rns_resource_assemble(receiver, link, output, capacity,
+                                 output_length) == RNS_OK);
+    uint8_t proof[RNS_RESOURCE_PROOF_SIZE];
+    assert(rns_resource_build_proof(receiver, proof) == RNS_OK);
+    assert(rns_resource_sender_validate_proof(sender, proof, sizeof proof) ==
+           RNS_OK);
+    rns_resource_destroy(receiver);
+}
+
+static void test_hashmap_updates_and_segments(void) {
+    rns_link link;
+    initialise_link(&link);
+    const size_t source_length = RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE + 257u;
+    uint8_t *source = malloc(source_length);
+    uint8_t *assembled = malloc(source_length);
+    assert(source != NULL && assembled != NULL);
+    for (size_t i = 0u; i < source_length; ++i)
+        source[i] = (uint8_t)(i * 37u + i / 251u);
+    rns_resource_sender_options_t options = {.auto_compress = false};
+    rns_resource_sender_t *sender = NULL;
+    assert(rns_resource_sender_create(&sender, &link, source, source_length,
+                                      &options) == RNS_OK);
+    assert(rns_resource_sender_total_segments(sender) == 2u);
+    assert(rns_resource_sender_total_parts(sender) >
+           RNS_RESOURCE_HASHMAP_MAX_ENTRIES);
+
+    size_t assembled_total = 0u;
+    for (size_t segment = 1u; segment <= 2u; ++segment) {
+        assert(rns_resource_sender_segment_index(sender) == segment);
+        size_t segment_length = 0u;
+        receive_current_segment(sender, &link, assembled + assembled_total,
+                                source_length - assembled_total,
+                                &segment_length);
+        assembled_total += segment_length;
+        if (segment != 2u)
+            assert(rns_resource_sender_advance_segment(sender, &link) ==
+                   RNS_OK);
+    }
+    assert(rns_resource_sender_advance_segment(sender, &link) ==
+           RNS_ERROR_INVALID_STATE);
+    assert(assembled_total == source_length);
+    assert(memcmp(assembled, source, source_length) == 0);
+    assert(rns_resource_sender_total_data_parts(sender) >
+           RNS_RESOURCE_HASHMAP_MAX_ENTRIES);
+    rns_resource_sender_destroy(sender);
+    free(assembled);
+    free(source);
 }
 
 int main(void) {
     transfer_resource(false);
     transfer_resource(true);
     test_compression_and_bounds();
+    test_hashmap_updates_and_segments();
     return 0;
 }
