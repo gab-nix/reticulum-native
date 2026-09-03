@@ -198,6 +198,12 @@ typedef struct rns_runtime_interface_info {
     uint64_t bytes_received;
     uint64_t bytes_sent;
     uint64_t packets_dropped;
+    /* TCP lifecycle counters. connection_attempts counts outbound dials; a
+     * connection is established only after non-blocking completion or a
+     * server peer is accepted. */
+    uint64_t connection_attempts;
+    uint64_t connections_established;
+    uint64_t connections_lost;
 } rns_runtime_interface_info_t;
 
 typedef void (*rns_runtime_packet_callback_t)(rns_runtime_t *runtime,
@@ -208,6 +214,7 @@ typedef void (*rns_runtime_packet_callback_t)(rns_runtime_t *runtime,
 typedef void (*rns_runtime_announce_callback_t)(rns_runtime_t *runtime,
                                                 const rns_node_result *announce,
                                                 void *context);
+typedef double (*rns_runtime_clock_callback_t)(void *context);
 
 typedef struct rns_runtime_options {
     rns_runtime_packet_callback_t packet_callback;
@@ -216,6 +223,13 @@ typedef struct rns_runtime_options {
     size_t path_capacity;
     size_t dedupe_capacity;
     size_t local_destination_capacity;
+    /* Optional monotonic clock used by the caller-polled TCP reconnect
+     * scheduler. Defaults to the platform HAL monotonic clock. */
+    rns_runtime_clock_callback_t reconnect_clock;
+    void *reconnect_clock_context;
+    /* Zero selects the defaults (1 second initial, 30 second maximum). */
+    double tcp_reconnect_initial_seconds;
+    double tcp_reconnect_max_seconds;
 } rns_runtime_options_t;
 
 rns_status_t rns_runtime_create(rns_runtime_t **runtime,

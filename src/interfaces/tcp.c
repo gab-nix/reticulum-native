@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -301,6 +302,7 @@ rns_status_t rns_tcp_connect(rns_tcp_endpoint_t *endpoint,
     }
     status = resolve_tcp(host, port, endpoint->native_family, false, &address, &length);
     if (status != RNS_OK) {
+        rns_tcp_disconnect(endpoint);
         return status;
     }
     if (connect(endpoint->descriptor, (const struct sockaddr *)&address, length) == 0) {
@@ -318,6 +320,7 @@ rns_status_t rns_tcp_connect(rns_tcp_endpoint_t *endpoint,
 rns_status_t rns_tcp_finish_connect(rns_tcp_endpoint_t *endpoint) {
     int error = 0;
     socklen_t length = (socklen_t)sizeof(error);
+    struct pollfd readiness;
 
     if (endpoint == NULL) {
         return RNS_ERROR_INVALID_ARGUMENT;
@@ -327,6 +330,16 @@ rns_status_t rns_tcp_finish_connect(rns_tcp_endpoint_t *endpoint) {
     }
     if (endpoint->state != RNS_TCP_CONNECTING) {
         return RNS_ERROR_INVALID_STATE;
+    }
+    readiness.fd = endpoint->descriptor;
+    readiness.events = POLLOUT;
+    readiness.revents = 0;
+    int ready = poll(&readiness, 1U, 0);
+    if (ready == 0) return RNS_ERROR_TIMEOUT;
+    if (ready < 0) {
+        if (errno == EINTR) return RNS_ERROR_TIMEOUT;
+        rns_tcp_disconnect(endpoint);
+        return RNS_ERROR_IO;
     }
     if (getsockopt(endpoint->descriptor, SOL_SOCKET, SO_ERROR, &error, &length) != 0) {
         rns_tcp_disconnect(endpoint);

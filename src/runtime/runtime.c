@@ -16,6 +16,8 @@
 
 #define RUNTIME_DEFAULT_WORK 32U
 #define RUNTIME_TCP_QUEUE (RNS_MTU * 8U)
+#define RUNTIME_TCP_RECONNECT_INITIAL 1.0
+#define RUNTIME_TCP_RECONNECT_MAX 30.0
 
 typedef struct runtime_interface {
     rns_runtime_interface_info_t info;
@@ -24,6 +26,8 @@ typedef struct runtime_interface {
     bool has_udp_forward;
     rns_tcp_endpoint_t *tcp;
     rns_tcp_endpoint_t *accepted;
+    double reconnect_at;
+    double reconnect_delay;
 } runtime_interface_t;
 
 struct rns_runtime_link {
@@ -115,6 +119,10 @@ struct rns_runtime {
     size_t plain_destination_capacity;
     size_t plain_destination_count;
     rns_packet_receipt_t *packet_receipts[RNS_RUNTIME_MAX_PACKET_RECEIPTS];
+    rns_runtime_clock_callback_t reconnect_clock;
+    void *reconnect_clock_context;
+    double tcp_reconnect_initial;
+    double tcp_reconnect_max;
 };
 
 typedef struct receive_context {
@@ -129,6 +137,45 @@ static double runtime_clock(void *context) {
     (void)context;
     (void)rns_hal_monotonic_ms(&milliseconds);
     return (double)milliseconds / 1000.0;
+}
+
+static double reconnect_clock(const rns_runtime_t *runtime) {
+    return runtime->reconnect_clock != NULL
+               ? runtime->reconnect_clock(runtime->reconnect_clock_context)
+               : runtime_clock(NULL);
+}
+
+static void tcp_schedule_reconnect(rns_runtime_t *runtime,
+                                   runtime_interface_t *interface) {
+    if (interface->reconnect_delay <= 0.0)
+        interface->reconnect_delay = runtime->tcp_reconnect_initial;
+    interface->reconnect_at = reconnect_clock(runtime) +
+                              interface->reconnect_delay;
+    if (interface->reconnect_delay < runtime->tcp_reconnect_max) {
+        interface->reconnect_delay *= 2.0;
+        if (interface->reconnect_delay > runtime->tcp_reconnect_max)
+            interface->reconnect_delay = runtime->tcp_reconnect_max;
+    }
+}
+
+static void tcp_mark_connected(rns_runtime_t *runtime,
+                               runtime_interface_t *interface) {
+    (void)runtime;
+    interface->info.state = RNS_RUNTIME_INTERFACE_UP;
+    interface->info.last_error = RNS_OK;
+    interface->info.connections_established++;
+    interface->reconnect_at = 0.0;
+    interface->reconnect_delay = 0.0;
+}
+
+static void tcp_mark_client_down(rns_runtime_t *runtime,
+                                 runtime_interface_t *interface,
+                                 rns_status_t reason) {
+    if (rns_tcp_state(interface->tcp) != RNS_TCP_DISCONNECTED)
+        rns_tcp_disconnect(interface->tcp);
+    interface->info.state = RNS_RUNTIME_INTERFACE_DOWN;
+    interface->info.last_error = reason;
+    tcp_schedule_reconnect(runtime, interface);
 }
 
 static void packet_receipt_notify(rns_packet_receipt_t *receipt,
@@ -958,8 +1005,10 @@ static rns_status_t tcp_receive(const uint8_t *packet, size_t length, void *opaq
     return ingress((receive_context_t *)opaque, packet, length);
 }
 
-static rns_status_t start_interface(runtime_interface_t *destination,
-                                    const rns_config_interface_t *source, uint64_t id) {
+static rns_status_t start_interface(rns_runtime_t *runtime,
+                                    runtime_interface_t *destination,
+                                    const rns_config_interface_t *source,
+                                    uint64_t id) {
     rns_status_t status = RNS_ERROR_UNSUPPORTED;
     memset(destination, 0, sizeof(*destination));
     destination->info.id = id;
@@ -977,16 +1026,26 @@ static rns_status_t start_interface(runtime_interface_t *destination,
         if (status == RNS_OK) destination->has_udp_forward = true;
     } else if (source->type == RNS_CONFIG_TCP_CLIENT || source->type == RNS_CONFIG_TCP_SERVER) {
         status = rns_tcp_endpoint_create(&destination->tcp, RNS_UDP_IPV4, RUNTIME_TCP_QUEUE);
-        if (status == RNS_OK && source->type == RNS_CONFIG_TCP_CLIENT)
+        if (status == RNS_OK && source->type == RNS_CONFIG_TCP_CLIENT) {
+            destination->info.connection_attempts++;
             status = rns_tcp_connect(destination->tcp, source->target_host, source->target_port);
-        else if (status == RNS_OK) {
+        } else if (status == RNS_OK) {
             const char *listen_ip = source->listen_ip[0] != '\0' ? source->listen_ip : "0.0.0.0";
             status = rns_tcp_listen(destination->tcp, listen_ip, source->listen_port, 8);
         }
     }
     destination->info.last_error = status;
     if (status == RNS_ERROR_UNSUPPORTED) destination->info.state = RNS_RUNTIME_INTERFACE_UNSUPPORTED;
-    else destination->info.state = status == RNS_OK ? RNS_RUNTIME_INTERFACE_UP : RNS_RUNTIME_INTERFACE_DOWN;
+    else if (source->type == RNS_CONFIG_TCP_CLIENT) {
+        if (status == RNS_OK && rns_tcp_state(destination->tcp) == RNS_TCP_CONNECTED)
+            tcp_mark_connected(runtime, destination);
+        else if (status == RNS_OK)
+            destination->info.state = RNS_RUNTIME_INTERFACE_STARTING;
+        else {
+            destination->info.state = RNS_RUNTIME_INTERFACE_DOWN;
+            tcp_schedule_reconnect(runtime, destination);
+        }
+    } else destination->info.state = status == RNS_OK ? RNS_RUNTIME_INTERFACE_UP : RNS_RUNTIME_INTERFACE_DOWN;
     return status;
 }
 
@@ -1002,10 +1061,23 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
     if (runtime == NULL) return RNS_ERROR_NO_MEMORY;
     runtime->config = *config;
     runtime->interface_count = config->interface_count;
+    runtime->tcp_reconnect_initial = RUNTIME_TCP_RECONNECT_INITIAL;
+    runtime->tcp_reconnect_max = RUNTIME_TCP_RECONNECT_MAX;
     if (options != NULL) {
         runtime->packet_callback = options->packet_callback;
         runtime->announce_callback = options->announce_callback;
         runtime->callback_context = options->callback_context;
+        runtime->reconnect_clock = options->reconnect_clock;
+        runtime->reconnect_clock_context = options->reconnect_clock_context;
+        if (options->tcp_reconnect_initial_seconds > 0.0)
+            runtime->tcp_reconnect_initial =
+                options->tcp_reconnect_initial_seconds;
+        if (options->tcp_reconnect_max_seconds > 0.0)
+            runtime->tcp_reconnect_max = options->tcp_reconnect_max_seconds;
+    }
+    if (runtime->tcp_reconnect_max < runtime->tcp_reconnect_initial) {
+        free(runtime);
+        return RNS_ERROR_INVALID_ARGUMENT;
     }
     memset(&node_config, 0, sizeof(node_config));
     node_config.transport.path_capacity = options != NULL && options->path_capacity ? options->path_capacity : 128U;
@@ -1039,7 +1111,8 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
     }
     runtime->plain_destination_capacity = node_config.local_destination_capacity;
     for (size_t i = 0U; i < runtime->interface_count; ++i) {
-        rns_status_t status = start_interface(&runtime->interfaces[i], &config->interfaces[i], i + 1U);
+        rns_status_t status = start_interface(runtime, &runtime->interfaces[i],
+                                              &config->interfaces[i], i + 1U);
         if (status != RNS_OK && first_error == RNS_OK) first_error = status;
         if (status != RNS_OK && config->panic_on_interface_error) {
             rns_runtime_destroy(runtime);
@@ -1081,22 +1154,62 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
 
 static rns_status_t poll_tcp(rns_runtime_t *runtime, size_t index, receive_context_t *context) {
     runtime_interface_t *interface = &runtime->interfaces[index];
+    const rns_config_interface_t *configuration =
+        &runtime->config.interfaces[index];
     rns_status_t status;
     size_t bytes = 0U;
-    if (runtime->config.interfaces[index].type == RNS_CONFIG_TCP_SERVER && interface->accepted == NULL) {
+    if (configuration->type == RNS_CONFIG_TCP_SERVER &&
+        interface->accepted == NULL) {
         status = rns_tcp_accept(interface->tcp, &interface->accepted, RUNTIME_TCP_QUEUE);
-        if (status != RNS_OK && status != RNS_ERROR_TIMEOUT) return status;
+        if (status == RNS_OK) {
+            interface->info.connections_established++;
+            interface->info.last_error = RNS_OK;
+        } else if (status != RNS_ERROR_TIMEOUT) {
+            interface->info.last_error = status;
+            return status;
+        }
     }
-    if (runtime->config.interfaces[index].type == RNS_CONFIG_TCP_CLIENT &&
+    if (configuration->type == RNS_CONFIG_TCP_CLIENT &&
+        rns_tcp_state(interface->tcp) == RNS_TCP_DISCONNECTED) {
+        if (interface->reconnect_at > reconnect_clock(runtime)) return RNS_OK;
+        interface->info.connection_attempts++;
+        interface->info.state = RNS_RUNTIME_INTERFACE_STARTING;
+        status = rns_tcp_connect(interface->tcp, configuration->target_host,
+                                 configuration->target_port);
+        if (status != RNS_OK) {
+            tcp_mark_client_down(runtime, interface, status);
+            return status;
+        }
+        if (rns_tcp_state(interface->tcp) == RNS_TCP_CONNECTED)
+            tcp_mark_connected(runtime, interface);
+    }
+    if (configuration->type == RNS_CONFIG_TCP_CLIENT &&
         rns_tcp_state(interface->tcp) == RNS_TCP_CONNECTING) {
         status = rns_tcp_finish_connect(interface->tcp);
-        if (status != RNS_OK && status != RNS_ERROR_TIMEOUT) return status;
+        if (status == RNS_OK)
+            tcp_mark_connected(runtime, interface);
+        else if (status != RNS_ERROR_TIMEOUT) {
+            tcp_mark_client_down(runtime, interface, status);
+            return status;
+        }
     }
     rns_tcp_endpoint_t *connection = interface->accepted != NULL ? interface->accepted : interface->tcp;
     if (connection == NULL || rns_tcp_state(connection) != RNS_TCP_CONNECTED) return RNS_OK;
     status = rns_tcp_poll_receive(connection, tcp_receive, context, &bytes);
     interface->info.bytes_received += 0U; /* ingress accounts decoded bytes. */
     if (status == RNS_OK) status = rns_tcp_flush(connection, &bytes);
+    if (status != RNS_OK && rns_tcp_state(connection) == RNS_TCP_DISCONNECTED) {
+        interface->info.connections_lost++;
+        if (configuration->type == RNS_CONFIG_TCP_SERVER) {
+            rns_tcp_endpoint_destroy(interface->accepted);
+            interface->accepted = NULL;
+            /* Losing a child connection does not take down the listener. */
+            interface->info.state = RNS_RUNTIME_INTERFACE_UP;
+            interface->info.last_error = RNS_OK;
+            return RNS_OK;
+        }
+        tcp_mark_client_down(runtime, interface, status);
+    }
     return status;
 }
 
@@ -1161,11 +1274,16 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
         runtime_interface_t *interface = &runtime->interfaces[i];
         receive_context_t context = {runtime, i, max_packets - *processed, 0U};
         rns_status_t status = RNS_OK;
-        if (interface->info.state != RNS_RUNTIME_INTERFACE_UP) continue;
-        if (interface->udp != NULL) {
+        if (interface->tcp != NULL &&
+            interface->info.state != RNS_RUNTIME_INTERFACE_DISABLED &&
+            interface->info.state != RNS_RUNTIME_INTERFACE_UNSUPPORTED) {
+            status = poll_tcp(runtime, i, &context);
+        } else if (interface->info.state != RNS_RUNTIME_INTERFACE_UP) {
+            continue;
+        } else if (interface->udp != NULL) {
             size_t count = 0U;
             status = rns_udp_poll(interface->udp, context.remaining, udp_receive, &context, &count);
-        } else if (interface->tcp != NULL) status = poll_tcp(runtime, i, &context);
+        }
         *processed += context.processed;
         if (status != RNS_OK) {
             interface->info.last_error = status;
