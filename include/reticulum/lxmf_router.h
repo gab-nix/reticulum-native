@@ -12,6 +12,8 @@ extern "C" {
 #define LXMF_DISPLAY_NAME_MAX 127u
 #define LXMF_IDENTITY_PUBLIC_LENGTH 64u
 #define LXMF_FEATURE_COMPRESSION 0x00000001u
+#define LXMF_ANNOUNCE_FUNCTIONS_MAX 32u
+#define LXMF_ANNOUNCE_EXTENSIONS_MAX 256u
 #define LXMF_ROUTER_MAX_RECEIPTS 16u
 #define LXMF_ROUTER_MAX_LINKS 16u
 
@@ -21,6 +23,14 @@ typedef struct {
     bool has_stamp_cost;
     uint8_t stamp_cost;
     uint32_t features;
+    /* Exact supported-function identifiers, including identifiers this
+     * implementation does not understand. */
+    uint8_t supported_functions[LXMF_ANNOUNCE_FUNCTIONS_MAX];
+    size_t supported_function_count;
+    /* Concatenated MessagePack objects after the three standard fields. */
+    uint8_t extensions[LXMF_ANNOUNCE_EXTENSIONS_MAX];
+    size_t extensions_len;
+    size_t extension_count;
 } lxmf_announce_data_t;
 
 lxmf_status_t lxmf_announce_encode(const lxmf_announce_data_t *data,

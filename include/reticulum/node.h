@@ -67,6 +67,9 @@ typedef struct {
     size_t announce_app_data_length;
     uint64_t announce_timebase;
     int announce_has_ratchet;
+    /* Borrowed from the verified packet body and valid only for the duration
+     * of the runtime announce callback. NULL when no ratchet was announced. */
+    const uint8_t *announce_ratchet;
     double received_at;
 } rns_node_result;
 

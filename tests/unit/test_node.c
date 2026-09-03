@@ -44,6 +44,22 @@ int main(void) {
     assert(rns_node_ingress(&node, raw, raw_length, 42, 1, output, sizeof(output), &result));
     assert(result.action == RNS_NODE_DROP && result.reason == RNS_NODE_REASON_DUPLICATE);
 
+    /* A newer verified announce exposes its exact public ratchet only for the
+     * callback lifetime; consumers can copy it into bounded durable state. */
+    uint8_t ratchet[32]; fill(ratchet, sizeof ratchet, 0x5a);
+    static const uint8_t app_data[] = {0x93,0xc4,0x03,'R','e','i',0x08,0x91,0x00};
+    assert(rns_announce_build(&identity, destination, name_hash, random_prefix, 1235,
+                              ratchet, app_data, sizeof app_data, announce_body,
+                              sizeof announce_body, &announce_length, &context_flag));
+    packet.context_flag=context_flag;packet.packet_type=1;packet.data=announce_body;
+    packet.data_length=announce_length;
+    assert(rns_packet_encode(&packet,raw,sizeof raw,&raw_length));
+    assert(rns_node_ingress(&node,raw,raw_length,42,1,output,sizeof output,&result));
+    assert(result.has_verified_announce&&result.announce_has_ratchet&&result.announce_ratchet);
+    assert(memcmp(result.announce_ratchet,ratchet,sizeof ratchet)==0);
+    assert(result.announce_app_data_length==sizeof app_data&&
+           memcmp(result.announce_app_data,app_data,sizeof app_data)==0);
+
     /* A new header-1 data packet is routed using the learned destination path. */
     packet.packet_type = 0; packet.context_flag = 0; packet.data = (const uint8_t *)"hello"; packet.data_length = 5;
     assert(rns_packet_encode(&packet, raw, sizeof(raw), &raw_length));

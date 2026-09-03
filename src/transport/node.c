@@ -78,6 +78,7 @@ static int announce_ingress(rns_node *node, const rns_packet *packet, const uint
     result->announce_app_data_length = announce.app_data_length;
     result->announce_timebase = announce.timestamp;
     result->announce_has_ratchet = announce.has_ratchet;
+    result->announce_ratchet = announce.ratchet;
     result->received_at = node->transport.config.clock(node->transport.config.clock_context);
     if (!rns_identity_from_public(&result->announce_identity, announce.public_key)) {
         result->has_verified_announce = 0;
