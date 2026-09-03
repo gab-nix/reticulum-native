@@ -196,6 +196,34 @@ lxmf_status_t lxmf_pn_announce_decode(const uint8_t *in,size_t len,lxmf_pn_annou
     if(r.p!=r.end) return LXMF_ERR_FORMAT;
     *a=tmp; return LXMF_OK;
 }
+
+bool lxmf_pn_announce_name(const lxmf_pn_announce_t *announce,
+                           lxmf_slice_t *name) {
+    if (announce == NULL || name == NULL ||
+        announce->metadata_msgpack.data == NULL ||
+        announce->metadata_msgpack.len == 0U) return false;
+    reader r = {announce->metadata_msgpack.data,
+                announce->metadata_msgpack.data +
+                    announce->metadata_msgpack.len,
+                4096U};
+    size_t pairs = 0U;
+    if (!count(&r, true, &pairs)) return false;
+    bool found = false;
+    lxmf_slice_t result = {0};
+    for (size_t i = 0U; i < pairs; ++i) {
+        reader numeric = r;
+        uint64_t key = UINT64_MAX;
+        if (uint_value(&numeric, &key)) r = numeric;
+        else if (!skip(&r, 0U)) return false;
+        if (key == 1U) {
+            if (found || !binary(&r, &result)) return false;
+            found = true;
+        } else if (!skip(&r, 0U)) return false;
+    }
+    if (!found || r.p != r.end) return false;
+    *name = result;
+    return true;
+}
 lxmf_status_t lxmf_pn_upload_encode(const lxmf_pn_upload_t *u,uint8_t *out,size_t cap,size_t *len) {
     if(!u||!out||!len) return LXMF_ERR_ARGUMENT;
     if(!isfinite(u->timebase)||u->timebase<0.0||!slices_valid(u->messages,u->count,false)) return LXMF_ERR_FORMAT;

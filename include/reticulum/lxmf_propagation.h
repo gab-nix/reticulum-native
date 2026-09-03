@@ -45,6 +45,9 @@ lxmf_status_t lxmf_pn_announce_encode(const lxmf_pn_announce_t *announce,
     uint8_t *output, size_t capacity, size_t *length);
 lxmf_status_t lxmf_pn_announce_decode(const uint8_t *input, size_t length,
     lxmf_pn_announce_t *announce);
+/* Returns the borrowed PN_META_NAME binary value (metadata key 1), if any. */
+bool lxmf_pn_announce_name(const lxmf_pn_announce_t *announce,
+    lxmf_slice_t *name);
 
 /* Upload is [timebase, [destination || encrypted_message || PN_stamp, ...]].
  * Message bytes are opaque here. The transient ID excludes the final PN stamp. */

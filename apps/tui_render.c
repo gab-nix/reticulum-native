@@ -606,12 +606,26 @@ static const char *tui_browser_error_text(const rns_browser_t *browser) {
 }
 
 static const char *node_kind_name(const rns_node_record *node) {
+    if (node->propagation)
+        return node->lxmf_pn_app_data_valid && node->lxmf_pn_enabled
+            ? "LXMF propagation relay"
+            : "LXMF propagation endpoint (inactive/static-only)";
     switch (node->kind) {
         case RNS_NODE_KIND_NOMAD: return "Nomad node";
         case RNS_NODE_KIND_LXMF: return "LXMF inbox";
         case RNS_NODE_KIND_OTHER: break;
     }
     return "transport";
+}
+
+void tui_render_node_roles(const rns_node_record *node, char output[4]) {
+    if (output == NULL) return;
+    output[0] = node != NULL && node->has_message_destination ? 'P' : '-';
+    output[1] = node != NULL && node->propagation
+        ? (node->lxmf_pn_app_data_valid && node->lxmf_pn_enabled ? 'R' : 'r')
+        : '-';
+    output[2] = node != NULL && node->kind == RNS_NODE_KIND_NOMAD ? 'S' : '-';
+    output[3] = '\0';
 }
 
 const char *tui_render_node_propagation_reason(const rns_node_record *node) {
@@ -630,17 +644,22 @@ static void draw_node_popup(const tui_state_t *state) {
     rns_node_record node;
     char address[TUI_ADDRESS_DIGITS + 1u];
     char inbox[TUI_ADDRESS_DIGITS + 1u];
-    char lines[14][96];
-    const char *pointers[14];
+    char roles[4];
+    char lines[16][96];
+    const char *pointers[16];
     size_t count = 0u;
     if (!tui_state_selected_node(state, &node)) return;
     tui_hex_format(node.destination, LXMF_DESTINATION_LENGTH, address);
     bool pages = tui_state_node_serves_pages(&node);
     bool messageable = node.has_message_destination;
+    tui_render_node_roles(&node, roles);
 
     (void)snprintf(lines[count++], sizeof lines[0], "Address:  %s", address);
     (void)snprintf(lines[count++], sizeof lines[0], "Name:     %s",
                    node.name[0] != '\0' ? node.name : "(none announced)");
+    (void)snprintf(lines[count++], sizeof lines[0],
+                   "Roles:    %s  (P peer, R relay, S site; r inactive relay)",
+                   roles);
     (void)snprintf(lines[count++], sizeof lines[0], "Type:     %s%s",
                    node_kind_name(&node),
                    pages ? " - serves pages" : " - serves no pages");
@@ -648,7 +667,11 @@ static void draw_node_popup(const tui_state_t *state) {
                    "Route:    %u hops on interface %llu, %s%s",
                    (unsigned)node.hops, (unsigned long long)node.interface_id,
                    node.reachable ? "reachable" : "stale",
-                   node.propagation ? ", propagation node" : "");
+                   node.propagation
+                       ? node.lxmf_pn_enabled
+                           ? ", active propagation relay"
+                           : ", inactive propagation endpoint"
+                       : "");
     if (messageable) {
         tui_hex_format(node.message_destination, LXMF_DESTINATION_LENGTH, inbox);
         (void)snprintf(lines[count++], sizeof lines[0], "Inbox:    %s", inbox);
@@ -721,11 +744,13 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
                     : "No live announces received yet. Check interface status and wait for announces.");
     for (size_t i = first; i < count && i - first < rows; ++i) {
         char address[TUI_ADDRESS_DIGITS + 1u];
+        char roles[4];
         char line[160];
         bool selected = state->has_node_selection && i == position;
         tui_hex_format(sorted[i].destination, LXMF_DESTINATION_LENGTH, address);
-        (void)snprintf(line, sizeof line, "%-4s %s%s%s  %u hops  if:%llu  %s",
-                       tui_state_node_serves_pages(&sorted[i]) ? "PAGE" : "",
+        tui_render_node_roles(&sorted[i], roles);
+        (void)snprintf(line, sizeof line, "%s %s%s%s  %u hops  if:%llu  %s",
+                       roles,
                        sorted[i].name[0] != '\0' ? sorted[i].name : "",
                        sorted[i].name[0] != '\0' ? "  " : "", address,
                        (unsigned)sorted[i].hops,
@@ -736,7 +761,7 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
         if (selected) (void)attroff(A_REVERSE);
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
-            "j/k select  / search  Enter details/actions  R refresh path  C conversations");
+            "P peer  R relay  S site  r inactive relay | j/k select  Enter actions");
     free(sorted);
 }
 
@@ -1321,6 +1346,9 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
         rns_node_record selected;
         if (state->overlay == TUI_OVERLAY_NODE_ACTIONS &&
             tui_state_selected_node(state, &selected)) {
+            char roles[4];
+            tui_render_node_roles(&selected, roles);
+            (void)fprintf(output, "Roles: %s\n", roles);
             const char *reason =
                 tui_render_node_propagation_reason(&selected);
             (void)fprintf(output, "Propagation action: %s",

@@ -277,6 +277,9 @@ int rns_node_registry_consider_announce(rns_node_registry *r,const rns_node_resu
              !memcmp(propagation_hash,a->destination_hash,16)){
         lxmf_pn_announce_t decoded;
         n.kind=RNS_NODE_KIND_LXMF;n.propagation=true;
+        if(rns_destination_hash(&a->announce_identity,"lxmf",delivery_aspects,1,delivery_hash)){
+            memcpy(n.message_destination,delivery_hash,16);n.has_message_destination=true;
+        }
         if(a->announce_app_data_length&&
            lxmf_pn_announce_decode(a->announce_app_data,
                                    a->announce_app_data_length,
@@ -285,6 +288,15 @@ int rns_node_registry_consider_announce(rns_node_registry *r,const rns_node_resu
             n.lxmf_pn_enabled=decoded.enabled;
             n.lxmf_pn_stamp_cost=decoded.stamp_cost;
             n.lxmf_pn_stamp_flexibility=decoded.stamp_flexibility;
+            lxmf_slice_t relay_name;
+            if(lxmf_pn_announce_name(&decoded,&relay_name)){
+                size_t name_length=relay_name.len<sizeof(n.name)-1?relay_name.len:sizeof(n.name)-1;
+                for(size_t i=0;i<name_length;i++){
+                    unsigned char c=relay_name.data[i];
+                    n.name[i]=c>=32u&&c!=127u?(char)c:'?';
+                }
+                n.name[name_length]='\0';
+            }
         }
     }
     return rns_node_registry_upsert(r,&n);

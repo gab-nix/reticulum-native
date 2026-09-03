@@ -54,6 +54,9 @@ static void fixtures(void) {
     assert(a.enabled&&!a.legacy_support&&a.timebase==1700000000u);
     assert(a.stamp_cost==16&&a.stamp_flexibility==3&&a.peering_cost==18);
     assert(!a.transfer_limit_kb.is_float&&a.transfer_limit_kb.integer==256);
+    lxmf_slice_t name;
+    assert(lxmf_pn_announce_name(&a,&name));
+    assert(name.len==11u&&memcmp(name.data,"Rei PN \xf0\x9f\x8c\xb8",11u)==0);
     assert(lxmf_pn_announce_decode(pn_fixtures[1].wire,pn_fixtures[1].length,&a)==LXMF_OK);
     assert(!a.enabled&&a.transfer_limit_kb.is_float&&a.transfer_limit_kb.real==256.5);
     assert(lxmf_pn_announce_decode(pn_fixtures[2].wire,pn_fixtures[2].length,&a)==LXMF_OK);

@@ -358,6 +358,9 @@ static void test_network_popup_reasons(void) {
     state->screen = TUI_SCREEN_NETWORK;
     seed_node(state);
     rns_node_record *node = &state->nodes.records[0];
+    char roles[4];
+    tui_render_node_roles(node, roles);
+    assert(strcmp(roles, "P-S") == 0);
     const char *reason = tui_render_node_propagation_reason(node);
     assert(reason != NULL && strcmp(reason, "not a propagation announce") == 0);
     assert(strlen(reason) + 3u <= 30u);
@@ -369,9 +372,13 @@ static void test_network_popup_reasons(void) {
                   "stale or unreachable") == 0);
     node->reachable = true;
     node->lxmf_pn_enabled = false;
+    tui_render_node_roles(node, roles);
+    assert(strcmp(roles, "PrS") == 0);
     assert(strcmp(tui_render_node_propagation_reason(node),
                   "propagation is disabled") == 0);
     node->lxmf_pn_enabled = true;
+    tui_render_node_roles(node, roles);
+    assert(strcmp(roles, "PRS") == 0);
     node->lxmf_pn_stamp_cost = 0u;
     assert(strcmp(tui_render_node_propagation_reason(node),
                   "invalid propagation cost") == 0);

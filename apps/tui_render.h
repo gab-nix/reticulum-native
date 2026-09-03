@@ -17,6 +17,9 @@ void tui_render_message_metadata(const tui_message_metadata_t *metadata,
                                  char *output, size_t capacity);
 /* NULL means the node satisfies the unchanged verified-selection policy. */
 const char *tui_render_node_propagation_reason(const rns_node_record *node);
+/* Three-character role badge: P=peer, R=active relay, r=inactive relay
+ * endpoint, S=Nomad site, and '-' means absent. */
+void tui_render_node_roles(const rns_node_record *node, char output[4]);
 /* Pure row-window seam used to keep the selected RRC action on small screens. */
 size_t tui_render_rrc_first_item(tui_rrc_item_t selected, size_t visible_rows);
 

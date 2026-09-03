@@ -363,6 +363,11 @@ static void test_registry_and_verified_announces(void) {
     pn.enabled = true;
     pn.stamp_cost = 11U;
     pn.stamp_flexibility = 3U;
+    static const uint8_t pn_metadata[] = {
+        0x81U, 0x01U, 0xc4U, 0x05U, 'R', 'e', 'l', 'a', 'y'
+    };
+    pn.metadata_msgpack.data = pn_metadata;
+    pn.metadata_msgpack.len = sizeof pn_metadata;
     size_t pn_length = 0U;
     assert(lxmf_pn_announce_encode(&pn, app_data, sizeof app_data,
                                    &pn_length) == LXMF_OK);
@@ -375,6 +380,7 @@ static void test_registry_and_verified_announces(void) {
     record = rns_node_registry_get(&registry, result.destination_hash);
     assert(record != NULL && record->propagation &&
            record->lxmf_pn_app_data_valid && record->lxmf_pn_enabled &&
+           record->has_message_destination && strcmp(record->name,"Relay")==0 &&
            record->lxmf_pn_stamp_cost == 11U &&
            record->lxmf_pn_stamp_flexibility == 3U);
 
