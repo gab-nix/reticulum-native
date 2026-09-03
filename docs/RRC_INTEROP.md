@@ -28,7 +28,9 @@ success:
 The exchange exposed a real incompatibility: RRC wire timestamps used the
 caller's monotonic poll time. NomadNet envelopes use Unix epoch milliseconds.
 The session now obtains wall-clock time only while encoding envelopes and
-continues to use monotonic time for local deadlines and retry scheduling.
+continues to use monotonic time for local deadlines and retry scheduling. Its
+wall-clock provider is injectable for deterministic and embedded runtimes; the
+POSIX HAL clock is only the default when no provider is supplied.
 
 The committed privacy-safe result is
 `tests/fixtures/nomadnet_rrc_udp_live.provenance.json`. It contains source and

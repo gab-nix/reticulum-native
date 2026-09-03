@@ -1,6 +1,5 @@
 #include "reticulum/config.h"
 #include "reticulum/destination.h"
-#include "reticulum/hal.h"
 #include "reticulum/rrc_session.h"
 #include "reticulum/udp.h"
 
@@ -20,6 +19,7 @@ typedef struct hub_fixture {
     size_t message;
     size_t ping;
     size_t pong;
+    uint64_t expected_timestamp_ms;
     bool send_welcome;
 } hub_fixture_t;
 
@@ -27,6 +27,20 @@ typedef struct client_fixture {
     size_t state_changes;
     size_t envelopes;
 } client_fixture_t;
+
+typedef struct clock_fixture {
+    uint64_t now_ms;
+    bool fail;
+} clock_fixture_t;
+
+static rns_status_t fixture_wallclock(uint64_t *milliseconds, void *opaque) {
+    clock_fixture_t *clock = opaque;
+    if (milliseconds == NULL || clock == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    if (clock->fail) return RNS_ERROR_IO;
+    *milliseconds = clock->now_ms;
+    return RNS_OK;
+}
 
 static uint16_t reserve_udp_port(void) {
     rns_udp_endpoint_t *endpoint = NULL;
@@ -77,11 +91,8 @@ static void hub_packet(rns_runtime_link_t *link, uint8_t context,
     assert(link == hub->link && context == 0u);
     assert(rns_rrc_envelope_parse(plaintext, plaintext_length, &envelope) ==
            RNS_OK);
+    assert(envelope.timestamp_ms == hub->expected_timestamp_ms);
     if (envelope.type == RNS_RRC_HELLO) {
-        uint64_t wallclock_ms = 0u;
-        assert(rns_hal_wallclock_ms(&wallclock_ms) == RNS_OK);
-        assert(envelope.timestamp_ms <= wallclock_ms + 1000u);
-        assert(envelope.timestamp_ms + 1000u >= wallclock_ms);
         assert(envelope.body_cbor.length ==
                sizeof nomadnet_rrc_session_hello_body);
         assert(memcmp(envelope.body_cbor.data,
@@ -148,7 +159,10 @@ int main(void) {
     assert(rns_destination_hash(&hub_identity, "rrc", aspects, 1u,
                                 hub_destination));
 
-    hub_fixture_t hub = {.send_welcome = true};
+    clock_fixture_t clock = {.now_ms = UINT64_C(1700000000123)};
+    hub_fixture_t hub = {
+        .expected_timestamp_ms = clock.now_ms,
+        .send_welcome = true};
     rns_runtime_link_options_t hub_options = {
         .timeout_seconds = 2.0,
         .state_callback = hub_link_state,
@@ -176,7 +190,9 @@ int main(void) {
         .link_timeout_seconds = 2.0,
         .state_callback = client_state,
         .envelope_callback = client_envelope,
-        .callback_context = &client};
+        .callback_context = &client,
+        .wallclock_callback = fixture_wallclock,
+        .wallclock_context = &clock};
     memcpy(options.hub_destination, hub_destination, sizeof hub_destination);
     rns_rrc_session_t *session = NULL;
     assert(rns_rrc_session_create(&session, &options) == RNS_OK);
@@ -224,6 +240,12 @@ int main(void) {
         assert(rns_runtime_poll(hub_runtime, 8u, &processed) == RNS_OK);
     }
     assert(hub.pong == 1u);
+
+    /* Clock-provider failures are surfaced without emitting an envelope. */
+    clock.fail = true;
+    assert(rns_rrc_session_part(session, (const uint8_t *)"lobby", 5u) ==
+           RNS_ERROR_IO);
+    clock.fail = false;
 
     /* Unexpected closure follows the pinned two-second first reconnect delay. */
     rns_runtime_link_destroy(hub.link);

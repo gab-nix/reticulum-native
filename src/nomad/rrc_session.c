@@ -33,6 +33,11 @@ struct rns_rrc_session {
     bool welcome_pending;
 };
 
+static rns_status_t default_wallclock(uint64_t *milliseconds, void *context) {
+    (void)context;
+    return rns_hal_wallclock_ms(milliseconds);
+}
+
 static void welcome_defaults(rns_rrc_welcome_t *welcome) {
     memset(welcome, 0, sizeof *welcome);
     welcome->max_nick_bytes = RNS_RRC_DEFAULT_MAX_NICK_BYTES;
@@ -262,8 +267,9 @@ static rns_status_t send_envelope(rns_rrc_session_t *session,
     envelope.type = type;
     /* RRC timestamps are Unix wall-clock milliseconds. The caller-provided
      * monotonic clock is only for local deadlines and retry scheduling. */
-    if (rns_hal_wallclock_ms(&envelope.timestamp_ms) != RNS_OK)
-        return RNS_ERROR_INVALID_STATE;
+    rns_status_t clock_status = session->options.wallclock_callback(
+        &envelope.timestamp_ms, session->options.wallclock_context);
+    if (clock_status != RNS_OK) return clock_status;
     memcpy(envelope.source, session->local.hash, sizeof envelope.source);
     if (rns_hal_random_bytes(envelope.message_id,
                              sizeof envelope.message_id) != RNS_OK)
@@ -363,6 +369,8 @@ rns_status_t rns_rrc_session_create(rns_rrc_session_t **output,
     session->options.local_identity = &session->local;
     session->options.hub_identity = &session->hub;
     session->options.nick = session->nick;
+    if (session->options.wallclock_callback == NULL)
+        session->options.wallclock_callback = default_wallclock;
     if (session->options.path_timeout_ms == 0u)
         session->options.path_timeout_ms = 5000u;
     if (session->options.hello_interval_ms == 0u)
