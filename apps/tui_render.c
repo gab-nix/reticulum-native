@@ -130,7 +130,7 @@ static void draw_chrome(const tui_state_t *state, const tui_layout_t *layout) {
     for (int x = (int)strlen(header); x < layout->columns; ++x) (void)addch(' ');
     (void)attroff(A_REVERSE | A_BOLD);
     clipped(stdscr, 1, 0, layout->columns,
-            "[C]hats [N]etwork [B]rowser [S]ettings [I]faces [G]uide [L]ogs [R]RC");
+            "[C]hats [N]etwork [B]rowser [S]ettings [I]faces [F]Config [G]uide [L]ogs [R]RC");
 }
 
 static const char *interface_state_name(rns_runtime_interface_state_t state) {
@@ -191,6 +191,79 @@ static void draw_interfaces(const tui_state_t *state,
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
             "j/k inspect  C or Esc conversations  S settings  q quit");
+}
+
+static void config_interface_line(const rns_config_interface_t *interface,
+                                  char *line, size_t capacity) {
+    const char *state = interface->enabled ? "enabled" : "disabled";
+    switch (interface->type) {
+        case RNS_CONFIG_TCP_CLIENT:
+            (void)snprintf(line, capacity, "%s  TCP client  %s  %s:%u",
+                           interface->name, state, interface->target_host,
+                           (unsigned)interface->target_port);
+            break;
+        case RNS_CONFIG_TCP_SERVER:
+            (void)snprintf(line, capacity, "%s  TCP server  %s  %s:%u",
+                           interface->name, state, interface->listen_ip,
+                           (unsigned)interface->listen_port);
+            break;
+        case RNS_CONFIG_UDP:
+            (void)snprintf(line, capacity,
+                           "%s  UDP  %s  listen %s:%u  forward %s:%u",
+                           interface->name, state, interface->listen_ip,
+                           (unsigned)interface->listen_port,
+                           interface->forward_ip,
+                           (unsigned)interface->forward_port);
+            break;
+        case RNS_CONFIG_AUTO:
+        case RNS_CONFIG_KISS:
+        case RNS_CONFIG_RNODE:
+            (void)snprintf(line, capacity, "%s  %s  %s",
+                           interface->name,
+                           rns_config_interface_type_name(interface->type),
+                           state);
+            break;
+    }
+}
+
+static void draw_config(const tui_state_t *state,
+                        const tui_layout_t *layout) {
+    (void)attron(A_BOLD);
+    clipped(stdscr, 3, 1, layout->columns - 2, "Reticulum configuration");
+    (void)attroff(A_BOLD);
+    if (!state->config_attempted) {
+        clipped(stdscr, 5, 2, layout->columns - 4,
+                "No configuration loaded. Start nomad-chat with --config PATH.");
+    } else if (!state->config_valid) {
+        char line[TUI_STATUS_MAX];
+        (void)snprintf(line, sizeof line, "Invalid: %s", state->config_path);
+        clipped(stdscr, 5, 2, layout->columns - 4, line);
+        if (state->config_diagnostic.message[0] != '\0') {
+            (void)snprintf(line, sizeof line, "Line %zu: %s",
+                           state->config_diagnostic.line,
+                           state->config_diagnostic.message);
+            clipped(stdscr, 6, 2, layout->columns - 4, line);
+        }
+    } else {
+        char line[384];
+        (void)snprintf(line, sizeof line, "File: %s", state->config_path);
+        clipped(stdscr, 5, 2, layout->columns - 4, line);
+        (void)snprintf(line, sizeof line,
+                       "Transport: %s   Shared instance: %s   Panic on error: %s",
+                       state->parsed_config.enable_transport ? "yes" : "no",
+                       state->parsed_config.share_instance ? "yes" : "no",
+                       state->parsed_config.panic_on_interface_error ? "yes" : "no");
+        clipped(stdscr, 6, 2, layout->columns - 4, line);
+        int available = layout->hint_row - 8;
+        for (size_t i = 0u; i < state->parsed_config.interface_count &&
+                            (int)i < available; ++i) {
+            config_interface_line(&state->parsed_config.interfaces[i], line,
+                                  sizeof line);
+            clipped(stdscr, 8 + (int)i, 2, layout->columns - 4, line);
+        }
+    }
+    clipped(stdscr, layout->hint_row, 0, layout->columns,
+            "Read-only validated view  C or Esc conversations  S settings  q quit");
 }
 
 static void draw_sidebar(const tui_state_t *state, const tui_layout_t *layout) {
@@ -801,6 +874,7 @@ static void draw_guide(const tui_layout_t *layout) {
     static const char *const lines[] = {
         "Nomad Chat Guide",
         "C Conversations   N Network   B Browser   S Settings   I Interfaces",
+        "F validated Reticulum configuration",
         "j/k or arrows select; Enter activates; Esc returns to Conversations",
         "",
         "Conversations: 1/2/3 trust tabs, / search, a address, Enter compose",
@@ -857,6 +931,11 @@ void tui_render_draw(tui_state_t *state) {
     }
     if (state->screen == TUI_SCREEN_INTERFACES) {
         draw_interfaces(state, &layout);
+        (void)refresh();
+        return;
+    }
+    if (state->screen == TUI_SCREEN_CONFIG) {
+        draw_config(state, &layout);
         (void)refresh();
         return;
     }
@@ -942,6 +1021,34 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
                           (unsigned long long)info.bytes_sent,
                           (unsigned long long)info.packets_dropped,
                           rns_status_string(info.last_error));
+        }
+        (void)fprintf(output, "Status: %s\n", state->status);
+        return ferror(output) ? -1 : 0;
+    }
+    if (state->screen == TUI_SCREEN_CONFIG) {
+        (void)fprintf(output, "Screen: Config\nPath: %s\n",
+                      state->config_attempted ? state->config_path : "none");
+        if (!state->config_attempted)
+            (void)fprintf(output, "Validation: not loaded\n");
+        else if (!state->config_valid) {
+            (void)fprintf(output, "Validation: invalid\n");
+            if (state->config_diagnostic.message[0] != '\0')
+                (void)fprintf(output, "Diagnostic: line %zu: %s\n",
+                              state->config_diagnostic.line,
+                              state->config_diagnostic.message);
+        } else {
+            (void)fprintf(output,
+                          "Validation: valid\nTransport: %s\nShared instance: %s\nPanic on error: %s\nInterfaces: %zu\n",
+                          state->parsed_config.enable_transport ? "yes" : "no",
+                          state->parsed_config.share_instance ? "yes" : "no",
+                          state->parsed_config.panic_on_interface_error ? "yes" : "no",
+                          state->parsed_config.interface_count);
+            for (size_t i = 0u; i < state->parsed_config.interface_count; ++i) {
+                char line[384];
+                config_interface_line(&state->parsed_config.interfaces[i],
+                                      line, sizeof line);
+                (void)fprintf(output, "%s\n", line);
+            }
         }
         (void)fprintf(output, "Status: %s\n", state->status);
         return ferror(output) ? -1 : 0;

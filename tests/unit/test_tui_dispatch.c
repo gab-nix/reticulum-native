@@ -253,6 +253,12 @@ static void test_shortcuts_drafts_and_node_action(void) {
     assert(strstr(state->status, "Interfaces") != NULL);
     assert(tui_dispatch_key(state, 27));
     assert(state->screen == TUI_SCREEN_CONVERSATIONS);
+    assert(tui_dispatch_key(state, 'F'));
+    assert(state->screen == TUI_SCREEN_CONFIG);
+    assert(tui_dispatch_key(state, '?'));
+    assert(strstr(state->status, "validated read-only") != NULL);
+    assert(tui_dispatch_key(state, 27));
+    assert(state->screen == TUI_SCREEN_CONVERSATIONS);
     assert(!tui_dispatch_key(state, 'Q'));
     free(state);
 }

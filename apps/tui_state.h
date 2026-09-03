@@ -39,6 +39,7 @@ typedef enum {
     TUI_SCREEN_LOGS,
     TUI_SCREEN_RRC,
     TUI_SCREEN_INTERFACES,
+    TUI_SCREEN_CONFIG,
     TUI_SCREEN_COUNT
 } tui_screen_t;
 
@@ -147,6 +148,12 @@ typedef struct tui_state {
     uint8_t node_selection[LXMF_DESTINATION_LENGTH];
     bool has_node_selection;
     size_t interface_selected;
+
+    rns_config_t parsed_config;
+    rns_config_diagnostic_t config_diagnostic;
+    char config_path[TUI_PATH_MAX];
+    bool config_attempted;
+    bool config_valid;
 
     rns_runtime_t *runtime;
     lxmf_router_t router;

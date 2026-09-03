@@ -246,6 +246,8 @@ static bool handle_command_key(tui_state_t *state, int key) {
                 tui_state_set_status(state, "Settings: j/k select, Enter edit/apply, Esc cancel/back");
             else if (state->screen == TUI_SCREEN_INTERFACES)
                 tui_state_set_status(state, "Interfaces: j/k inspect live counters, Esc Chats");
+            else if (state->screen == TUI_SCREEN_CONFIG)
+                tui_state_set_status(state, "Config: validated read-only runtime configuration, Esc Chats");
             else tui_state_set_status(state, "Screen unavailable: C or Esc returns to Conversations");
             break;
         case '1':
@@ -321,6 +323,7 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 's': case 'S': state->screen = TUI_SCREEN_SETTINGS; break;
         case 'g': case 'G': state->screen = TUI_SCREEN_GUIDE; break;
         case 'I': state->screen = TUI_SCREEN_INTERFACES; break;
+        case 'F': state->screen = TUI_SCREEN_CONFIG; break;
         case 'l': case 'L': unavailable_screen(state, "Logs"); break;
         case 'r': case 'R': reload(state); break;
         case '\n': case KEY_ENTER: activate(state); break;

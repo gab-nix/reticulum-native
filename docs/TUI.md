@@ -42,19 +42,22 @@ starting an asynchronous attempt is never presented as a failure by itself.
   callbacks, or packet proofs. Trust does not bypass stamp requirements.
 - `y`: show the portable copy fallback. Clipboard integration is unavailable;
   copy message text from `history` or `tui --dump-ui` instead.
+- `F`: show the validated Reticulum configuration, including interface
+  endpoints and core transport/share policy. This checkpoint is read-only;
+  edit the selected configuration file outside the TUI and restart to apply it.
 - `?`: show the keyboard help overlay.
 - `Esc`: close the active editor or dialog first; cancel an active Browser
   request; return other screens to Conversations. In Conversations, a second
   `Esc` leaves the TUI.
 - `q`: leave the TUI when not composing.
 
-The top navigation reserves Conversations, Network, Browser, Node, Settings,
-Guide, Logs, and RRC screens. Conversations is implemented. Network renders the
+The top navigation includes Conversations, Network, Browser, Settings,
+Interfaces, Config, Guide, Logs, and RRC screens. Conversations is implemented. Network renders the
 bounded active-node registry from verified announces, and Browser renders parsed
 Micron content with link selection plus bounded back history. Under `--config`
 the browser performs real path discovery, link establishment and page requests,
-and reports loading, failure and cancellation states. The other screens report
-an explicit “not implemented” status.
+and reports loading, failure and cancellation states. Settings, Interfaces,
+Config and Guide are also functional; Logs and RRC UI remain explicit gaps.
 
 In Network, use `j`/`k` or the arrow keys to select a verified announce. The
 list scrolls around the selection, and the selection is held by destination

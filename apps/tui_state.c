@@ -603,6 +603,7 @@ static char *read_text_file(const char *path, size_t *length) {
     long size;
     if (file == NULL) return NULL;
     if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0 ||
+        (unsigned long)size > 65536UL ||
         fseek(file, 0, SEEK_SET) != 0) {
         (void)fclose(file);
         return NULL;
@@ -625,9 +626,20 @@ static char *read_text_file(const char *path, size_t *length) {
 
 static void start_runtime(tui_state_t *state, const char *config_path) {
     size_t length = 0u;
-    char *text = read_text_file(config_path, &length);
+    char *text = NULL;
     rns_config_t config;
     rns_config_diagnostic_t diagnostic = {0};
+    state->config_attempted = true;
+    rns_config_init(&state->parsed_config);
+    memset(&state->config_diagnostic, 0, sizeof state->config_diagnostic);
+    state->config_valid = false;
+    size_t path_length = strnlen(config_path, sizeof state->config_path);
+    if (path_length == 0u || path_length >= sizeof state->config_path) {
+        tui_state_set_status(state, "Network configuration path is invalid or too long");
+        return;
+    }
+    memcpy(state->config_path, config_path, path_length + 1u);
+    text = read_text_file(config_path, &length);
     if (text == NULL) {
         tui_state_set_status(state, "Cannot read network configuration %s", config_path);
         return;
@@ -636,6 +648,7 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
     rns_status_t parsed = rns_config_parse(text, length, &config, &diagnostic);
     free(text);
     if (parsed != RNS_OK) {
+        state->config_diagnostic = diagnostic;
         /*
          * The parser only fills the diagnostic once it is reading lines, so a
          * file that is not text at all reports the bare status instead.
@@ -648,6 +661,8 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
                                  config_path, rns_status_string(parsed));
         return;
     }
+    state->parsed_config = config;
+    state->config_valid = true;
     if (config.interface_count == 0u) {
         tui_state_set_status(state, "Configuration %s defines no interfaces", config_path);
         return;
@@ -779,6 +794,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     tui_settings_defaults(&state->settings);
+    rns_config_init(&state->parsed_config);
     state->tab = TUI_TRUST_UNKNOWN;
     state->compose_delivery_method = LXMF_DELIVERY_METHOD_DIRECT;
     state->screen = TUI_SCREEN_CONVERSATIONS;

@@ -86,6 +86,57 @@ static void test_keys_dump_and_persistence(void) {
     assert(strstr(output, "Interfaces: 0") != NULL);
     assert(fclose(dump) == 0);
 
+    state->screen = TUI_SCREEN_CONFIG;
+    dump = tmpfile();
+    assert(dump != NULL && tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    memset(output, 0, sizeof output);
+    length = fread(output, 1u, sizeof output - 1u, dump);
+    assert(!ferror(dump));
+    output[length] = '\0';
+    assert(strstr(output, "Validation: not loaded") != NULL);
+    assert(fclose(dump) == 0);
+
+    state->config_attempted = true;
+    state->config_valid = true;
+    assert(snprintf(state->config_path, sizeof state->config_path,
+                    "%s", "/tmp/reticulum.conf") > 0);
+    rns_config_init(&state->parsed_config);
+    state->parsed_config.enable_transport = true;
+    state->parsed_config.interface_count = 1u;
+    rns_config_interface_t *interface = &state->parsed_config.interfaces[0];
+    memcpy(interface->name, "uplink", 7u);
+    interface->type = RNS_CONFIG_TCP_CLIENT;
+    interface->type_set = true;
+    interface->enabled = true;
+    memcpy(interface->target_host, "127.0.0.1", 10u);
+    interface->target_port = 4242u;
+    dump = tmpfile();
+    assert(dump != NULL && tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    memset(output, 0, sizeof output);
+    length = fread(output, 1u, sizeof output - 1u, dump);
+    assert(!ferror(dump));
+    output[length] = '\0';
+    assert(strstr(output, "Screen: Config") != NULL);
+    assert(strstr(output, "Validation: valid") != NULL);
+    assert(strstr(output, "uplink  TCP client  enabled  127.0.0.1:4242") != NULL);
+    assert(fclose(dump) == 0);
+
+    state->config_valid = false;
+    state->config_diagnostic.line = 7u;
+    memcpy(state->config_diagnostic.message, "invalid port", 13u);
+    dump = tmpfile();
+    assert(dump != NULL && tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    memset(output, 0, sizeof output);
+    length = fread(output, 1u, sizeof output - 1u, dump);
+    assert(!ferror(dump));
+    output[length] = '\0';
+    assert(strstr(output, "Validation: invalid") != NULL);
+    assert(strstr(output, "line 7: invalid port") != NULL);
+    assert(fclose(dump) == 0);
+
     state->screen = TUI_SCREEN_GUIDE;
     dump = tmpfile();
     assert(dump != NULL && tui_render_dump(state, dump) == 0);
