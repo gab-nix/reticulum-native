@@ -78,6 +78,7 @@ reticulum_add_test(test_lxmf_router_direct integration/test_lxmf_router_direct.c
 reticulum_add_test(test_runtime_inbound_link integration/test_runtime_inbound_link.c)
 reticulum_add_test(test_resource_sender integration/test_resource_sender.c)
 reticulum_add_test(test_runtime_resource integration/test_runtime_resource.c)
+reticulum_add_test(test_lxmf_propagation_session integration/test_lxmf_propagation_session.c)
 
 if(TARGET rnid)
     add_test(NAME test_rnid
