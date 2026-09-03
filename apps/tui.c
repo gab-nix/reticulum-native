@@ -145,6 +145,9 @@ static void handle_field_key(tui_state_t *state, int key) {
         (void)tui_editor_insert_byte(editor, (unsigned char)key);
     if (state->field == TUI_FIELD_SEARCH) state->filter_dirty = true;
     else if (state->field == TUI_FIELD_COMPOSE) tui_state_save_draft(state);
+    else if (state->field == TUI_FIELD_RRC &&
+             state->rrc.selected == TUI_RRC_ITEM_MESSAGE)
+        (void)tui_state_rrc_update_draft(state);
 }
 
 static void handle_node_actions_key(tui_state_t *state, int key) {

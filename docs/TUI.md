@@ -47,7 +47,10 @@ starting an asynchronous attempt is never presented as a failure by itself.
   edit the selected configuration file outside the TUI and restart to apply it.
 - `R`: open the basic RRC client. Enter the hub's 32-hex destination and
   128-hex public identity, choose a nick and room, then use the action rows to
-  connect, join, part and send. The values are session-only in this checkpoint.
+  connect, configure automatic reconnect, join, part and send. Hub details,
+  nick, last room, reconnect preference and the unsent message draft are saved
+  in the versioned application settings sidecar and restored after restart.
+  Invalid edits remain open and do not replace the active or saved value.
 - `?`: show the keyboard help overlay.
 - `Esc`: close the active editor or dialog first; cancel an active Browser
   request; return other screens to Conversations. In Conversations, a second

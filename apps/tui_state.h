@@ -277,6 +277,8 @@ void tui_state_rrc_move(tui_state_t *state, int delta);
 void tui_state_rrc_activate(tui_state_t *state, uint64_t now_ms);
 bool tui_state_rrc_apply(tui_state_t *state);
 void tui_state_rrc_cancel(tui_state_t *state);
+/* Persists the active RRC message editor as a recoverable unsent draft. */
+bool tui_state_rrc_update_draft(tui_state_t *state);
 
 /* Pure state updates used by router callbacks and unit tests. */
 void tui_state_apply_router_event(tui_state_t *state,

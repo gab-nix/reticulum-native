@@ -325,9 +325,15 @@ static void test_rrc_headless_dump(void) {
     output[length] = '\0';
     assert(strstr(output, "Screen: RRC") != NULL);
     assert(strstr(output, "State: disconnected") != NULL);
+    assert(strstr(output, "Auto reconnect: on") != NULL);
     assert(strstr(output, "#lobby <Rei> hello") != NULL);
     assert(strstr(output, "Resource envelopes") != NULL);
     assert(fclose(dump) == 0);
+    assert(tui_render_rrc_first_item(TUI_RRC_ITEM_HUB_ADDRESS, 3u) == 0u);
+    assert(tui_render_rrc_first_item(TUI_RRC_ITEM_SEND, 3u) ==
+           (size_t)TUI_RRC_ITEM_SEND - 2u);
+    assert(tui_render_rrc_first_item(TUI_RRC_ITEM_SEND, 0u) ==
+           (size_t)TUI_RRC_ITEM_SEND);
     free(state);
 }
 

@@ -12,5 +12,7 @@ void tui_render_draw(tui_state_t *state);
  * terminal size, stdin or the store, so it stays usable under TERM=dumb.
  */
 int tui_render_dump(const tui_state_t *state, FILE *output);
+/* Pure row-window seam used to keep the selected RRC action on small screens. */
+size_t tui_render_rrc_first_item(tui_rrc_item_t selected, size_t visible_rows);
 
 #endif

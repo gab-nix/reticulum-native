@@ -17,6 +17,7 @@ typedef enum tui_rrc_item {
     TUI_RRC_ITEM_HUB_IDENTITY,
     TUI_RRC_ITEM_NICK,
     TUI_RRC_ITEM_CONNECT,
+    TUI_RRC_ITEM_RECONNECT,
     TUI_RRC_ITEM_ROOM,
     TUI_RRC_ITEM_JOIN,
     TUI_RRC_ITEM_PART,
@@ -42,6 +43,7 @@ typedef struct tui_rrc_model {
     char nick[RNS_RRC_DEFAULT_MAX_NICK_BYTES + 1u];
     char room[RNS_RRC_DEFAULT_MAX_ROOM_BYTES + 1u];
     char outgoing[RNS_RRC_DEFAULT_MAX_MESSAGE_BYTES + 1u];
+    bool auto_reconnect;
     tui_rrc_message_t messages[TUI_RRC_MAX_MESSAGES];
     size_t message_count;
     tui_rrc_item_t selected;

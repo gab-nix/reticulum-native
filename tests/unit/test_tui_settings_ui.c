@@ -271,9 +271,91 @@ static void test_submit_preserves_pending_status(void) {
     remove_sidecar(store_path, ".ratchets");
 }
 
+static void replace_rrc_value(tui_state_t *state, tui_rrc_item_t item,
+                              const char *value, bool submit) {
+    state->rrc.selected = item;
+    tui_state_rrc_activate(state, 0u);
+    assert(state->field == TUI_FIELD_RRC);
+    assert(tui_dispatch_key(state, 21));
+    for (size_t i = 0u; value[i] != '\0'; ++i)
+        assert(tui_dispatch_key(state, (unsigned char)value[i]));
+    if (submit) {
+        assert(tui_dispatch_key(state, '\n'));
+        assert(state->field == TUI_FIELD_NONE);
+    }
+}
+
+static void test_rrc_settings_and_draft_restart(void) {
+    static const char address[] = "00112233445566778899aabbccddeeff";
+    char public_identity[TUI_RRC_PUBLIC_IDENTITY_HEX + 1u];
+    memset(public_identity, 'b', sizeof public_identity - 1u);
+    public_identity[sizeof public_identity - 1u] = '\0';
+    char identity_path[] = "/tmp/nomad-rrc-settings-identity-XXXXXX";
+    char store_path[] = "/tmp/nomad-rrc-settings-store-XXXXXX";
+    int identity_fd = mkstemp(identity_path);
+    int store_fd = mkstemp(store_path);
+    assert(identity_fd >= 0 && store_fd >= 0);
+    assert(close(identity_fd) == 0 && close(store_fd) == 0);
+    write_identity(identity_path);
+
+    tui_state_t *state = calloc(1u, sizeof *state);
+    assert(state != NULL &&
+           tui_state_open(state, identity_path, store_path, NULL, NULL) == 0);
+    state->screen = TUI_SCREEN_RRC;
+    replace_rrc_value(state, TUI_RRC_ITEM_HUB_ADDRESS, address, true);
+    replace_rrc_value(state, TUI_RRC_ITEM_HUB_IDENTITY, public_identity, true);
+    replace_rrc_value(state, TUI_RRC_ITEM_NICK, "Rei", true);
+    replace_rrc_value(state, TUI_RRC_ITEM_ROOM, "lobby", true);
+    replace_rrc_value(state, TUI_RRC_ITEM_MESSAGE, "unfinished", false);
+    assert(tui_dispatch_key(state, 27));
+    assert(strcmp(state->rrc.outgoing, "unfinished") == 0);
+    state->rrc.selected = TUI_RRC_ITEM_RECONNECT;
+    tui_state_rrc_activate(state, 0u);
+    assert(!state->rrc.auto_reconnect);
+    tui_state_close(state);
+    free(state);
+
+    state = calloc(1u, sizeof *state);
+    assert(state != NULL &&
+           tui_state_open(state, identity_path, store_path, NULL, NULL) == 0);
+    assert(strcmp(state->rrc.hub_address, address) == 0);
+    assert(strcmp(state->rrc.hub_identity, public_identity) == 0);
+    assert(strcmp(state->rrc.nick, "Rei") == 0);
+    assert(strcmp(state->rrc.room, "lobby") == 0);
+    assert(strcmp(state->rrc.outgoing, "unfinished") == 0);
+    assert(!state->rrc.auto_reconnect);
+
+    /* An invalid submitted address leaves both live and durable state intact. */
+    state->screen = TUI_SCREEN_RRC;
+    replace_rrc_value(state, TUI_RRC_ITEM_HUB_ADDRESS, "abcd", false);
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_RRC);
+    assert(strcmp(state->rrc.hub_address, address) == 0);
+    assert(tui_dispatch_key(state, 27));
+    tui_state_close(state);
+    free(state);
+
+    state = calloc(1u, sizeof *state);
+    assert(state != NULL &&
+           tui_state_open(state, identity_path, store_path, NULL, NULL) == 0);
+    assert(strcmp(state->rrc.hub_address, address) == 0);
+    assert(strcmp(state->rrc.outgoing, "unfinished") == 0);
+    tui_state_close(state);
+    free(state);
+
+    assert(unlink(identity_path) == 0);
+    assert(unlink(store_path) == 0);
+    remove_sidecar(store_path, ".settings");
+    remove_sidecar(store_path, ".peers");
+    remove_sidecar(store_path, ".nodes");
+    remove_sidecar(store_path, ".tickets");
+    remove_sidecar(store_path, ".ratchets");
+}
+
 int main(void) {
     test_keys_dump_and_persistence();
     test_corruption_warning_survives_startup();
     test_submit_preserves_pending_status();
+    test_rrc_settings_and_draft_restart();
     return 0;
 }

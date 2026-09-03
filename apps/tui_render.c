@@ -165,16 +165,25 @@ static const char *rrc_item_value(const tui_state_t *state,
     if (value != NULL) return value;
     if (item == TUI_RRC_ITEM_CONNECT)
         return state->rrc.session == NULL ? "Connect" : "Disconnect";
+    if (item == TUI_RRC_ITEM_RECONNECT)
+        return state->rrc.auto_reconnect ? "On" : "Off";
     if (item == TUI_RRC_ITEM_JOIN) return "Send JOIN";
     if (item == TUI_RRC_ITEM_PART) return "Send PART";
     if (item == TUI_RRC_ITEM_SEND) return "Send message";
     return "";
 }
 
+size_t tui_render_rrc_first_item(tui_rrc_item_t selected, size_t visible_rows) {
+    if (visible_rows == 0u) visible_rows = 1u;
+    if (visible_rows >= TUI_RRC_ITEM_COUNT ||
+        (size_t)selected < visible_rows) return 0u;
+    return (size_t)selected - visible_rows + 1u;
+}
+
 static void draw_rrc(const tui_state_t *state, const tui_layout_t *layout) {
     static const char *const labels[] = {
         "Hub address", "Hub public identity", "Nick", "Connection",
-        "Room", "Join", "Part", "Message", "Send"};
+        "Auto reconnect", "Room", "Join", "Part", "Message", "Send"};
     char heading[256];
     (void)snprintf(heading, sizeof heading, "RRC  state: %s  attempts: %zu",
                    rrc_state_name(state->rrc.info.state),
@@ -185,10 +194,8 @@ static void draw_rrc(const tui_state_t *state, const tui_layout_t *layout) {
     int row = 4;
     int item_rows = layout->hint_row - 3 - row;
     if (item_rows < 1) item_rows = 1;
-    size_t first_item = 0u;
-    if ((size_t)item_rows < TUI_RRC_ITEM_COUNT &&
-        (size_t)state->rrc.selected >= (size_t)item_rows)
-        first_item = (size_t)state->rrc.selected - (size_t)item_rows + 1u;
+    size_t first_item = tui_render_rrc_first_item(
+        state->rrc.selected, (size_t)item_rows);
     for (size_t i = first_item; i < TUI_RRC_ITEM_COUNT &&
          (int)(i - first_item) < item_rows && row < layout->hint_row - 3;
          ++i, ++row) {
@@ -1157,9 +1164,11 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
     }
     if (state->screen == TUI_SCREEN_RRC) {
         (void)fprintf(output,
-            "Screen: RRC\nState: %s\nHub address: %s\nHub public identity: %s\nNick: %s\nRoom: %s\nMessages: %zu\n",
+            "Screen: RRC\nState: %s\nHub address: %s\nHub public identity: %s\nNick: %s\nRoom: %s\nAuto reconnect: %s\nDraft: %s\nMessages: %zu\n",
             rrc_state_name(state->rrc.info.state), state->rrc.hub_address,
             state->rrc.hub_identity, state->rrc.nick, state->rrc.room,
+            state->rrc.auto_reconnect ? "on" : "off",
+            state->rrc.outgoing[0] != '\0' ? "retained" : "empty",
             state->rrc.message_count);
         if (state->rrc.info.state == RNS_RRC_SESSION_CONNECTED)
             (void)fprintf(output,

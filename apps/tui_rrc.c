@@ -20,6 +20,7 @@ void tui_rrc_init(tui_rrc_model_t *model) {
     model->info.welcome.max_message_bytes = RNS_RRC_DEFAULT_MAX_MESSAGE_BYTES;
     model->info.welcome.max_rooms = RNS_RRC_DEFAULT_MAX_ROOMS;
     model->info.welcome.rate_per_minute = RNS_RRC_DEFAULT_RATE_PER_MINUTE;
+    model->auto_reconnect = true;
     set_status(model, "Enter a verified hub address and public identity");
 }
 
@@ -46,6 +47,7 @@ size_t tui_rrc_edit_capacity(tui_rrc_item_t item) {
         case TUI_RRC_ITEM_ROOM: return RNS_RRC_DEFAULT_MAX_ROOM_BYTES;
         case TUI_RRC_ITEM_MESSAGE: return RNS_RRC_DEFAULT_MAX_MESSAGE_BYTES;
         case TUI_RRC_ITEM_CONNECT:
+        case TUI_RRC_ITEM_RECONNECT:
         case TUI_RRC_ITEM_JOIN:
         case TUI_RRC_ITEM_PART:
         case TUI_RRC_ITEM_SEND:
@@ -64,6 +66,7 @@ const char *tui_rrc_edit_value(const tui_rrc_model_t *model,
         case TUI_RRC_ITEM_ROOM: return model->room;
         case TUI_RRC_ITEM_MESSAGE: return model->outgoing;
         case TUI_RRC_ITEM_CONNECT:
+        case TUI_RRC_ITEM_RECONNECT:
         case TUI_RRC_ITEM_JOIN:
         case TUI_RRC_ITEM_PART:
         case TUI_RRC_ITEM_SEND:
@@ -82,6 +85,7 @@ static char *edit_target(tui_rrc_model_t *model, tui_rrc_item_t item,
         case TUI_RRC_ITEM_ROOM: return model->room;
         case TUI_RRC_ITEM_MESSAGE: return model->outgoing;
         case TUI_RRC_ITEM_CONNECT:
+        case TUI_RRC_ITEM_RECONNECT:
         case TUI_RRC_ITEM_JOIN:
         case TUI_RRC_ITEM_PART:
         case TUI_RRC_ITEM_SEND:
@@ -204,7 +208,7 @@ bool tui_rrc_connect_toggle(tui_rrc_model_t *model, rns_runtime_t *runtime,
         .hub_identity = &hub,
         .nick = (const uint8_t *)model->nick,
         .nick_length = strlen(model->nick),
-        .auto_reconnect = true,
+        .auto_reconnect = model->auto_reconnect,
         .path_timeout_ms = 5000u,
         .hello_interval_ms = 3000u,
         .hello_max_attempts = 5u,

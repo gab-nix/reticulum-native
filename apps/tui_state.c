@@ -781,6 +781,46 @@ static const uint8_t tui_home_page[] =
     "Links on a remote page are `_underlined`_. `!j`! and `!k`! move between\n"
     "them, `!Enter`! follows one, and `!Backspace`! goes back.\n";
 
+static void rrc_from_settings(tui_rrc_model_t *rrc,
+                              const tui_settings_t *settings) {
+    (void)snprintf(rrc->hub_address, sizeof rrc->hub_address, "%s",
+                   settings->rrc_hub_address);
+    (void)snprintf(rrc->hub_identity, sizeof rrc->hub_identity, "%s",
+                   settings->rrc_public_identity);
+    (void)snprintf(rrc->nick, sizeof rrc->nick, "%s", settings->rrc_nick);
+    (void)snprintf(rrc->room, sizeof rrc->room, "%s",
+                   settings->rrc_last_room);
+    (void)snprintf(rrc->outgoing, sizeof rrc->outgoing, "%s",
+                   settings->rrc_draft);
+    rrc->auto_reconnect = settings->rrc_auto_reconnect;
+}
+
+static void settings_from_rrc(tui_settings_t *settings,
+                              const tui_rrc_model_t *rrc) {
+    (void)snprintf(settings->rrc_hub_address,
+                   sizeof settings->rrc_hub_address, "%s", rrc->hub_address);
+    (void)snprintf(settings->rrc_public_identity,
+                   sizeof settings->rrc_public_identity, "%s",
+                   rrc->hub_identity);
+    (void)snprintf(settings->rrc_nick, sizeof settings->rrc_nick, "%s",
+                   rrc->nick);
+    (void)snprintf(settings->rrc_last_room,
+                   sizeof settings->rrc_last_room, "%s", rrc->room);
+    (void)snprintf(settings->rrc_draft, sizeof settings->rrc_draft, "%s",
+                   rrc->outgoing);
+    settings->rrc_auto_reconnect = rrc->auto_reconnect;
+}
+
+static bool save_rrc_settings(tui_state_t *state,
+                              const tui_settings_t *changed) {
+    if (!tui_settings_valid(changed)) return false;
+    if (state->settings_path[0] != '\0' &&
+        !tui_settings_save(state->settings_path, changed)) return false;
+    state->settings = *changed;
+    state->settings_load_error = false;
+    return true;
+}
+
 int tui_state_open(tui_state_t *state, const char *identity_path,
                    const char *store_path, const char *destination_hex,
                    const char *config_path) {
@@ -814,6 +854,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
         tui_settings_defaults(&state->settings);
         state->settings_load_error = true;
     }
+    rrc_from_settings(&state->rrc, &state->settings);
     written = snprintf(state->peer_store_path, sizeof state->peer_store_path,
                        "%s.peers", store_path);
     if (written <= 0 || (size_t)written >= sizeof state->peer_store_path ||
@@ -878,7 +919,8 @@ void tui_state_close(tui_state_t *state) {
     if (state == NULL) return;
     if (state->node_store_path[0] != '\0')
         (void)rns_node_registry_save(&state->nodes, state->node_store_path);
-    if (state->settings_path[0] != '\0')
+    settings_from_rrc(&state->settings, &state->rrc);
+    if (state->settings_path[0] != '\0' && !state->settings_load_error)
         (void)tui_settings_save(state->settings_path, &state->settings);
     rns_browser_destroy(state->browser);
     state->browser = NULL;
@@ -1216,9 +1258,34 @@ void tui_state_rrc_activate(tui_state_t *state, uint64_t now_ms) {
             (void)tui_rrc_connect_toggle(&state->rrc, state->runtime,
                                           &state->identity, now_ms);
             break;
+        case TUI_RRC_ITEM_RECONNECT: {
+            bool previous = state->rrc.auto_reconnect;
+            tui_settings_t changed = state->settings;
+            state->rrc.auto_reconnect = !previous;
+            settings_from_rrc(&changed, &state->rrc);
+            if (!save_rrc_settings(state, &changed)) {
+                state->rrc.auto_reconnect = previous;
+                (void)snprintf(state->rrc.status, sizeof state->rrc.status,
+                               "%s", "Could not save reconnect preference");
+            } else {
+                (void)snprintf(state->rrc.status, sizeof state->rrc.status,
+                               "%s", state->rrc.session == NULL
+                                   ? "Reconnect preference saved"
+                                   : "Reconnect preference saved; reconnect to apply");
+            }
+            break;
+        }
         case TUI_RRC_ITEM_JOIN: (void)tui_rrc_join(&state->rrc); break;
         case TUI_RRC_ITEM_PART: (void)tui_rrc_part(&state->rrc); break;
-        case TUI_RRC_ITEM_SEND: (void)tui_rrc_send(&state->rrc); break;
+        case TUI_RRC_ITEM_SEND:
+            if (tui_rrc_send(&state->rrc)) {
+                tui_settings_t changed = state->settings;
+                settings_from_rrc(&changed, &state->rrc);
+                if (!save_rrc_settings(state, &changed))
+                    (void)snprintf(state->rrc.status, sizeof state->rrc.status,
+                                   "%s", "Message sent; draft cleanup was not saved");
+            }
+            break;
         case TUI_RRC_ITEM_HUB_ADDRESS:
         case TUI_RRC_ITEM_HUB_IDENTITY:
         case TUI_RRC_ITEM_NICK:
@@ -1231,12 +1298,40 @@ void tui_state_rrc_activate(tui_state_t *state, uint64_t now_ms) {
 
 bool tui_state_rrc_apply(tui_state_t *state) {
     if (state == NULL || state->field != TUI_FIELD_RRC) return false;
+    char previous[RNS_RRC_DEFAULT_MAX_MESSAGE_BYTES + 1u];
+    const char *current = tui_rrc_edit_value(&state->rrc, state->rrc.selected);
+    if (current == NULL || strlen(current) >= sizeof previous) return false;
+    (void)snprintf(previous, sizeof previous, "%s", current);
     if (!tui_rrc_edit_apply(&state->rrc, state->rrc.selected,
                             tui_editor_text(&state->setting),
                             tui_editor_length(&state->setting)))
         return false;
+    tui_settings_t changed = state->settings;
+    settings_from_rrc(&changed, &state->rrc);
+    if (!save_rrc_settings(state, &changed)) {
+        (void)tui_rrc_edit_apply(&state->rrc, state->rrc.selected, previous,
+                                 strlen(previous));
+        (void)snprintf(state->rrc.status, sizeof state->rrc.status, "%s",
+                       "Could not save RRC setting");
+        return false;
+    }
     tui_editor_clear(&state->setting);
     state->field = TUI_FIELD_NONE;
+    return true;
+}
+
+bool tui_state_rrc_update_draft(tui_state_t *state) {
+    if (state == NULL || state->field != TUI_FIELD_RRC ||
+        state->rrc.selected != TUI_RRC_ITEM_MESSAGE) return false;
+    size_t length = tui_editor_length(&state->setting);
+    if (length > RNS_RRC_DEFAULT_MAX_MESSAGE_BYTES ||
+        !tui_utf8_valid((const uint8_t *)tui_editor_text(&state->setting),
+                        length)) return false;
+    tui_settings_t changed = state->settings;
+    memcpy(changed.rrc_draft, tui_editor_text(&state->setting), length);
+    changed.rrc_draft[length] = '\0';
+    if (!save_rrc_settings(state, &changed)) return false;
+    memcpy(state->rrc.outgoing, changed.rrc_draft, length + 1u);
     return true;
 }
 
@@ -1256,6 +1351,7 @@ bool tui_state_save_settings(tui_state_t *state) {
         tui_state_set_status(state, "Could not save settings");
         return false;
     }
+    state->settings_load_error = false;
     if (state->router_ready)
         (void)lxmf_router_set_inbound_stamp_cost(
             &state->router, state->settings.has_stamp_cost
@@ -1402,6 +1498,7 @@ bool tui_state_setting_apply(tui_state_t *state) {
         return false;
     }
     state->settings = changed;
+    state->settings_load_error = false;
     if (state->router_ready)
         (void)lxmf_router_set_inbound_stamp_cost(
             &state->router, changed.has_stamp_cost ? changed.stamp_cost : 0u);
