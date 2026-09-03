@@ -1120,6 +1120,7 @@ void tui_state_close(tui_state_t *state) {
     state->router_ready = false;
     rns_runtime_destroy(state->runtime);
     state->runtime = NULL;
+    tui_interfaces_update(&state->interfaces, NULL, 0u);
     tui_state_persist_contacts(state);
     rns_ratchet_store_close(state->ratchet_store);
     state->ratchet_store = NULL;
@@ -1213,6 +1214,7 @@ void tui_state_poll(tui_state_t *state) {
     size_t processed = 0u;
     if (state == NULL || state->runtime == NULL) return;
     (void)rns_runtime_poll(state->runtime, TUI_RUNTIME_BATCH, &processed);
+    tui_state_interface_refresh(state);
     poll_browser(state);
     if (rns_hal_monotonic_ms(&now) == RNS_OK) {
         (void)rns_node_registry_expire(&state->nodes, (double)now / 1000.0);
@@ -1791,35 +1793,36 @@ void tui_state_request_path(tui_state_t *state) {
 }
 
 size_t tui_state_interface_count(const tui_state_t *state) {
-    return state != NULL && state->runtime != NULL
-               ? rns_runtime_interface_count(state->runtime) : 0u;
+    return state != NULL ? state->interfaces.count : 0u;
 }
 
 bool tui_state_interface_info(const tui_state_t *state, size_t index,
                               rns_runtime_interface_info_t *info) {
-    return state != NULL && state->runtime != NULL && info != NULL &&
-           index < rns_runtime_interface_count(state->runtime) &&
-           rns_runtime_interface_info(state->runtime, index, info) == RNS_OK;
+    if (state == NULL || info == NULL || index >= state->interfaces.count)
+        return false;
+    *info = state->interfaces.items[index];
+    return true;
+}
+
+void tui_state_interface_refresh(tui_state_t *state) {
+    rns_runtime_interface_info_t items[TUI_INTERFACE_CAPACITY];
+    size_t count = 0u;
+    if (state == NULL) return;
+    if (state->runtime != NULL) {
+        size_t available = rns_runtime_interface_count(state->runtime);
+        if (available > TUI_INTERFACE_CAPACITY) available = TUI_INTERFACE_CAPACITY;
+        for (size_t i = 0u; i < available; ++i) {
+            if (rns_runtime_interface_info(state->runtime, i, &items[count]) == RNS_OK)
+                ++count;
+        }
+    }
+    tui_interfaces_update(&state->interfaces, items, count);
 }
 
 void tui_state_interface_move(tui_state_t *state, int delta) {
     if (state == NULL) return;
-    size_t count = tui_state_interface_count(state);
-    if (count == 0u) {
-        state->interface_selected = 0u;
-        return;
-    }
-    if (state->interface_selected >= count) state->interface_selected = count - 1u;
-    if (delta < 0) {
-        size_t amount = (size_t)(-(int64_t)delta);
-        state->interface_selected = amount > state->interface_selected
-                                        ? 0u : state->interface_selected - amount;
-    } else if (delta > 0) {
-        size_t amount = (size_t)delta;
-        state->interface_selected = amount >= count - state->interface_selected
-                                        ? count - 1u
-                                        : state->interface_selected + amount;
-    }
+    tui_state_interface_refresh(state);
+    tui_interfaces_move(&state->interfaces, delta);
 }
 
 /* ------------------------------------------------------------------ browser */

@@ -96,6 +96,42 @@ static void test_keys_dump_and_persistence(void) {
     assert(strstr(output, "Interfaces: 0") != NULL);
     assert(fclose(dump) == 0);
 
+    rns_runtime_interface_info_t runtime_items[2] = {0};
+    runtime_items[0].id = 4u;
+    memcpy(runtime_items[0].name, "radio", 6u);
+    runtime_items[0].type = RNS_CONFIG_RNODE;
+    runtime_items[0].state = RNS_RUNTIME_INTERFACE_UP;
+    runtime_items[0].packets_received = 8u;
+    runtime_items[0].bytes_received = 512u;
+    runtime_items[0].packets_sent = 7u;
+    runtime_items[0].bytes_sent = 448u;
+    runtime_items[0].packets_dropped = 1u;
+    runtime_items[0].connection_attempts = 3u;
+    runtime_items[0].connections_established = 2u;
+    runtime_items[0].connections_lost = 1u;
+    runtime_items[0].peers = 6u;
+    runtime_items[1].id = 9u;
+    memcpy(runtime_items[1].name, "uplink", 7u);
+    runtime_items[1].type = RNS_CONFIG_TCP_CLIENT;
+    runtime_items[1].state = RNS_RUNTIME_INTERFACE_DOWN;
+    runtime_items[1].last_error = RNS_ERROR_IO;
+    tui_interfaces_update(&state->interfaces, runtime_items, 2u);
+    tui_interfaces_move(&state->interfaces, 1);
+    dump = tmpfile();
+    assert(dump != NULL && tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    memset(output, 0, sizeof output);
+    length = fread(output, 1u, sizeof output - 1u, dump);
+    assert(!ferror(dump));
+    output[length] = '\0';
+    assert(strstr(output, "Interfaces: 2") != NULL);
+    assert(strstr(output, "radio type=RNodeInterface state=up rx=8/512") != NULL);
+    assert(strstr(output, "dropped=1 error=success") != NULL);
+    assert(strstr(output,
+                  "connections attempts=3 established=2 lost=1 peers=6 id=4") != NULL);
+    assert(strstr(output, "> uplink type=TCPClientInterface state=down") != NULL);
+    assert(fclose(dump) == 0);
+
     tui_state_set_status(state, "first diagnostic");
     tui_state_set_status(state, "second diagnostic");
     state->screen = TUI_SCREEN_LOGS;

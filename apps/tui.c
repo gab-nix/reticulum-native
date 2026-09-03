@@ -255,6 +255,10 @@ static void reload(tui_state_t *state) {
         (void)snprintf(state->rrc.status, sizeof state->rrc.status, "%s", text);
         tui_state_set_status(state, "%s", text);
     }
+    else if (state->screen == TUI_SCREEN_INTERFACES) {
+        tui_state_interface_refresh(state);
+        tui_state_set_status(state, "Interface counters refreshed");
+    }
 }
 
 /* Returns false when the client should exit. */
@@ -374,7 +378,10 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'o': case 'O': unavailable_screen(state, "Node"); break;
         case 's': case 'S': state->screen = TUI_SCREEN_SETTINGS; break;
         case 'g': case 'G': state->screen = TUI_SCREEN_GUIDE; break;
-        case 'I': state->screen = TUI_SCREEN_INTERFACES; break;
+        case 'I':
+            state->screen = TUI_SCREEN_INTERFACES;
+            tui_state_interface_refresh(state);
+            break;
         case 'F': state->screen = TUI_SCREEN_CONFIG; break;
         case 'l': case 'L': state->screen = TUI_SCREEN_LOGS; break;
         case 'R': state->screen = TUI_SCREEN_RRC; break;

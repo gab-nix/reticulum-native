@@ -2,6 +2,7 @@
 #define NOMAD_TUI_STATE_H
 
 #include "tui_editor.h"
+#include "tui_interfaces.h"
 #include "tui_rrc.h"
 #include "tui_settings.h"
 
@@ -157,7 +158,7 @@ typedef struct tui_state {
      */
     uint8_t node_selection[LXMF_DESTINATION_LENGTH];
     bool has_node_selection;
-    size_t interface_selected;
+    tui_interfaces_model_t interfaces;
 
     rns_config_t parsed_config;
     rns_config_diagnostic_t config_diagnostic;
@@ -263,6 +264,7 @@ void tui_state_request_path(tui_state_t *state);
 size_t tui_state_interface_count(const tui_state_t *state);
 bool tui_state_interface_info(const tui_state_t *state, size_t index,
                               rns_runtime_interface_info_t *info);
+void tui_state_interface_refresh(tui_state_t *state);
 void tui_state_interface_move(tui_state_t *state, int delta);
 
 size_t tui_state_link_count(const tui_state_t *state);

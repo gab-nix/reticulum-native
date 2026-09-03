@@ -298,7 +298,9 @@ static void test_shortcuts_drafts_and_node_action(void) {
     assert(tui_dispatch_key(state, 'I'));
     assert(state->screen == TUI_SCREEN_INTERFACES);
     assert(tui_dispatch_key(state, 'j'));
-    assert(state->interface_selected == 0u);
+    assert(state->interfaces.selected_index == 0u);
+    assert(tui_dispatch_key(state, 'r'));
+    assert(strstr(state->status, "counters refreshed") != NULL);
     assert(tui_dispatch_key(state, '?'));
     assert(strstr(state->status, "Interfaces") != NULL);
     assert(tui_dispatch_key(state, 27));

@@ -133,17 +133,6 @@ static void draw_chrome(const tui_state_t *state, const tui_layout_t *layout) {
             "[C]hats [N]etwork [B]rowser [S]ettings [I]faces [F]Config [G]uide [L]ogs [R]RC");
 }
 
-static const char *interface_state_name(rns_runtime_interface_state_t state) {
-    switch (state) {
-        case RNS_RUNTIME_INTERFACE_DISABLED: return "disabled";
-        case RNS_RUNTIME_INTERFACE_STARTING: return "starting";
-        case RNS_RUNTIME_INTERFACE_UP: return "up";
-        case RNS_RUNTIME_INTERFACE_DOWN: return "down";
-        case RNS_RUNTIME_INTERFACE_UNSUPPORTED: return "unsupported";
-    }
-    return "invalid";
-}
-
 static const char *propagation_sync_phase_name(lxmf_pn_session_state_t state) {
     switch (state) {
         case LXMF_PN_IDLE: return "idle";
@@ -264,8 +253,8 @@ static void draw_rrc(const tui_state_t *state, const tui_layout_t *layout) {
 static void draw_interfaces(const tui_state_t *state,
                             const tui_layout_t *layout) {
     size_t count = tui_state_interface_count(state);
-    size_t selected = state->interface_selected < count
-                          ? state->interface_selected : 0u;
+    size_t selected = state->interfaces.selected_index < count
+                          ? state->interfaces.selected_index : 0u;
     (void)attron(A_BOLD);
     clipped(stdscr, 3, 1, layout->columns - 2, "Interfaces");
     (void)attroff(A_BOLD);
@@ -276,38 +265,23 @@ static void draw_interfaces(const tui_state_t *state,
                     : "The loaded configuration defines no interfaces.");
     } else {
         int rows = layout->hint_row - 5;
-        size_t first = selected >= (size_t)rows && rows > 0
-                           ? selected - (size_t)rows + 1u : 0u;
-        for (size_t i = first; i < count && (int)(i - first) < rows; ++i) {
+        size_t visible = rows > 0 ? (size_t)rows / 3u : 0u;
+        size_t first = tui_interfaces_first(&state->interfaces, visible);
+        for (size_t i = first; i < count && i - first < visible; ++i) {
             rns_runtime_interface_info_t info;
             if (!tui_state_interface_info(state, i, &info)) continue;
-            char line[256];
-            (void)snprintf(line, sizeof line,
-                           "%s  %s  %s  rx:%llu/%lluB tx:%llu/%lluB drop:%llu",
-                           info.name, rns_config_interface_type_name(info.type),
-                           interface_state_name(info.state),
-                           (unsigned long long)info.packets_received,
-                           (unsigned long long)info.bytes_received,
-                           (unsigned long long)info.packets_sent,
-                           (unsigned long long)info.bytes_sent,
-                           (unsigned long long)info.packets_dropped);
+            char lines[3][TUI_INTERFACE_LINE_MAX];
+            int width = layout->columns - 4;
+            tui_interfaces_format(&info, width > 0 ? (size_t)width : 0u, lines);
             if (i == selected) (void)attron(A_REVERSE);
-            clipped(stdscr, 5 + (int)(i - first), 2,
-                    layout->columns - 4, line);
+            for (size_t line = 0u; line < 3u; ++line)
+                clipped(stdscr, 5 + (int)((i - first) * 3u + line), 2,
+                        width, lines[line]);
             if (i == selected) (void)attroff(A_REVERSE);
-        }
-        rns_runtime_interface_info_t info;
-        if (tui_state_interface_info(state, selected, &info) &&
-            info.last_error != RNS_OK) {
-            char error[TUI_STATUS_MAX];
-            (void)snprintf(error, sizeof error, "Selected interface error: %s",
-                           rns_status_string(info.last_error));
-            clipped(stdscr, layout->hint_row - 1, 2,
-                    layout->columns - 4, error);
         }
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
-            "j/k inspect  C or Esc conversations  S settings  q quit");
+            "j/k scroll  r refresh  C or Esc conversations  q quit");
 }
 
 static void config_interface_line(const rns_config_interface_t *interface,
@@ -1213,15 +1187,23 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             if (!tui_state_interface_info(state, i, &info)) continue;
             (void)fprintf(output,
                           "%c %s type=%s state=%s rx=%llu/%llu tx=%llu/%llu dropped=%llu error=%s\n",
-                          i == state->interface_selected ? '>' : ' ', info.name,
+                          i == state->interfaces.selected_index ? '>' : ' ',
+                          info.name,
                           rns_config_interface_type_name(info.type),
-                          interface_state_name(info.state),
+                          tui_interfaces_state_name(info.state),
                           (unsigned long long)info.packets_received,
                           (unsigned long long)info.bytes_received,
                           (unsigned long long)info.packets_sent,
                           (unsigned long long)info.bytes_sent,
                           (unsigned long long)info.packets_dropped,
                           rns_status_string(info.last_error));
+            (void)fprintf(output,
+                          "  connections attempts=%llu established=%llu lost=%llu peers=%llu id=%llu\n",
+                          (unsigned long long)info.connection_attempts,
+                          (unsigned long long)info.connections_established,
+                          (unsigned long long)info.connections_lost,
+                          (unsigned long long)info.peers,
+                          (unsigned long long)info.id);
         }
         (void)fprintf(output, "Status: %s\n", state->status);
         return ferror(output) ? -1 : 0;

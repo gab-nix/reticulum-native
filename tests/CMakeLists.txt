@@ -80,9 +80,15 @@ target_sources(test_tui_editor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
 target_include_directories(test_tui_editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
+reticulum_add_test(test_tui_interfaces unit/test_tui_interfaces.c)
+target_sources(test_tui_interfaces PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c)
+target_include_directories(test_tui_interfaces PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
 reticulum_add_test(test_tui_state unit/test_tui_state.c)
 target_sources(test_tui_state PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
@@ -139,6 +145,7 @@ if(TARGET nomad-chat)
     add_executable(test_tui_settings_ui
         unit/test_tui_settings_ui.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
@@ -170,6 +177,7 @@ if(TARGET nomad-chat)
     add_executable(test_tui_dispatch
         unit/test_tui_dispatch.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
