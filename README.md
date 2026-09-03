@@ -9,6 +9,8 @@ See the [release summary](docs/IMPLEMENTATION_STATUS.md) and canonical
 [feature ledger](docs/FEATURE_STATUS.md) for implemented behavior, evidence and
 remaining work. Compatibility targets the revisions recorded in the
 [compatibility baseline](docs/COMPATIBILITY.md), not an unpinned latest release.
+For continuing development, including isolated unfinished work and its safe
+recovery order, read the [continuation handoff](docs/CONTINUATION_HANDOFF.md).
 
 ## Requirements
 
@@ -98,19 +100,23 @@ The native library and early client include:
 - Network discovery, remote Micron page requests, conversation/history access,
   and Settings-controlled `lxmf.delivery` announcements.
 - An opt-in [static page hosting API](docs/HOSTED_NODE.md) and a caller-polled
-  [propagation client session API](docs/PROPAGATION_CLIENT.md). These are library
-  capabilities, not completed hosted-node or propagation-sync TUI workflows.
+  [propagation client session API](docs/PROPAGATION_CLIENT.md). Manual
+  propagation upload/sync is wired into the router and TUI, but automatic
+  scheduling, durable resume and complete hosted-node controls remain.
 
-Resource transfers remain single-segment and limited to the 74 parts described
-by one advertisement. The 8 MiB codec/storage bound does not imply that all
-messages of that size can be delivered: the history content-preview admission
-limit is 4 KiB and the journal quota is 16 MiB.
+Each Resource advertisement remains limited to 74 carried hashes, while the
+core sender/receiver can advance across bounded segments. Not every production
+delivery path has integrated or verified multi-segment behavior. The 8 MiB
+codec/storage bound does not imply that all messages of that size can be
+delivered: the history content-preview admission limit is 4 KiB and the journal
+quota is 16 MiB.
 
-Major remaining work includes multi-segment transfer and resume; complete retry
-and offline propagation workflows; full Micron forms, executable pages and
-remote file downloads; hosted-node/propagation application controls; RRC sessions
-and remaining TUI workflows; multi-hop transport parity; AutoInterface, shared
-IPC, KISS and RNode drivers; and physical RNode validation.
+Major remaining work includes integrating and verifying multi-segment transfer
+across application delivery paths plus persistent resume; complete retry and
+offline propagation workflows; full Micron forms, executable pages and remote
+file downloads; hosted-node/propagation application controls; complete RRC and
+remaining TUI workflows; multi-hop transport parity; upstream verification of
+AutoInterface, shared IPC, KISS and RNode; and physical RNode validation.
 
 ## Interoperability evidence
 
@@ -119,7 +125,7 @@ short identity-key LXMF packets against pinned Python RNS/LXMF over loopback UDP
 [Live direct testing](docs/LXMF_DIRECT_INTEROP.md) records 17-byte packet and
 2,048-byte incompressible Resource messages in both directions, including final
 proofs and retained title/unknown fields. These narrow gates do not establish
-TCP, transport-hop, stamp, propagation or complete TUI interoperability.
+transport-hop, reconnect, ticket/ratchet or complete TUI interoperability.
 Python-generated fixtures and C-to-C tests cover additional layers but are not
 substitutes for the complete upstream matrix. The feature ledger and linked
 reports record the exact scope of each result; no full NomadNet or Reticulum
