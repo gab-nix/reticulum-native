@@ -11,6 +11,7 @@
 
 #define RRC_CBOR_MAX_DEPTH 8u
 #define RRC_CBOR_MAX_ITEMS 256u
+#define RRC_MAX_ROOM_KEY_BYTES 255u
 
 typedef struct cbor_reader {
     const uint8_t *cursor;
@@ -25,6 +26,8 @@ typedef struct rrc_room_record {
     bool joined;
     bool join_pending;
     bool part_pending;
+    uint8_t key[RRC_MAX_ROOM_KEY_BYTES];
+    size_t key_length;
     uint8_t members[RNS_RRC_MAX_TRACKED_MEMBERS][RNS_RRC_SOURCE_SIZE];
     size_t member_count;
 } rrc_room_record_t;
@@ -282,6 +285,8 @@ static rrc_room_record_t *add_room(rns_rrc_session_t *session,
 static void remove_room(rns_rrc_session_t *session, rrc_room_record_t *room) {
     size_t index = (size_t)(room - session->rooms);
     if (index >= session->room_count) return;
+    rns_hal_secure_zero(room->key, sizeof room->key);
+    room->key_length = 0u;
     if (index + 1u < session->room_count)
         memmove(&session->rooms[index], &session->rooms[index + 1u],
                 (session->room_count - index - 1u) * sizeof session->rooms[0]);
@@ -687,7 +692,8 @@ rns_status_t rns_rrc_session_poll(rns_rrc_session_t *session,
             for (size_t i = 0u; i < session->room_count; ++i)
                 if (session->rooms[i].desired)
                     (void)send_join_record(session, &session->rooms[i],
-                                           NULL, 0u);
+                                           session->rooms[i].key,
+                                           session->rooms[i].key_length);
         }
     } else if (session->info.state == RNS_RRC_SESSION_HELLO &&
                now_ms >= session->info.next_action_ms) {
@@ -792,6 +798,7 @@ rns_status_t rns_rrc_session_join(rns_rrc_session_t *session,
                                   const uint8_t *key, size_t key_length) {
     if (session == NULL || (key_length != 0u && key == NULL))
         return RNS_ERROR_INVALID_ARGUMENT;
+    if (key_length > RRC_MAX_ROOM_KEY_BYTES) return RNS_ERROR_OVERFLOW;
     if (session->info.state != RNS_RRC_SESSION_CONNECTED)
         return RNS_ERROR_INVALID_STATE;
     uint8_t normalized[RNS_RRC_MAX_ROOM_BYTES];
@@ -803,7 +810,12 @@ rns_status_t rns_rrc_session_join(rns_rrc_session_t *session,
                                          normalized_length);
     if (record == NULL) return RNS_ERROR_OVERFLOW;
     status = send_join_record(session, record, key, key_length);
-    if (status == RNS_OK) record->desired = true;
+    if (status == RNS_OK) {
+        rns_hal_secure_zero(record->key, sizeof record->key);
+        if (key_length != 0u) memcpy(record->key, key, key_length);
+        record->key_length = key_length;
+        record->desired = true;
+    }
     else if (!record->desired && !record->joined) remove_room(session, record);
     return status;
 }

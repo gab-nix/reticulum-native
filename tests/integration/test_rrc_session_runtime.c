@@ -113,6 +113,11 @@ static void hub_packet(rns_runtime_link_t *link, uint8_t context,
     } else if (envelope.type == RNS_RRC_JOIN) {
         assert(envelope.room.length == 5u);
         assert(memcmp(envelope.room.data, "lobby", 5u) == 0);
+        rns_rrc_slice_t key = {0};
+        assert(rns_rrc_cbor_text_parse(envelope.body_cbor.data,
+                                       envelope.body_cbor.length,
+                                       &key) == RNS_OK);
+        assert(key.length == 6u && memcmp(key.data, "secret", 6u) == 0);
         hub->join++;
         const nomadnet_rrc_fixture *joined = &nomadnet_rrc_fixtures[3];
         assert(rns_runtime_link_send(link, 0u, joined->wire,
@@ -227,6 +232,12 @@ int main(void) {
     assert(info.motd_length != 0u);
     assert(memcmp(info.motd, "Registered public rooms", 23u) == 0);
 
+    uint8_t overlong_key[256];
+    memset(overlong_key, 'x', sizeof overlong_key);
+    assert(rns_rrc_session_join(session, (const uint8_t *)"lobby", 5u,
+                                overlong_key, sizeof overlong_key) ==
+           RNS_ERROR_OVERFLOW);
+    assert(rns_rrc_session_room_count(session) == 0u);
     assert(rns_rrc_session_join(session, (const uint8_t *)" LOBBY ", 7u,
                                 (const uint8_t *)"secret", 6u) == RNS_OK);
     rns_rrc_room_info_t room_info;

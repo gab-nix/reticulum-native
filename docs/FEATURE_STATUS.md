@@ -57,4 +57,11 @@ This is the source of truth for implementation progress. `IMPLEMENTED` means cod
 | Embedded portability | PLANNED | HAL boundary exists; cross-build examples and non-OpenSSL provider remain. |
 | Upstream interoperability | WIP | Privacy-safe reports verify short opportunistic packets, direct packet/five-part Resource messages, one stamped propagation upload plus list/download/ack sync, and the narrow RRC pinned-schema exchange bidirectionally against pinned Python components over loopback UDP. Direct messaging and the same propagation exchange are also verified over continuous framed TCP. These are narrow gates only. One-hop transport, loss/reconnect, tickets/ratchets, pages/forms/files, external RRC hub deployments, remaining interfaces and physical RNode evidence are still required before a parity claim. |
 
+RRC private-room reconnect note: desired-room keys are bounded to 255 UTF-8
+bytes, retained only inside the protocol session, resent after authenticated
+WELCOME, and wiped on removal or session destruction. They are deliberately
+absent from public snapshots and the TUI. The deterministic reconnect test
+asserts the same key on the initial and restored JOIN; this is local C evidence,
+not a new upstream verification claim.
+
 The compatibility revisions and update policy are recorded in `COMPATIBILITY.md`.

@@ -34,10 +34,13 @@ POSIX HAL clock is only the default when no provider is supplied.
 
 The native session also maintains a bounded room/member view from JOINED and
 PARTED envelopes, retains desired rooms across an unexpected link closure and
-reissues their JOIN only after the next authenticated WELCOME. Roomless NOTICE
-text is retained as the current MOTD. These additions currently have pinned
-fixture and deterministic C-to-C runtime evidence; they were not added to the
-recorded Python interoperability result and are not claimed as verified.
+reissues their JOIN only after the next authenticated WELCOME. Private-room
+keys are retained only in bounded protocol-owned memory for that rejoin, never
+exposed through snapshots, and wiped when the room or session is removed.
+Roomless NOTICE text is retained as the current MOTD. These additions currently
+have pinned fixture and deterministic C-to-C runtime evidence; they were not
+added to the recorded Python interoperability result and are not claimed as
+verified.
 
 The committed privacy-safe result is
 `tests/fixtures/nomadnet_rrc_udp_live.provenance.json`. It contains source and
