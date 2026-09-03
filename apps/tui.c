@@ -60,10 +60,10 @@ static void submit_message(tui_state_t *state) {
         tui_state_set_status(state, "Could not queue message (%d)", status);
         return;
     }
-    tui_state_set_status(state, state->send_ok ? "Sent opportunistically"
-                                : state->send_attempted
-                                      ? "Delivery failed; retained in store"
-                                      : "Queued locally; network delivery is pending");
+    /* A caller-polled send is normally pending here. Preserve the router's
+     * queue reason or delivery event instead of treating it as a failure. */
+    if (!state->router_ready)
+        tui_state_set_status(state, "Queued locally; network delivery is pending");
     tui_editor_clear(&state->composer);
     state->field = TUI_FIELD_NONE;
 }

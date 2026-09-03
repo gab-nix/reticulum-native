@@ -130,8 +130,51 @@ static void test_corruption_warning_survives_startup(void) {
     remove_sidecar(store_path, ".nodes");
 }
 
+static void test_submit_preserves_pending_status(void) {
+    char identity_path[] = "/tmp/nomad-submit-identity-XXXXXX";
+    char store_path[] = "/tmp/nomad-submit-store-XXXXXX";
+    int identity_fd = mkstemp(identity_path);
+    int store_fd = mkstemp(store_path);
+    assert(identity_fd >= 0 && store_fd >= 0);
+    assert(close(identity_fd) == 0 && close(store_fd) == 0);
+    write_identity(identity_path);
+    tui_state_t *state = calloc(1u, sizeof *state);
+    assert(state != NULL);
+    assert(tui_state_open(state, identity_path, store_path, NULL, NULL) == 0);
+    uint8_t destination[LXMF_DESTINATION_LENGTH];
+    memset(destination, 0x42, sizeof destination);
+    assert(tui_state_open_conversation(state, destination));
+    state->field = TUI_FIELD_COMPOSE;
+    assert(tui_editor_insert_byte(&state->composer, 'a'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(strstr(state->status, "Queued locally") != NULL);
+    assert(strstr(state->status, "failed") == NULL);
+    assert(state->message_count == 1u);
+
+    /* Exercise the pending identity/path branch without opening sockets. */
+    state->router_ready = true;
+    state->field = TUI_FIELD_COMPOSE;
+    assert(tui_editor_insert_byte(&state->composer, 'b'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(strstr(state->status, "requesting a verified path") != NULL);
+    assert(strstr(state->status, "failed") == NULL);
+    assert(state->message_count == 2u);
+    assert(tui_editor_empty(&state->composer));
+    state->router_ready = false;
+    tui_state_close(state);
+    free(state);
+    assert(unlink(identity_path) == 0);
+    assert(unlink(store_path) == 0);
+    remove_sidecar(store_path, ".settings");
+    remove_sidecar(store_path, ".peers");
+    remove_sidecar(store_path, ".nodes");
+    remove_sidecar(store_path, ".tickets");
+    remove_sidecar(store_path, ".ratchets");
+}
+
 int main(void) {
     test_keys_dump_and_persistence();
     test_corruption_warning_survives_startup();
+    test_submit_preserves_pending_status();
     return 0;
 }
