@@ -37,6 +37,7 @@ static tui_state_t *make_state(void) {
 }
 
 static void destroy_state(tui_state_t *state) {
+    rns_node_registry_destroy(&state->nodes);
     free(state->messages);
     free(state);
 }
@@ -290,6 +291,40 @@ static void test_node_selection_survives_resort(void) {
     rns_node_record after;
     assert(tui_state_selected_node(state, &after));
     assert(after.destination[0] == tag);
+    destroy_state(state);
+}
+
+static void test_node_selection_crosses_legacy_capacity(void) {
+    enum { NODE_COUNT = 600 };
+    tui_state_t *state = make_state();
+    rns_node_registry_init(&state->nodes, 3600.0);
+    for (uint32_t i = 0U; i < NODE_COUNT; ++i) {
+        rns_node_record node = {0};
+        node.destination[0] = (uint8_t)(i >> 8U);
+        node.destination[1] = (uint8_t)i;
+        node.seen_at = (double)i;
+        node.expires_at = 5000.0;
+        node.reachable = true;
+        assert(rns_node_registry_upsert(&state->nodes, &node));
+    }
+    assert(tui_state_node_count(state) == NODE_COUNT);
+    tui_state_node_move(state, 0);
+    tui_state_node_move(state, 300);
+    rns_node_record selected;
+    assert(tui_state_selected_node(state, &selected));
+    uint8_t destination[LXMF_DESTINATION_LENGTH];
+    memcpy(destination, selected.destination, sizeof destination);
+
+    rns_node_record newest = {0};
+    newest.destination[0] = 0xfeU;
+    newest.destination[1] = 0xfeU;
+    newest.seen_at = 10000.0;
+    newest.expires_at = 14000.0;
+    newest.reachable = true;
+    assert(rns_node_registry_upsert(&state->nodes, &newest));
+    assert(tui_state_selected_node(state, &selected));
+    assert(memcmp(selected.destination, destination, sizeof destination) == 0);
+    assert(tui_state_node_position(state) == 301U);
     destroy_state(state);
 }
 
@@ -776,6 +811,7 @@ int main(void) {
     test_propagation_sync_ui_projection();
     test_bounded_event_log();
     test_node_selection_survives_resort();
+    test_node_selection_crosses_legacy_capacity();
     test_node_move_clamps();
     test_only_nomad_nodes_serve_pages();
     test_empty_registry_has_no_selection();

@@ -5,6 +5,7 @@
 #include <curses.h>
 #include <limits.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define TUI_MIN_ROWS 10
@@ -686,9 +687,12 @@ static void draw_node_popup(const tui_state_t *state) {
 }
 
 static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
-    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
     char heading[96];
-    size_t count = tui_state_node_list(state, sorted, RNS_NODE_REGISTRY_MAX);
+    size_t capacity = tui_state_node_count(state);
+    rns_node_record *sorted = capacity == 0U ? NULL
+        : malloc(capacity * sizeof *sorted);
+    size_t count = capacity != 0U && sorted == NULL ? 0U
+        : tui_state_node_list(state, sorted, capacity);
     size_t position = tui_state_node_position(state);
     size_t rows = layout->rows > 8 ? (size_t)(layout->rows - 8) : 1u;
     /*
@@ -712,7 +716,9 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
     (void)attroff(A_BOLD);
     if (count == 0u)
         clipped(stdscr, 5, 2, layout->columns - 4,
-                "No live announces received yet. Check interface status and wait for announces.");
+                capacity != 0U
+                    ? "Node list could not be allocated; known nodes remain stored."
+                    : "No live announces received yet. Check interface status and wait for announces.");
     for (size_t i = first; i < count && i - first < rows; ++i) {
         char address[TUI_ADDRESS_DIGITS + 1u];
         char line[160];
@@ -731,6 +737,7 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
             "j/k select  / search  Enter details/actions  R refresh path  C conversations");
+    free(sorted);
 }
 
 static void draw_setting_row(const tui_state_t *state, const tui_layout_t *layout,
@@ -1305,9 +1312,11 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
         return ferror(output) ? -1 : 0;
     }
     if (state->screen == TUI_SCREEN_NETWORK) {
-        rns_node_record nodes[RNS_NODE_REGISTRY_MAX];
-        size_t count = tui_state_node_list(state, nodes,
-                                           RNS_NODE_REGISTRY_MAX);
+        size_t capacity = tui_state_node_count(state);
+        rns_node_record *nodes = capacity == 0U ? NULL
+            : malloc(capacity * sizeof *nodes);
+        size_t count = capacity != 0U && nodes == NULL ? 0U
+            : tui_state_node_list(state, nodes, capacity);
         (void)fprintf(output, "Screen: Network\nNodes: %zu\n", count);
         rns_node_record selected;
         if (state->overlay == TUI_OVERLAY_NODE_ACTIONS &&
@@ -1320,6 +1329,7 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             (void)fputc('\n', output);
         }
         (void)fprintf(output, "Status: %s\n", state->status);
+        free(nodes);
         return ferror(output) ? -1 : 0;
     }
     if (state->screen == TUI_SCREEN_INTERFACES) {

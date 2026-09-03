@@ -154,6 +154,7 @@ static void test_portable_roundtrip_corruption_and_atomic_replace(void) {
     char unterminated_path[5000];
     memset(unterminated_path, 'x', sizeof unterminated_path);
     rns_node_registry loaded;
+    rns_node_registry_init(&loaded, 10.0);
     assert(!rns_node_registry_save(&registry, unterminated_path));
     assert(!rns_node_registry_load(&loaded, unterminated_path, 10.0));
     assert(!rns_node_registry_save(&registry, ""));
@@ -167,6 +168,7 @@ static void test_portable_roundtrip_corruption_and_atomic_replace(void) {
            valid[11] == 24U && valid[12] == 0U && valid[13] == 0U &&
            valid[14] == 0U && valid[15] == 1U);
     assert(memcmp(valid + 146U, "\x01\x02\x03\x04\x05\x06\x07\x08", 8U) == 0);
+    rns_node_registry_destroy(&loaded);
     rns_node_registry_init(&loaded, 77.0);
     assert(rns_node_registry_load(&loaded, path, 10.0));
     assert(loaded.count == 1U && loaded.lifetime == 10.0);
@@ -227,6 +229,8 @@ static void test_portable_roundtrip_corruption_and_atomic_replace(void) {
     assert_complete_record(&loaded.records[0], 0x31U);
     free(valid);
     assert(unlink(path) == 0);
+    rns_node_registry_destroy(&loaded);
+    rns_node_registry_destroy(&registry);
 }
 
 static void test_legacy_migration(void) {
@@ -242,6 +246,7 @@ static void test_legacy_migration(void) {
     assert(fwrite(&count, sizeof count, 1U, file) == 1U &&
            fwrite(&v1, sizeof v1, 1U, file) == 1U && fclose(file) == 0);
     rns_node_registry loaded;
+    rns_node_registry_init(&loaded, 10.0);
     assert(rns_node_registry_load(&loaded, path, 10.0));
     assert(loaded.count == 1U && loaded.records[0].destination[0] == 2U);
     assert(!loaded.records[0].has_ratchet &&
@@ -285,6 +290,7 @@ static void test_legacy_migration(void) {
     assert(!rns_node_registry_load(&loaded, path, 10.0));
     assert(loaded.records[0].destination[0] == 0xfeU);
     assert(unlink(path) == 0);
+    rns_node_registry_destroy(&loaded);
 }
 
 static void test_registry_and_verified_announces(void) {
@@ -372,22 +378,67 @@ static void test_registry_and_verified_announces(void) {
            record->lxmf_pn_stamp_cost == 11U &&
            record->lxmf_pn_stamp_flexibility == 3U);
 
-    rns_node_record filtered[RNS_NODE_REGISTRY_MAX];
+    rns_node_record filtered[8];
     size_t matches = rns_node_registry_sorted_filter(
-        &registry, filtered, RNS_NODE_REGISTRY_MAX, "rei");
+        &registry, filtered, 8U, "rei");
     assert(matches >= 2U);
     assert(rns_node_registry_sorted_filter(&registry, filtered,
-                                           RNS_NODE_REGISTRY_MAX, "REI") ==
+                                           8U, "REI") ==
            matches);
     assert(rns_node_registry_sorted_filter(&registry, filtered,
-                                           RNS_NODE_REGISTRY_MAX,
+                                           8U,
                                            "missing") == 0U);
+    rns_node_registry_destroy(&registry);
+}
+
+static void test_registry_scales_past_legacy_limit(void) {
+    enum { TEST_NODE_COUNT = 1024 };
+    rns_node_registry registry;
+    rns_node_registry_init(&registry, 3600.0);
+    for (uint32_t i = 0U; i < TEST_NODE_COUNT; ++i) {
+        rns_node_record record = {0};
+        record.destination[0] = (uint8_t)(i >> 8U);
+        record.destination[1] = (uint8_t)i;
+        record.seen_at = (double)i;
+        record.reachable = (i & 1U) == 0U;
+        (void)snprintf(record.name, sizeof record.name, "node-%04u", i);
+        assert(rns_node_registry_upsert(&registry, &record));
+    }
+    assert(registry.count == TEST_NODE_COUNT);
+    uint8_t destination[16] = {3U, 255U};
+    assert(rns_node_registry_get(&registry, destination) != NULL);
+    assert(rns_node_registry_count_filter(&registry, "node-") ==
+           TEST_NODE_COUNT);
+
+    rns_node_record *sorted = malloc(TEST_NODE_COUNT * sizeof *sorted);
+    assert(sorted != NULL);
+    assert(rns_node_registry_sorted(&registry, sorted, TEST_NODE_COUNT) ==
+           TEST_NODE_COUNT);
+    assert(sorted[0].reachable && !sorted[TEST_NODE_COUNT - 1U].reachable);
+    rns_node_record first;
+    assert(rns_node_registry_sorted(&registry, &first, 1U) == 1U);
+    assert(first.reachable && first.seen_at == 1022.0);
+
+    char path[64];
+    temporary_path(path, "rns-node-scale");
+    assert(rns_node_registry_save(&registry, path));
+    rns_node_registry loaded;
+    rns_node_registry_init(&loaded, 3600.0);
+    assert(rns_node_registry_load(&loaded, path, 3600.0));
+    assert(loaded.count == TEST_NODE_COUNT);
+    assert(rns_node_registry_get(&loaded, destination) != NULL);
+    assert(unlink(path) == 0);
+
+    free(sorted);
+    rns_node_registry_destroy(&loaded);
+    rns_node_registry_destroy(&registry);
 }
 
 int main(void) {
     test_portable_roundtrip_corruption_and_atomic_replace();
     test_legacy_migration();
     test_registry_and_verified_announces();
+    test_registry_scales_past_legacy_limit();
     puts("node registry tests passed");
     return 0;
 }

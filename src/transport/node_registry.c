@@ -16,7 +16,7 @@
 #define REGISTRY_HEADER_SIZE 24u
 #define REGISTRY_RECORD_V1_PREFIX_SIZE 197u
 #define REGISTRY_RECORD_PREFIX_SIZE 199u
-#define REGISTRY_MAX_FILE_SIZE (512u * 1024u)
+#define REGISTRY_MAX_FILE_SIZE (4u * 1024u * 1024u)
 #define REGISTRY_PATH_MAX 4096u
 #define REGISTRY_RECORD_VERSION 2u
 
@@ -146,10 +146,47 @@ static bool migrate_v2(rns_node_record *to, const uint8_t *raw) {
     return valid_record(to);
 }
 
-void rns_node_registry_init(rns_node_registry *r, double lifetime) { if (r) { memset(r, 0, sizeof(*r)); r->lifetime = lifetime > 0 ? lifetime : 3600.0; } }
+void rns_node_registry_init(rns_node_registry *r, double lifetime) {
+    if (r != NULL) {
+        memset(r, 0, sizeof *r);
+        r->lifetime = lifetime > 0 ? lifetime : 3600.0;
+        r->records = calloc(RNS_NODE_REGISTRY_INITIAL_CAPACITY,
+                            sizeof *r->records);
+        if (r->records != NULL)
+            r->capacity = RNS_NODE_REGISTRY_INITIAL_CAPACITY;
+    }
+}
+
+void rns_node_registry_destroy(rns_node_registry *r) {
+    if (r == NULL) return;
+    free(r->records);
+    memset(r, 0, sizeof *r);
+}
+
+static bool reserve_records(rns_node_registry *r, size_t needed) {
+    if (needed <= r->capacity) return true;
+    if (needed > RNS_NODE_REGISTRY_MAX) return false;
+    size_t capacity = r->capacity != 0U ? r->capacity
+                                       : RNS_NODE_REGISTRY_INITIAL_CAPACITY;
+    while (capacity < needed) {
+        if (capacity > RNS_NODE_REGISTRY_MAX / 2U) {
+            capacity = RNS_NODE_REGISTRY_MAX;
+            break;
+        }
+        capacity *= 2U;
+    }
+    if (capacity > SIZE_MAX / sizeof *r->records) return false;
+    rns_node_record *records = realloc(r->records,
+                                      capacity * sizeof *records);
+    if (records == NULL) return false;
+    r->records = records;
+    r->capacity = capacity;
+    return true;
+}
+
 int rns_node_registry_upsert(rns_node_registry *r, const rns_node_record *x) {
     if (!r || !x) return 0; size_t i; for (i=0;i<r->count;i++) if (!memcmp(r->records[i].destination,x->destination,16)) break;
-    if (i==r->count) { if (r->count==RNS_NODE_REGISTRY_MAX) return 0; r->count++; }
+    if (i==r->count) { if (!reserve_records(r, r->count + 1U)) return 0; r->count++; }
     r->records[i]=*x; if (r->records[i].expires_at <= 0.0) r->records[i].expires_at=r->records[i].seen_at+r->lifetime; r->records[i].name[sizeof(r->records[i].name)-1]=0; return 1;
 }
 size_t rns_node_registry_expire(rns_node_registry *r, double now) { if (!r) return 0; size_t n=0; for(size_t i=0;i<r->count;) { if(r->records[i].expires_at>0&&r->records[i].expires_at<=now){r->records[i]=r->records[--r->count];n++;} else i++; } return n; }
@@ -185,6 +222,15 @@ size_t rns_node_registry_list(const rns_node_registry *r, rns_node_record *out,
         if (out != NULL) out[count] = r->records[i];
         ++count;
     }
+    return count;
+}
+
+size_t rns_node_registry_count_filter(const rns_node_registry *r,
+                                      const char *filter) {
+    if (r == NULL) return 0U;
+    size_t count = 0U;
+    for (size_t i = 0U; i < r->count; ++i)
+        if (record_matches(&r->records[i], filter)) ++count;
     return count;
 }
 int rns_node_registry_consider_announce(rns_node_registry *r,const rns_node_result *a){
@@ -243,20 +289,36 @@ int rns_node_registry_consider_announce(rns_node_registry *r,const rns_node_resu
     }
     return rns_node_registry_upsert(r,&n);
 }
-static int before(const rns_node_record *a,const rns_node_record *b){if(a->reachable!=b->reachable)return a->reachable;if(a->seen_at!=b->seen_at)return a->seen_at>b->seen_at;return memcmp(a->destination,b->destination,16)<0;}
+static int compare_records(const void *left, const void *right) {
+    const rns_node_record *a = left;
+    const rns_node_record *b = right;
+    if (a->reachable != b->reachable) return a->reachable ? -1 : 1;
+    if (a->seen_at != b->seen_at) return a->seen_at > b->seen_at ? -1 : 1;
+    return memcmp(a->destination, b->destination, sizeof a->destination);
+}
+
+static int compare_record_pointers(const void *left, const void *right) {
+    const rns_node_record *const *a = left;
+    const rns_node_record *const *b = right;
+    return compare_records(*a, *b);
+}
+
 size_t rns_node_registry_sorted_filter(const rns_node_registry *r,
                                        rns_node_record *out, size_t cap,
                                        const char *filter) {
-    size_t count = rns_node_registry_list(r, out, cap, filter);
-    for (size_t i = 1u; i < count; ++i) {
-        rns_node_record value = out[i];
-        size_t j = i;
-        while (j != 0u && before(&value, &out[j - 1u])) {
-            out[j] = out[j - 1u];
-            --j;
-        }
-        out[j] = value;
-    }
+    if (r == NULL || out == NULL || cap == 0U) return 0U;
+    size_t matches = rns_node_registry_count_filter(r, filter);
+    if (matches == 0U || matches > SIZE_MAX / sizeof(rns_node_record *))
+        return 0U;
+    const rns_node_record **records = malloc(matches * sizeof *records);
+    if (records == NULL) return 0U;
+    size_t found = 0U;
+    for (size_t i = 0U; i < r->count; ++i)
+        if (record_matches(&r->records[i], filter)) records[found++] = &r->records[i];
+    qsort(records, found, sizeof *records, compare_record_pointers);
+    size_t count = found < cap ? found : cap;
+    for (size_t i = 0U; i < count; ++i) out[i] = *records[i];
+    free(records);
     return count;
 }
 
@@ -470,7 +532,8 @@ static bool sync_parent(const char *path, size_t length) {
 int rns_node_registry_save(const rns_node_registry *registry,
                            const char *path) {
     if (registry == NULL || path == NULL ||
-        registry->count > RNS_NODE_REGISTRY_MAX)
+        registry->count > RNS_NODE_REGISTRY_MAX ||
+        (registry->count != 0U && registry->records == NULL))
         return 0;
     size_t path_length = strnlen(path, REGISTRY_PATH_MAX + 1U);
     if (path_length == 0U || path_length > REGISTRY_PATH_MAX) return 0;
@@ -526,7 +589,7 @@ static bool decode_v3(rns_node_registry *registry, const uint8_t *input,
         get16(input + 10U) != REGISTRY_HEADER_SIZE) return false;
     uint32_t count = get32(input + 12U);
     uint32_t payload_length = get32(input + 16U);
-    if (count > RNS_NODE_REGISTRY_MAX ||
+    if (count > RNS_NODE_REGISTRY_MAX || !reserve_records(registry, count) ||
         payload_length != length - REGISTRY_HEADER_SIZE ||
         crc32_bytes(input + REGISTRY_HEADER_SIZE, payload_length) !=
             get32(input + 20U)) return false;
@@ -550,7 +613,8 @@ static bool decode_legacy(rns_node_registry *registry, const uint8_t *input,
     if (length < 12U) return false;
     uint32_t count;
     memcpy(&count, input + 8U, sizeof count);
-    if (count > RNS_NODE_REGISTRY_MAX) return false;
+    if (count > RNS_NODE_REGISTRY_MAX || !reserve_records(registry, count))
+        return false;
     bool version_one = memcmp(input, REGISTRY_MAGIC_V1, 8U) == 0;
     bool version_two = memcmp(input, REGISTRY_MAGIC_V2, 8U) == 0;
     if (!version_one && !version_two) return false;
@@ -597,7 +661,14 @@ int rns_node_registry_load(rns_node_registry *registry, const char *path,
     rns_node_registry_init(candidate, lifetime);
     bool ok = decode_v3(candidate, encoded, length) ||
               decode_legacy(candidate, encoded, length);
-    if (ok) *registry = *candidate;
+    if (ok) {
+        rns_node_registry_destroy(registry);
+        *registry = *candidate;
+        candidate->records = NULL;
+        candidate->count = 0U;
+        candidate->capacity = 0U;
+    }
+    rns_node_registry_destroy(candidate);
     free(candidate);
     free(encoded);
     return ok ? 1 : 0;

@@ -93,7 +93,51 @@ static int cmd_paper_import(int json,const char *identity_path,const char *sourc
     if(json){printf("{\"message_id\":\"");hex_print(stdout,result.message_id,32);printf("\",\"transient_id\":\"");hex_print(stdout,result.transient_id,32);printf("\",\"duplicate\":%s,\"signature\":",result.duplicate?"true":"false");json_text(signature_name(stored.signature_state));printf(",\"destination\":\"");hex_print(stdout,message.destination,16);printf("\",\"source\":\"");hex_print(stdout,message.source,16);printf("\",\"timestamp\":");json_timestamp(message.timestamp);printf(",\"title\":");json_bytes(message.title.data,message.title.len);printf(",\"content\":");json_bytes(message.content.data,message.content.len);puts("}");}else{printf("message_id: ");hex_print(stdout,result.message_id,32);printf("\ntransient_id: ");hex_print(stdout,result.transient_id,32);printf("\nduplicate: %s\nsignature: %s\ndestination: ",result.duplicate?"yes":"no",signature_name(stored.signature_state));hex_print(stdout,message.destination,16);printf("\nsource: ");hex_print(stdout,message.source,16);printf("\ntimestamp: ");if(message.timestamp==message.timestamp&&message.timestamp<=DBL_MAX&&message.timestamp>=-DBL_MAX)printf("%.6f",message.timestamp);else fputs("invalid",stdout);printf("\ntitle: ");safe_bytes(message.title.data,message.title.len);printf("\ncontent: ");safe_bytes(message.content.data,message.content.len);putchar('\n');}
     lxmf_store_close(&store);return 0;
 }
-static int cmd_nodes(const char *path,int json){rns_node_registry registry;if(!rns_node_registry_load(&registry,path,3600.0)){fprintf(stderr,"cannot open node registry: %s\n",path);return EXIT_DATA;}rns_node_record records[RNS_NODE_REGISTRY_MAX];size_t count=rns_node_registry_sorted(&registry,records,RNS_NODE_REGISTRY_MAX);if(json)putchar('[');for(size_t i=0;i<count;i++){if(json){if(i)putchar(',');printf("{\"destination\":\"");hex_print(stdout,records[i].destination,16);printf("\",\"name\":");json_text(records[i].name);printf(",\"hops\":%u,\"interface_id\":%llu,\"reachable\":%s,\"propagation\":%s}",(unsigned)records[i].hops,(unsigned long long)records[i].interface_id,records[i].reachable?"true":"false",records[i].propagation?"true":"false");}else{hex_print(stdout,records[i].destination,16);printf("  %u hops  if:%llu  %s%s\n",(unsigned)records[i].hops,(unsigned long long)records[i].interface_id,records[i].reachable?"reachable":"stale",records[i].propagation?"  propagation":"");}}if(json)puts("]");return 0;}
+static int cmd_nodes(const char *path, int json) {
+    rns_node_registry registry;
+    rns_node_registry_init(&registry, 3600.0);
+    if (!rns_node_registry_load(&registry, path, 3600.0)) {
+        fprintf(stderr, "cannot open node registry: %s\n", path);
+        rns_node_registry_destroy(&registry);
+        return EXIT_DATA;
+    }
+    size_t capacity = registry.count;
+    rns_node_record *records = capacity == 0U ? NULL
+        : malloc(capacity * sizeof *records);
+    if (capacity != 0U && records == NULL) {
+        fputs("cannot allocate node listing\n", stderr);
+        rns_node_registry_destroy(&registry);
+        return EXIT_UNAVAILABLE;
+    }
+    size_t count = rns_node_registry_sorted(&registry, records, capacity);
+    if (json) putchar('[');
+    for (size_t i = 0U; i < count; ++i) {
+        if (json) {
+            if (i != 0U) putchar(',');
+            printf("{\"destination\":\"");
+            hex_print(stdout, records[i].destination, 16U);
+            printf("\",\"name\":");
+            json_text(records[i].name);
+            printf(",\"hops\":%u,\"interface_id\":%llu,"
+                   "\"reachable\":%s,\"propagation\":%s}",
+                   (unsigned)records[i].hops,
+                   (unsigned long long)records[i].interface_id,
+                   records[i].reachable ? "true" : "false",
+                   records[i].propagation ? "true" : "false");
+        } else {
+            hex_print(stdout, records[i].destination, 16U);
+            printf("  %u hops  if:%llu  %s%s\n",
+                   (unsigned)records[i].hops,
+                   (unsigned long long)records[i].interface_id,
+                   records[i].reachable ? "reachable" : "stale",
+                   records[i].propagation ? "  propagation" : "");
+        }
+    }
+    if (json) puts("]");
+    free(records);
+    rns_node_registry_destroy(&registry);
+    return 0;
+}
 static int cmd_repl(const char *identity_path,const char *dest_s,const char *store_path){rns_identity id;uint8_t dest[16];if(!load_identity(identity_path,&id)||!hex_parse(dest_s,dest,16))return EXIT_DATA;lxmf_store_t store={0};if(lxmf_store_open(&store,store_path)!=LXMF_OK)return EXIT_DATA;char line[LXMF_STORE_MAX_CONTENT+2];puts("local outbox; /history lists messages, /quit exits");while(fputs("> ",stdout),fflush(stdout),fgets(line,sizeof line,stdin)){size_t len=strlen(line);if(len&&line[len-1]=='\n')line[--len]=0;else if(!feof(stdin)){int c;while((c=getchar())!='\n'&&c!=EOF){}fprintf(stderr,"line too long\n");continue;}if(!strcmp(line,"/quit"))break;if(!strcmp(line,"/history")){lxmf_store_list(&store,history_line,NULL);continue;}if(!len)continue;uint8_t packed[CLI_MAX_FILE];size_t n;lxmf_message_t decoded;if(!build_message(&id,dest,line,packed,sizeof packed,&n,&decoded)){fprintf(stderr,"pack failed\n");continue;}lxmf_store_message_t item={0};memcpy(item.message_id,decoded.message_id,32);memcpy(item.destination,decoded.destination,16);memcpy(item.source,decoded.source,16);item.timestamp=decoded.timestamp;item.status=LXMF_DELIVERY_QUEUED;item.content=decoded.content;bool inserted;if(lxmf_store_put(&store,&item,&inserted)!=LXMF_OK)fprintf(stderr,"outbox write failed\n");else{printf("queued ");hex_print(stdout,item.message_id,32);putchar('\n');}}lxmf_store_close(&store);return 0;}
 
 static int parse_port(const char *text,uint16_t *port){char *end=NULL;unsigned long value=strtoul(text,&end,10);if(!text[0]||!end||*end||value==0||value>65535)return 0;*port=(uint16_t)value;return 1;}

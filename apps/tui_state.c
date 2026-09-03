@@ -1071,6 +1071,7 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
         return;
     }
     rns_runtime_options_t options = {0};
+    options.path_capacity = RNS_NODE_REGISTRY_MAX;
     options.packet_callback = on_packet;
     options.announce_callback = on_announce;
     options.callback_context = state;
@@ -1366,6 +1367,7 @@ void tui_state_close(tui_state_t *state) {
     state->ticket_store = NULL;
     lxmf_peer_store_close(&state->peer_store);
     lxmf_store_close(&state->store);
+    rns_node_registry_destroy(&state->nodes);
     free(state->messages);
     state->messages = NULL;
 }
@@ -1957,10 +1959,9 @@ bool tui_state_setting_apply(tui_state_t *state) {
 /* ------------------------------------------------------------------ network */
 
 size_t tui_state_node_count(const tui_state_t *state) {
-    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
     return state != NULL
-        ? rns_node_registry_sorted_filter(&state->nodes, sorted,
-              RNS_NODE_REGISTRY_MAX, tui_editor_text(&state->node_search)) : 0u;
+        ? rns_node_registry_count_filter(&state->nodes,
+              tui_editor_text(&state->node_search)) : 0u;
 }
 
 size_t tui_state_node_list(const tui_state_t *state, rns_node_record *out,
@@ -1976,33 +1977,53 @@ bool tui_state_node_serves_pages(const rns_node_record *node) {
 
 bool tui_state_selected_node(const tui_state_t *state, rns_node_record *record) {
     if (state == NULL || record == NULL || !state->has_node_selection) return false;
-    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
-    size_t count = tui_state_node_list(state, sorted, RNS_NODE_REGISTRY_MAX);
+    size_t capacity = tui_state_node_count(state);
+    rns_node_record *sorted = capacity == 0U ? NULL
+        : malloc(capacity * sizeof *sorted);
+    if (capacity != 0U && sorted == NULL) return false;
+    size_t count = tui_state_node_list(state, sorted, capacity);
     for (size_t i = 0u; i < count; ++i) {
         if (memcmp(sorted[i].destination, state->node_selection,
                    LXMF_DESTINATION_LENGTH) != 0) continue;
         *record = sorted[i];
+        free(sorted);
         return true;
     }
+    free(sorted);
     return false;
 }
 
 size_t tui_state_node_position(const tui_state_t *state) {
-    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
     if (state == NULL || !state->has_node_selection) return 0u;
-    size_t count = tui_state_node_list(state, sorted, RNS_NODE_REGISTRY_MAX);
-    for (size_t i = 0u; i < count; ++i)
+    size_t capacity = tui_state_node_count(state);
+    rns_node_record *sorted = capacity == 0U ? NULL
+        : malloc(capacity * sizeof *sorted);
+    if (capacity != 0U && sorted == NULL) return 0U;
+    size_t count = tui_state_node_list(state, sorted, capacity);
+    for (size_t i = 0u; i < count; ++i) {
         if (memcmp(sorted[i].destination, state->node_selection,
-                   LXMF_DESTINATION_LENGTH) == 0) return i;
+                   LXMF_DESTINATION_LENGTH) == 0) {
+            free(sorted);
+            return i;
+        }
+    }
+    free(sorted);
     return 0u;
 }
 
 void tui_state_node_move(tui_state_t *state, int delta) {
-    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
     if (state == NULL) return;
-    size_t count = tui_state_node_list(state, sorted, RNS_NODE_REGISTRY_MAX);
+    size_t capacity = tui_state_node_count(state);
+    rns_node_record *sorted = capacity == 0U ? NULL
+        : malloc(capacity * sizeof *sorted);
+    if (capacity != 0U && sorted == NULL) {
+        tui_state_set_status(state, "Node list is temporarily unavailable");
+        return;
+    }
+    size_t count = tui_state_node_list(state, sorted, capacity);
     if (count == 0u) {
         state->has_node_selection = false;
+        free(sorted);
         return;
     }
     size_t position = tui_state_node_position(state);
@@ -2017,6 +2038,7 @@ void tui_state_node_move(tui_state_t *state, int delta) {
     memcpy(state->node_selection, sorted[position].destination,
            LXMF_DESTINATION_LENGTH);
     state->has_node_selection = true;
+    free(sorted);
 }
 
 void tui_state_request_path(tui_state_t *state) {

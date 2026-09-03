@@ -30,6 +30,12 @@ static tui_state_t *state_create(void) {
     return state;
 }
 
+static void state_destroy(tui_state_t *state) {
+    rns_node_registry_destroy(&state->nodes);
+    tui_rrc_close(&state->rrc);
+    free(state);
+}
+
 static void seed_node(tui_state_t *state) {
     rns_node_record node = {0};
     node.destination[0] = 0x33u;
@@ -94,7 +100,7 @@ static void test_screen_scoping(void) {
             assert(state->screen == TUI_SCREEN_CONVERSATIONS);
         }
         assert(!tui_dispatch_key(state, 27));
-        free(state);
+        state_destroy(state);
     }
 }
 
@@ -113,7 +119,7 @@ static void test_empty_network_and_filtered_contact(void) {
     assert(tui_dispatch_key(state, 'x'));
     assert(state->field == TUI_FIELD_NONE && state->overlay == TUI_OVERLAY_NONE);
     assert(!state->contacts[state->selected].blocked);
-    free(state);
+    state_destroy(state);
 }
 
 static void test_delivery_shortcut_is_screen_scoped(void) {
@@ -128,7 +134,7 @@ static void test_delivery_shortcut_is_screen_scoped(void) {
     state->screen = TUI_SCREEN_CONVERSATIONS;
     assert(tui_dispatch_key(state, 'D'));
     assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_DIRECT);
-    free(state);
+    state_destroy(state);
 }
 
 static void test_propagation_sync_actions_are_screen_scoped(void) {
@@ -153,7 +159,7 @@ static void test_propagation_sync_actions_are_screen_scoped(void) {
     assert(tui_dispatch_key(state, 's'));
     assert(state->overlay == TUI_OVERLAY_NONE);
     assert(strstr(state->status, "Cannot cancel sync") != NULL);
-    free(state);
+    state_destroy(state);
 }
 
 static void test_event_log_screen(void) {
@@ -173,7 +179,7 @@ static void test_event_log_screen(void) {
     assert(!state->contacts[0].blocked);
     assert(tui_dispatch_key(state, 27));
     assert(state->screen == TUI_SCREEN_CONVERSATIONS);
-    free(state);
+    state_destroy(state);
 }
 
 static void test_hidden_editors(void) {
@@ -206,7 +212,7 @@ static void test_hidden_editors(void) {
             assert(strcmp(tui_editor_text(&state->node_search), "n") == 0);
             assert(memcmp(&saved, &state->settings, sizeof saved) == 0);
             assert(state->message_count == 0u);
-            free(state);
+            state_destroy(state);
         }
     }
 }
@@ -232,7 +238,7 @@ static void test_modal_isolation(void) {
                 assert(state->overlay == TUI_OVERLAY_NONE);
             }
             assert(state->field == TUI_FIELD_NONE);
-            free(state);
+            state_destroy(state);
         }
     }
     tui_state_t *state = state_create();
@@ -245,7 +251,7 @@ static void test_modal_isolation(void) {
     assert(state->field == TUI_FIELD_NONE);
     assert(strcmp(tui_editor_text(&state->composer), "d") == 0);
     assert(!tui_dispatch_key(state, 27));
-    free(state);
+    state_destroy(state);
 }
 
 static void test_shortcuts_drafts_and_node_action(void) {
@@ -325,7 +331,7 @@ static void test_shortcuts_drafts_and_node_action(void) {
     assert(tui_dispatch_key(state, 27));
     assert(state->screen == TUI_SCREEN_CONVERSATIONS);
     assert(!tui_dispatch_key(state, 'Q'));
-    free(state);
+    state_destroy(state);
 }
 
 static void test_browser_terminal_escape(void) {
@@ -344,7 +350,7 @@ static void test_browser_terminal_escape(void) {
     assert(rns_browser_state(state->browser) == RNS_BROWSER_CANCELLED);
     rns_browser_destroy(state->browser);
     rns_runtime_destroy(state->runtime);
-    free(state);
+    state_destroy(state);
 }
 
 static void test_network_popup_reasons(void) {
@@ -384,7 +390,7 @@ static void test_network_popup_reasons(void) {
                   "Propagation action: unavailable: propagation is disabled") != NULL);
     assert(strstr(output, "&#") == NULL);
     assert(fclose(dump) == 0);
-    free(state);
+    state_destroy(state);
 }
 
 static void test_rrc_headless_dump(void) {
@@ -429,7 +435,7 @@ static void test_rrc_headless_dump(void) {
            (size_t)TUI_RRC_ITEM_SEND - 2u);
     assert(tui_render_rrc_first_item(TUI_RRC_ITEM_SEND, 0u) ==
            (size_t)TUI_RRC_ITEM_SEND);
-    free(state);
+    state_destroy(state);
 }
 
 int main(void) {
