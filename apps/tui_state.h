@@ -45,6 +45,7 @@ typedef enum {
     TUI_FIELD_NONE,
     TUI_FIELD_COMPOSE,
     TUI_FIELD_SEARCH,
+    TUI_FIELD_NODE_SEARCH,
     TUI_FIELD_ADDRESS,
     TUI_FIELD_SETTING
 } tui_field_t;
@@ -119,6 +120,7 @@ typedef struct tui_state {
 
     tui_editor_t composer;
     tui_editor_t search;
+    tui_editor_t node_search;
     tui_editor_t address;
     tui_editor_t setting;
     tui_field_t field;

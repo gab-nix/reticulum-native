@@ -21,6 +21,7 @@ static tui_state_t *make_state(void) {
     memcpy(state->local, local_address, sizeof state->local);
     tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
     tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
+    tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     tui_settings_defaults(&state->settings);
@@ -325,6 +326,28 @@ static void test_node_move_clamps(void) {
     destroy_state(state);
 }
 
+static void test_node_filter_hides_and_reselects(void) {
+    tui_state_t *state = make_state();
+    rns_node_registry_init(&state->nodes, 3600.0);
+    add_node(state, 0xa1u, 1u, RNS_NODE_KIND_NOMAD, 100.0);
+    add_node(state, 0xa2u, 2u, RNS_NODE_KIND_NOMAD, 100.0);
+    memcpy(state->nodes.records[0].name, "Alpha", 6u);
+    memcpy(state->nodes.records[1].name, "Beta", 5u);
+    tui_state_node_move(state, 0);
+    assert(tui_editor_insert(&state->node_search, "beta", 4u));
+    assert(tui_state_node_count(state) == 1u);
+    rns_node_record hidden;
+    assert(!tui_state_selected_node(state, &hidden));
+    tui_state_node_move(state, 0);
+    assert(tui_state_selected_node(state, &hidden));
+    assert(strcmp(hidden.name, "Beta") == 0);
+    tui_editor_clear(&state->node_search);
+    assert(tui_state_node_count(state) == 2u);
+    assert(tui_state_selected_node(state, &hidden));
+    assert(strcmp(hidden.name, "Beta") == 0);
+    destroy_state(state);
+}
+
 static void test_only_nomad_nodes_serve_pages(void) {
     rns_node_record nomad = {0}, lxmf = {0}, other = {0};
     nomad.kind = RNS_NODE_KIND_NOMAD;
@@ -571,6 +594,7 @@ static void test_drafts_follow_contacts_and_persist(void) {
 }
 
 int main(void) {
+    test_node_filter_hides_and_reselects();
     test_drafts_follow_contacts_and_persist();
     test_saved_block_policy_and_deferred_rejection();
     test_rejected_message_keeps_owned_previews();

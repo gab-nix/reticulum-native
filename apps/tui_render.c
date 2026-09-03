@@ -198,6 +198,8 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
     switch (state->field) {
         case TUI_FIELD_COMPOSE: editor = &state->composer; prompt = "Message: "; break;
         case TUI_FIELD_SEARCH: editor = &state->search; prompt = "Search: "; break;
+        case TUI_FIELD_NODE_SEARCH:
+            editor = &state->node_search; prompt = "Find node: "; break;
         case TUI_FIELD_ADDRESS: editor = &state->address; prompt = "Address: "; break;
         case TUI_FIELD_SETTING: break;
         case TUI_FIELD_NONE: break;
@@ -324,8 +326,15 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
     size_t first = position >= rows ? position - rows + 1u : 0u;
     if (first + rows > count) first = count > rows ? count - rows : 0u;
 
-    (void)snprintf(heading, sizeof heading, "Active and known nodes  (%zu of %zu)",
-                   count == 0u ? 0u : position + 1u, count);
+    const char *filter = tui_editor_text(&state->node_search);
+    if (*filter != '\0')
+        (void)snprintf(heading, sizeof heading,
+                       "Active and known nodes  (%zu of %zu)  filter: %.32s",
+                       count == 0u ? 0u : position + 1u, count, filter);
+    else
+        (void)snprintf(heading, sizeof heading,
+                       "Active and known nodes  (%zu of %zu)",
+                       count == 0u ? 0u : position + 1u, count);
     (void)attron(A_BOLD);
     clipped(stdscr, 3, 1, layout->columns - 2, heading);
     (void)attroff(A_BOLD);
@@ -349,7 +358,7 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
         if (selected) (void)attroff(A_REVERSE);
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
-            "j/k select  Enter details  R refresh path  B browser  C conversations  q quit");
+            "j/k select  / search  Enter details  R refresh path  B browser  C conversations");
 }
 
 static void draw_setting_row(const tui_state_t *state, const tui_layout_t *layout,

@@ -27,6 +27,7 @@ static bool field_visible(tui_state_t *state) {
         case TUI_FIELD_COMPOSE: return conversation_selected(state);
         case TUI_FIELD_SEARCH: case TUI_FIELD_ADDRESS:
             return state->screen == TUI_SCREEN_CONVERSATIONS;
+        case TUI_FIELD_NODE_SEARCH: return state->screen == TUI_SCREEN_NETWORK;
         case TUI_FIELD_SETTING: return state->screen == TUI_SCREEN_SETTINGS;
         case TUI_FIELD_NONE: return true;
     }
@@ -52,6 +53,7 @@ static tui_editor_t *active_editor(tui_state_t *state) {
     switch (state->field) {
         case TUI_FIELD_COMPOSE: return &state->composer;
         case TUI_FIELD_SEARCH: return &state->search;
+        case TUI_FIELD_NODE_SEARCH: return &state->node_search;
         case TUI_FIELD_ADDRESS: return &state->address;
         case TUI_FIELD_SETTING: return &state->setting;
         case TUI_FIELD_NONE: break;
@@ -124,6 +126,11 @@ static void handle_field_key(tui_state_t *state, int key) {
             tui_state_refresh(state);
             if (state->visible_count > 0u) state->selected = state->visible[0];
             state->filter_dirty = true;
+        } else if (state->field == TUI_FIELD_NODE_SEARCH) {
+            state->field = TUI_FIELD_NONE;
+            tui_state_node_move(state, 0);
+            tui_state_set_status(state, tui_state_node_count(state) == 0u
+                ? "No nodes match the search" : "Network search applied");
         } else submit_message(state);
         return;
     }
@@ -255,6 +262,9 @@ static bool handle_command_key(tui_state_t *state, int key) {
             if (state->screen == TUI_SCREEN_CONVERSATIONS) {
                 state->field = TUI_FIELD_SEARCH;
                 (void)tui_editor_apply(&state->search, TUI_EDIT_END);
+            } else if (state->screen == TUI_SCREEN_NETWORK) {
+                state->field = TUI_FIELD_NODE_SEARCH;
+                (void)tui_editor_apply(&state->node_search, TUI_EDIT_END);
             }
             break;
         case 'a': case 'A':

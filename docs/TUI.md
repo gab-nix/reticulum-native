@@ -57,6 +57,8 @@ In Network, use `j`/`k` or the arrow keys to select a verified announce. The
 list scrolls around the selection, and the selection is held by destination
 address rather than by row, so it stays on the same node as new announces
 re-sort the list. Rows that serve Micron pages are marked `PAGE`.
+Press `/` to filter by display name or any destination-address fragment; the
+filtered list retains reachable/newest/address ordering and anchored selection.
 
 Enter opens a details popup showing the address, announced name, node type,
 route, and associated LXMF inbox, followed by the actions that apply to that

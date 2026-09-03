@@ -11,6 +11,7 @@ static tui_state_t *state_create(void) {
     assert(state != NULL);
     tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
     tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
+    tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     tui_settings_defaults(&state->settings);
@@ -117,7 +118,9 @@ static void test_hidden_editors(void) {
         for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_SETTING; ++field) {
             bool visible = field == TUI_FIELD_SETTING
                              ? screen == TUI_SCREEN_SETTINGS
-                             : screen == TUI_SCREEN_CONVERSATIONS;
+                             : field == TUI_FIELD_NODE_SEARCH
+                                   ? screen == TUI_SCREEN_NETWORK
+                                   : screen == TUI_SCREEN_CONVERSATIONS;
             if (visible) continue;
             tui_state_t *state = state_create();
             state->screen = (tui_screen_t)screen;
@@ -126,6 +129,7 @@ static void test_hidden_editors(void) {
             assert(tui_editor_insert_byte(&state->setting, 'v'));
             assert(tui_editor_insert_byte(&state->address, 'a'));
             assert(tui_editor_insert_byte(&state->search, 's'));
+            assert(tui_editor_insert_byte(&state->node_search, 'n'));
             tui_settings_t saved = state->settings;
             assert(tui_dispatch_key(state, '\n'));
             assert(state->screen == (tui_screen_t)screen);
@@ -134,6 +138,7 @@ static void test_hidden_editors(void) {
             assert(strcmp(tui_editor_text(&state->setting), "v") == 0);
             assert(strcmp(tui_editor_text(&state->address), "a") == 0);
             assert(strcmp(tui_editor_text(&state->search), "s") == 0);
+            assert(strcmp(tui_editor_text(&state->node_search), "n") == 0);
             assert(memcmp(&saved, &state->settings, sizeof saved) == 0);
             assert(state->message_count == 0u);
             free(state);
@@ -188,6 +193,12 @@ static void test_shortcuts_drafts_and_node_action(void) {
     assert(tui_dispatch_key(state, 'N'));
     assert(state->screen == TUI_SCREEN_NETWORK);
     seed_node(state);
+    assert(tui_dispatch_key(state, '/'));
+    assert(state->field == TUI_FIELD_NODE_SEARCH);
+    assert(tui_dispatch_key(state, '3'));
+    assert(tui_dispatch_key(state, '3'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_NONE && tui_state_node_count(state) == 1u);
     /* A disappeared selection must not produce an invisible node popup. */
     memset(state->node_selection, 0xff, sizeof state->node_selection);
     assert(tui_dispatch_key(state, '\n'));

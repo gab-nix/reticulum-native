@@ -667,6 +667,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     memset(state, 0, sizeof *state);
     tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
     tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
+    tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     tui_settings_defaults(&state->settings);
@@ -1216,13 +1217,17 @@ bool tui_state_setting_apply(tui_state_t *state) {
 /* ------------------------------------------------------------------ network */
 
 size_t tui_state_node_count(const tui_state_t *state) {
-    return state != NULL ? state->nodes.count : 0u;
+    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
+    return state != NULL
+        ? rns_node_registry_sorted_filter(&state->nodes, sorted,
+              RNS_NODE_REGISTRY_MAX, tui_editor_text(&state->node_search)) : 0u;
 }
 
 size_t tui_state_node_list(const tui_state_t *state, rns_node_record *out,
                            size_t capacity) {
     if (state == NULL || out == NULL || capacity == 0u) return 0u;
-    return rns_node_registry_sorted(&state->nodes, out, capacity);
+    return rns_node_registry_sorted_filter(&state->nodes, out, capacity,
+                                            tui_editor_text(&state->node_search));
 }
 
 bool tui_state_node_serves_pages(const rns_node_record *node) {
@@ -1231,17 +1236,21 @@ bool tui_state_node_serves_pages(const rns_node_record *node) {
 
 bool tui_state_selected_node(const tui_state_t *state, rns_node_record *record) {
     if (state == NULL || record == NULL || !state->has_node_selection) return false;
-    const rns_node_record *found = rns_node_registry_get(&state->nodes,
-                                                         state->node_selection);
-    if (found == NULL) return false;
-    *record = *found;
-    return true;
+    rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
+    size_t count = tui_state_node_list(state, sorted, RNS_NODE_REGISTRY_MAX);
+    for (size_t i = 0u; i < count; ++i) {
+        if (memcmp(sorted[i].destination, state->node_selection,
+                   LXMF_DESTINATION_LENGTH) != 0) continue;
+        *record = sorted[i];
+        return true;
+    }
+    return false;
 }
 
 size_t tui_state_node_position(const tui_state_t *state) {
     rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
     if (state == NULL || !state->has_node_selection) return 0u;
-    size_t count = rns_node_registry_sorted(&state->nodes, sorted, RNS_NODE_REGISTRY_MAX);
+    size_t count = tui_state_node_list(state, sorted, RNS_NODE_REGISTRY_MAX);
     for (size_t i = 0u; i < count; ++i)
         if (memcmp(sorted[i].destination, state->node_selection,
                    LXMF_DESTINATION_LENGTH) == 0) return i;
@@ -1251,7 +1260,7 @@ size_t tui_state_node_position(const tui_state_t *state) {
 void tui_state_node_move(tui_state_t *state, int delta) {
     rns_node_record sorted[RNS_NODE_REGISTRY_MAX];
     if (state == NULL) return;
-    size_t count = rns_node_registry_sorted(&state->nodes, sorted, RNS_NODE_REGISTRY_MAX);
+    size_t count = tui_state_node_list(state, sorted, RNS_NODE_REGISTRY_MAX);
     if (count == 0u) {
         state->has_node_selection = false;
         return;

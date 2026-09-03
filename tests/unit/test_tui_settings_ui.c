@@ -16,6 +16,7 @@ static tui_state_t *make_state(const char *settings_path) {
     assert(state->messages != NULL);
     tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
     tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
+    tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     tui_settings_defaults(&state->settings);
