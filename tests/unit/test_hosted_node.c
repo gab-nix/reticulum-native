@@ -12,12 +12,14 @@
 int main(void) {
     char root[] = "/tmp/rns-hosted-unit-XXXXXX";
     assert(mkdtemp(root) != NULL);
-    char page[512], sidecar[512], linkpath[512], directory[512], nested[512], fifo[512];
+    char page[512], sidecar[512], linkpath[512], directory[512], nested[512],
+         executable[512], fifo[512];
     (void)snprintf(page, sizeof page, "%s/index.mu", root);
     (void)snprintf(sidecar, sizeof sidecar, "%s/index.mu.allowed", root);
     (void)snprintf(linkpath, sizeof linkpath, "%s/link.mu", root);
     (void)snprintf(directory, sizeof directory, "%s/nested", root);
     (void)snprintf(nested, sizeof nested, "%s/nested/page.mu", root);
+    (void)snprintf(executable, sizeof executable, "%s/exec.mu", root);
     (void)snprintf(fifo, sizeof fifo, "%s/pipe", root);
     FILE *file = fopen(page, "wb");
     assert(file != NULL && fwrite("Hello", 1U, 5U, file) == 5U);
@@ -25,6 +27,9 @@ int main(void) {
     assert(mkdir(directory, 0700) == 0);
     file = fopen(nested, "wb");
     assert(file != NULL && fwrite("Hi", 1U, 2U, file) == 2U && fclose(file) == 0);
+    file = fopen(executable, "wb");
+    assert(file != NULL && fwrite("#!x", 1U, 3U, file) == 3U &&
+           fclose(file) == 0 && chmod(executable, 0700) == 0);
     assert(mkfifo(fifo, 0600) == 0);
     assert(symlink(page, linkpath) == 0);
     rns_config_t config;
@@ -53,6 +58,7 @@ int main(void) {
     assert(rns_hosted_node_publish_page(node, "link.mu") == RNS_ERROR_IO);
     assert(rns_hosted_node_publish_page(node, "nested") == RNS_ERROR_IO);
     assert(rns_hosted_node_publish_page(node, "pipe") == RNS_ERROR_IO);
+    assert(rns_hosted_node_publish_page(node, "exec.mu") == RNS_ERROR_UNSUPPORTED);
     assert(rns_hosted_node_publish_page(node, "nested/page.mu") == RNS_OK);
     assert(rns_hosted_node_read(node, "/page/nested/page.mu", output, sizeof output, &length) == RNS_OK);
     assert(length == 2U && memcmp(output, "Hi", 2U) == 0);
@@ -77,7 +83,7 @@ int main(void) {
     rns_hosted_node_destroy(node);
     rns_runtime_destroy(runtime);
     assert(unlink(page) == 0 && unlink(linkpath) == 0);
-    assert(unlink(nested) == 0 && unlink(fifo) == 0);
+    assert(unlink(nested) == 0 && unlink(executable) == 0 && unlink(fifo) == 0);
     assert(rmdir(directory) == 0 && rmdir(root) == 0);
     return 0;
 }

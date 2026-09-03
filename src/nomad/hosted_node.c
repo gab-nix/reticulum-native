@@ -18,6 +18,8 @@ struct rns_hosted_node {
     rns_runtime_link_t *links[RNS_RUNTIME_MAX_LINKS];
     rns_runtime_request_handler_options_t handler_options;
     uint8_t allowed[RNS_RUNTIME_MAX_REQUEST_ALLOWLIST * 16U];
+    rns_hosted_page_executor_t page_executor;
+    void *page_executor_context;
     int pages_fd;
     int files_fd;
     size_t max_content;
@@ -43,7 +45,9 @@ static bool safe_relative(const char *path) {
 /* Walk each component under pinned directory descriptors. O_NOFOLLOW at every
  * step prevents both symlink traversal and replacement races. */
 static rns_status_t open_relative(int root, const char *relative, bool page,
-                                   int *result) {
+                                  bool permit_executable, bool *executable,
+                                  int *result) {
+    if (executable != NULL) *executable = false;
     if (root < 0) return RNS_ERROR_NOT_FOUND;
     if (!safe_relative(relative)) return RNS_ERROR_INVALID_ARGUMENT;
     char path[RNS_REQUEST_PATH_MAX + 1U];
@@ -78,10 +82,13 @@ static rns_status_t open_relative(int root, const char *relative, bool page,
         close(fd);
         return RNS_ERROR_IO;
     }
-    if (page && (info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0) {
+    bool is_executable =
+        (info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) != 0;
+    if (page && is_executable && !permit_executable) {
         close(fd);
         return RNS_ERROR_UNSUPPORTED;
     }
+    if (executable != NULL) *executable = is_executable;
     *result = fd;
     return RNS_OK;
 }
@@ -106,7 +113,8 @@ static rns_status_t read_page_policy(rns_hosted_node_t *node,
     memcpy(sidecar, relative, relative_length);
     memcpy(sidecar + relative_length, ".allowed", 9U);
     int fd = -1;
-    rns_status_t status = open_relative(node->pages_fd, sidecar, false, &fd);
+    rns_status_t status = open_relative(node->pages_fd, sidecar, false, false,
+                                        NULL, &fd);
     if (status == RNS_ERROR_NOT_FOUND) return RNS_OK;
     if (status != RNS_OK) return status;
     *present = true;
@@ -189,6 +197,33 @@ static rns_status_t encode_binary(const uint8_t *content, size_t content_length,
     return RNS_OK;
 }
 
+static rns_status_t read_bounded(int fd, size_t limit, uint8_t *output,
+                                 size_t capacity, size_t *length) {
+    struct stat info;
+    if (fstat(fd, &info) != 0 || info.st_size < 0) return RNS_ERROR_IO;
+    if ((uintmax_t)info.st_size > limit || (uintmax_t)info.st_size > capacity)
+        return RNS_ERROR_OVERFLOW;
+    size_t available = capacity < limit ? capacity : limit;
+    size_t used = 0U;
+    for (;;) {
+        if (used == available) {
+            uint8_t extra;
+            ssize_t count;
+            do count = read(fd, &extra, 1U); while (count < 0 && errno == EINTR);
+            if (count < 0) return RNS_ERROR_IO;
+            if (count > 0) return RNS_ERROR_OVERFLOW;
+            break;
+        }
+        ssize_t count = read(fd, output + used, available - used);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) return RNS_ERROR_IO;
+        if (count == 0) break;
+        used += (size_t)count;
+    }
+    *length = used;
+    return RNS_OK;
+}
+
 rns_status_t rns_hosted_node_read(rns_hosted_node_t *node, const char *path,
                                  uint8_t *output, size_t capacity,
                                  size_t *length) {
@@ -200,28 +235,10 @@ rns_status_t rns_hosted_node_read(rns_hosted_node_t *node, const char *path,
         return RNS_ERROR_INVALID_ARGUMENT;
     int fd = -1;
     rns_status_t status = open_relative(page ? node->pages_fd : node->files_fd,
-                                        path + 6U, page, &fd);
+                                        path + 6U, page, false, NULL, &fd);
     if (status != RNS_OK) return status;
-    struct stat info;
-    if (fstat(fd, &info) != 0 || info.st_size < 0) status = RNS_ERROR_IO;
-    else if ((uintmax_t)info.st_size > node->max_content ||
-             (uintmax_t)info.st_size > capacity) status = RNS_ERROR_OVERFLOW;
     size_t used = 0U;
-    while (status == RNS_OK) {
-        size_t available = capacity < node->max_content ? capacity : node->max_content;
-        if (used == available) {
-            uint8_t extra;
-            ssize_t count = read(fd, &extra, 1U);
-            if (count < 0 && errno == EINTR) continue;
-            if (count != 0) status = count > 0 ? RNS_ERROR_OVERFLOW : RNS_ERROR_IO;
-            break;
-        }
-        ssize_t count = read(fd, output + used, available - used);
-        if (count < 0 && errno == EINTR) continue;
-        if (count < 0) { status = RNS_ERROR_IO; break; }
-        if (count == 0) break;
-        used += (size_t)count;
-    }
+    status = read_bounded(fd, node->max_content, output, capacity, &used);
     close(fd);
     if (status == RNS_OK) *length = used;
     return status;
@@ -243,10 +260,49 @@ static rns_status_t serve_page(
     if (!authorized)
         return encode_binary(denied, sizeof denied - 1U, response, capacity,
                              length);
+    rns_hosted_node_t *node = context;
+    int fd = -1;
+    bool executable = false;
+    status = open_relative(node->pages_fd, path + 6U, true,
+                           node->page_executor != NULL, &executable, &fd);
+    if (status != RNS_OK) return status;
     size_t content_length = 0U;
-    status = rns_hosted_node_read(
-        context, path, response + 5U,
-        capacity - 5U, &content_length);
+    if (!executable) {
+        status = read_bounded(fd, node->max_content, response + 5U,
+                              capacity - 5U, &content_length);
+    } else {
+        uint8_t *source = malloc(node->max_content);
+        if (source == NULL) status = RNS_ERROR_NO_MEMORY;
+        size_t source_length = 0U;
+        if (status == RNS_OK)
+            status = read_bounded(fd, node->max_content, source,
+                                  node->max_content, &source_length);
+        rns_hosted_form_t form;
+        if (status == RNS_OK)
+            status = rns_hosted_form_decode(request->data_msgpack,
+                                            request->data_msgpack_length,
+                                            &form);
+        if (status == RNS_OK) {
+            rns_hosted_page_execution_t execution = {
+                .relative_path = path + 6U,
+                .source = source,
+                .source_length = source_length,
+                .form = &form,
+                .link_id = rns_runtime_link_id(link),
+                .remote_identity = remote_identity,
+                .requested_at = request->requested_at};
+            status = node->page_executor(
+                node, &execution, response + 5U, capacity - 5U,
+                &content_length, node->page_executor_context);
+            if (status == RNS_OK && content_length > capacity - 5U)
+                status = RNS_ERROR_OVERFLOW;
+        }
+        if (source != NULL) {
+            memset(source, 0, node->max_content);
+            free(source);
+        }
+    }
+    close(fd);
     if (status != RNS_OK) return status;
     return encode_binary(response + 5U, content_length, response, capacity,
                          length);
@@ -283,6 +339,8 @@ rns_status_t rns_hosted_node_create(
     node->runtime = runtime;
     node->identity = *identity;
     node->max_content = options->max_content_size != 0U ? options->max_content_size : 16384U;
+    node->page_executor = options->page_executor;
+    node->page_executor_context = options->page_executor_context;
     node->pages_fd = open(options->pages_root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (options->files_root != NULL)
         node->files_fd = open(options->files_root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -313,7 +371,9 @@ rns_status_t rns_hosted_node_publish_page(rns_hosted_node_t *node,
                                          const char *relative_path) {
     if (node == NULL || !safe_relative(relative_path)) return RNS_ERROR_INVALID_ARGUMENT;
     int fd = -1;
-    rns_status_t status = open_relative(node->pages_fd, relative_path, true, &fd);
+    rns_status_t status = open_relative(node->pages_fd, relative_path, true,
+                                        node->page_executor != NULL,
+                                        NULL, &fd);
     if (status != RNS_OK) return status;
     struct stat info;
     if (fstat(fd, &info) != 0 || info.st_size < 0) status = RNS_ERROR_IO;
