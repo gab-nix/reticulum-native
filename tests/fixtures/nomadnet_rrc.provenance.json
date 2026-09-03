@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "fixture": "nomadnet_rrc_vectors.h",
+  "fixture_sha256": "f8909b03d0b9b85d66af288818e20ff113b274333987284b0de1c7fcde421a08",
+  "generator": "tools/generate_nomadnet_rrc_fixtures.py",
+  "nomadnet": {
+    "version": "1.2.0",
+    "commit": "475c0ee2a0388cf8470e7f1e90d5decb67b579ea",
+    "source_apis": [
+      "nomadnet.RRC._make_envelope",
+      "nomadnet.vendor.cbor.encode",
+      "nomadnet.vendor.cbor.decode"
+    ]
+  },
+  "coverage": [
+    "HELLO and WELCOME capability and limit maps",
+    "JOIN, JOINED, PART and PARTED envelopes",
+    "MSG, NOTICE, PING, PONG and ERROR envelopes",
+    "resource envelope metadata",
+    "UTF-8 room, nick and body values",
+    "CBOR unsigned integer widths through uint64 maximum",
+    "bounded nested values and unknown integer keys"
+  ],
+  "limitations": [
+    "outer unknown fields are safely skipped but not retained by the C codec",
+    "does not exercise a live RRC hub or encrypted Reticulum channel",
+    "contains public synthetic test material only"
+  ]
+}

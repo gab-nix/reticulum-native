@@ -52,6 +52,15 @@ decrypted RTT plaintext. Random-IV ciphertext and live link establishment are
 intentionally outside this fixture, so this is deterministic representation
 evidence rather than bidirectional link interoperability.
 
+The NomadNet RRC vectors in `tests/fixtures/nomadnet_rrc_vectors.h` execute the
+pinned 1.2.0 `_make_envelope()` helper and vendored CBOR encoder/decoder. They
+cover every defined envelope type, optional fields, nested capability/limit
+maps, UTF-8, CBOR unsigned integer boundaries, resource metadata and unknown
+keys. The C codec parses those Python bytes and emits the same canonical known
+envelope. Unknown outer keys are bounded and skipped rather than retained;
+unknown nested body values remain opaque CBOR. These fixtures do not establish
+an encrypted session or live compatibility with an RRC hub.
+
 ## Compatibility policy
 
 - The wire behaviour of the pinned releases is authoritative.
