@@ -193,7 +193,11 @@ void tui_state_persist_contacts(tui_state_t *state) {
         const tui_contact_t *contact = &state->contacts[i];
         lxmf_peer_t peer = {0};
         bool inserted = false;
-        memcpy(peer.address, contact->peer, sizeof peer.address);
+        lxmf_status_t status = lxmf_peer_store_get(&state->peer_store,
+                                                   contact->peer, &peer);
+        if (status != LXMF_OK && status != LXMF_ERR_FORMAT) return;
+        if (status == LXMF_ERR_FORMAT)
+            memcpy(peer.address, contact->peer, sizeof peer.address);
         peer.trust = to_store_trust(contact->trust);
         peer.blocked = contact->blocked;
         peer.pinned = contact->pinned;

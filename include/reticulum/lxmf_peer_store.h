@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define LXMF_PEER_STORE_VERSION 1u
+#define LXMF_PEER_STORE_VERSION 2u
 #define LXMF_PEER_STORE_MAX_PEERS 1024u
 #define LXMF_PEER_NAME_MAX 128u
 #define LXMF_PEER_NOTE_MAX 1024u

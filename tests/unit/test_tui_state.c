@@ -183,6 +183,71 @@ static void test_contact_table_bound(void) {
     destroy_state(state);
 }
 
+static void set_peer_text(char *target, size_t *target_length,
+                          size_t capacity, const char *text) {
+    size_t length = strlen(text);
+    assert(length < capacity);
+    memcpy(target, text, length + 1u);
+    *target_length = length;
+}
+
+static void test_contact_persistence_preserves_peer_metadata(void) {
+    char path[] = "/tmp/nomad-state-peers-XXXXXX";
+    int descriptor = mkstemp(path);
+    assert(descriptor >= 0);
+    assert(close(descriptor) == 0);
+    assert(unlink(path) == 0);
+
+    tui_state_t *state = make_state();
+    assert(lxmf_peer_store_open(&state->peer_store, path) == LXMF_OK);
+
+    lxmf_peer_t original = {0};
+    original.address[0] = 0xacu;
+    set_peer_text(original.display_name, &original.display_name_len,
+                  sizeof original.display_name, "Remote Nomad");
+    set_peer_text(original.note, &original.note_len, sizeof original.note,
+                  "old note");
+    set_peer_text(original.draft, &original.draft_len, sizeof original.draft,
+                  "unfinished remote draft");
+    original.propagation = LXMF_PEER_PROPAGATION_PREFERRED;
+    original.has_propagation_node = true;
+    original.propagation_node[0] = 0x5au;
+    original.last_seen_ms = 123456u;
+    original.last_announce_ms = 123000u;
+    bool inserted = false;
+    assert(lxmf_peer_store_put(&state->peer_store, &original, &inserted) == LXMF_OK);
+    assert(inserted);
+
+    add_contact(state, original.address[0], TUI_TRUST_TRUSTED);
+    tui_contact_t *contact = &state->contacts[0];
+    contact->blocked = true;
+    contact->pinned = true;
+    contact->unread = 7u;
+    memcpy(contact->note, "new note", sizeof "new note");
+    tui_state_persist_contacts(state);
+
+    lxmf_peer_store_close(&state->peer_store);
+    assert(lxmf_peer_store_open(&state->peer_store, path) == LXMF_OK);
+    lxmf_peer_t stored = {0};
+    assert(lxmf_peer_store_get(&state->peer_store, original.address, &stored) ==
+           LXMF_OK);
+    assert(stored.trust == LXMF_PEER_TRUST_TRUSTED);
+    assert(stored.blocked && stored.pinned && stored.unread_count == 7u);
+    assert(strcmp(stored.note, "new note") == 0);
+    assert(strcmp(stored.display_name, original.display_name) == 0);
+    assert(strcmp(stored.draft, original.draft) == 0);
+    assert(stored.propagation == original.propagation);
+    assert(stored.has_propagation_node == original.has_propagation_node);
+    assert(memcmp(stored.propagation_node, original.propagation_node,
+                  sizeof stored.propagation_node) == 0);
+    assert(stored.last_seen_ms == original.last_seen_ms);
+    assert(stored.last_announce_ms == original.last_announce_ms);
+
+    lxmf_peer_store_close(&state->peer_store);
+    assert(unlink(path) == 0);
+    destroy_state(state);
+}
+
 static void add_node(tui_state_t *state, uint8_t tag, uint8_t hops,
                      rns_node_kind kind, double seen) {
     rns_node_record r;
@@ -383,5 +448,6 @@ int main(void) {
     test_scroll_is_clamped();
     test_open_conversation();
     test_contact_table_bound();
+    test_contact_persistence_preserves_peer_metadata();
     return 0;
 }
