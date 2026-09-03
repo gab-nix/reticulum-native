@@ -7,6 +7,7 @@
 #include "reticulum/kiss.h"
 #include "reticulum/local.h"
 #include "reticulum/packet.h"
+#include "reticulum/path_store.h"
 #include "reticulum/request.h"
 #include "reticulum/resource.h"
 #include "reticulum/proof.h"
@@ -2018,6 +2019,26 @@ size_t rns_runtime_path_snapshot(const rns_runtime_t *runtime, rns_path_entry *p
         paths[count++] = runtime->node.transport.paths[i];
     }
     return count;
+}
+
+rns_status_t rns_runtime_paths_export(const rns_runtime_t *runtime,
+                                      uint64_t wall_time_ms,
+                                      uint8_t *output, size_t output_capacity,
+                                      size_t *output_length,
+                                      size_t *encoded_count) {
+    if (runtime == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    return rns_path_store_encode(&runtime->node.transport, wall_time_ms, output,
+                                 output_capacity, output_length, encoded_count);
+}
+
+rns_status_t rns_runtime_paths_import(rns_runtime_t *runtime,
+                                      uint64_t wall_time_ms,
+                                      const uint8_t *input,
+                                      size_t input_length,
+                                      size_t *decoded_count) {
+    if (runtime == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    return rns_path_store_decode(&runtime->node.transport, wall_time_ms, input,
+                                 input_length, decoded_count);
 }
 
 rns_status_t rns_runtime_link_open(

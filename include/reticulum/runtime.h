@@ -336,6 +336,19 @@ rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime,
                                      rns_path_entry *path);
 size_t rns_runtime_path_snapshot(const rns_runtime_t *runtime,
                                  rns_path_entry *paths, size_t capacity);
+/* Portable path snapshots let applications provide their own durable storage.
+ * Wall time is explicit; the decoder deducts time spent offline and replaces
+ * the table only after validating the complete checksummed snapshot. */
+rns_status_t rns_runtime_paths_export(const rns_runtime_t *runtime,
+                                      uint64_t wall_time_ms,
+                                      uint8_t *output, size_t output_capacity,
+                                      size_t *output_length,
+                                      size_t *encoded_count);
+rns_status_t rns_runtime_paths_import(rns_runtime_t *runtime,
+                                      uint64_t wall_time_ms,
+                                      const uint8_t *input,
+                                      size_t input_length,
+                                      size_t *decoded_count);
 
 /* The returned link is runtime-attached and must be destroyed before or with
  * the runtime. Callbacks run synchronously from rns_runtime_poll(). */
