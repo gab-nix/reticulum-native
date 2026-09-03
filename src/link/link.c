@@ -81,7 +81,10 @@ static int responder_common(rns_link *link, const rns_identity *identity, const 
                             const uint8_t *raw, size_t raw_length, double timeout, rns_link_clock clock, void *context) {
     rns_packet packet; uint32_t mtu; uint8_t mode;
     if (!link || !identity || !identity->has_private || !raw || !clock || timeout <= 0 ||
-        !rns_packet_decode(&packet, raw, raw_length) || packet.packet_type != 2 || packet.data_length != 67 ||
+        !rns_packet_decode(&packet, raw, raw_length) || packet.packet_type != 2 ||
+        (packet.data_length != 64 && packet.data_length != 67)) return 0;
+    mtu = RNS_MTU; mode = RNS_LINK_MODE_AES256_CBC;
+    if (packet.data_length == 67 &&
         !rns_link_signalling_decode(packet.data + 64, &mtu, &mode)) return 0;
     memset(link, 0, sizeof(*link)); link->role = RNS_LINK_RESPONDER; link->state = RNS_LINK_HANDSHAKE;
     link->clock = clock; link->clock_context = context; link->request_time = clock(context); link->deadline = link->request_time + timeout;

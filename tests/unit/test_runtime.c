@@ -5,6 +5,13 @@
 #include <assert.h>
 #include <string.h>
 
+static void accepted_link(rns_runtime_destination_t *destination,
+                          rns_runtime_link_t *link, void *context) {
+    (void)destination;
+    (void)link;
+    (void)context;
+}
+
 /*
  * Routing and announce argument handling. End-to-end delivery is covered by
  * the two-instance loopback harness, which needs live sockets.
@@ -64,6 +71,8 @@ int main(void) {
     rns_runtime_interface_info_t info;
     rns_runtime_link_t *link = (rns_runtime_link_t *)1;
     rns_request_receipt_t *receipt = (rns_request_receipt_t *)1;
+    rns_runtime_destination_t *registration =
+        (rns_runtime_destination_t *)1;
     rns_identity remote;
     uint8_t destination[16] = {1U};
     size_t processed = 99U;
@@ -103,8 +112,29 @@ int main(void) {
     assert(rns_runtime_interface_info(runtime, 2U, &info) == RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_runtime_register_destination(runtime, destination) == RNS_OK);
     assert(rns_runtime_register_destination(runtime, destination) == RNS_OK);
+    assert(rns_runtime_register_link_destination(
+               NULL, destination, &remote, NULL, accepted_link, NULL,
+               &registration) == RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_runtime_register_link_destination(
+               runtime, destination, &remote, NULL, NULL, NULL,
+               &registration) == RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_runtime_register_link_destination(
+               runtime, destination, &remote, NULL, accepted_link, NULL,
+               &registration) == RNS_OK);
+    assert(registration != NULL);
+    assert(memcmp(rns_runtime_destination_hash(registration), destination,
+                  sizeof destination) == 0);
+    rns_runtime_destination_t *duplicate = NULL;
+    assert(rns_runtime_register_link_destination(
+               runtime, destination, &remote, NULL, accepted_link, NULL,
+               &duplicate) == RNS_ERROR_INVALID_STATE);
+    assert(duplicate == NULL);
+    rns_runtime_destination_destroy(registration);
+    /* The plain registration for the same hash remains live and removable. */
     assert(rns_runtime_unregister_destination(runtime, destination) == RNS_OK);
     assert(rns_runtime_unregister_destination(runtime, destination) == RNS_ERROR_NOT_FOUND);
+    assert(rns_runtime_destination_hash(NULL) == NULL);
+    rns_runtime_destination_destroy(NULL);
     assert(rns_runtime_request_path(runtime, destination) == RNS_ERROR_INVALID_STATE);
     assert(rns_runtime_path_lookup(runtime, destination, &(rns_path_entry){0}) == RNS_ERROR_NOT_FOUND);
     assert(rns_runtime_path_snapshot(runtime, NULL, 0U) == 0U);

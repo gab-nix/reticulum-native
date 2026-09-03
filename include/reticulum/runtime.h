@@ -17,10 +17,12 @@ extern "C" {
 
 typedef struct rns_runtime rns_runtime_t;
 typedef struct rns_runtime_link rns_runtime_link_t;
+typedef struct rns_runtime_destination rns_runtime_destination_t;
 typedef struct rns_request_receipt rns_request_receipt_t;
 typedef struct rns_packet_receipt rns_packet_receipt_t;
 
 #define RNS_RUNTIME_MAX_LINKS 16u
+#define RNS_RUNTIME_MAX_DESTINATIONS 32u
 #define RNS_RUNTIME_MAX_REQUESTS 8u
 #define RNS_RUNTIME_MAX_PACKET_RECEIPTS 64u
 #define RNS_REQUEST_DEFAULT_MAX_RESPONSE (8u * 1024u * 1024u)
@@ -52,6 +54,14 @@ typedef struct rns_runtime_link_options {
     rns_runtime_link_packet_callback_t packet_callback;
     void *callback_context;
 } rns_runtime_link_options_t;
+
+/* Called synchronously from rns_runtime_poll() after a structurally valid link
+ * request has been accepted and its signed LRPROOF has been transmitted. The
+ * link is in RNS_LINK_HANDSHAKE until its encrypted RTT confirmation arrives.
+ * The accepted link is runtime-attached and caller-owned. */
+typedef void (*rns_runtime_inbound_link_callback_t)(
+    rns_runtime_destination_t *destination, rns_runtime_link_t *link,
+    void *context);
 
 typedef enum rns_request_state {
     RNS_REQUEST_PENDING = 0,
@@ -191,6 +201,19 @@ rns_status_t rns_runtime_register_destination(rns_runtime_t *runtime,
                                               const uint8_t destination_hash[16]);
 rns_status_t rns_runtime_unregister_destination(rns_runtime_t *runtime,
                                                 const uint8_t destination_hash[16]);
+/* Registers a SINGLE destination capable of accepting inbound links. The
+ * identity is copied and must contain private key material. Link callbacks are
+ * copied into each accepted link; accepted_callback receives its opaque
+ * caller-owned handle. */
+rns_status_t rns_runtime_register_link_destination(
+    rns_runtime_t *runtime, const uint8_t destination_hash[16],
+    const rns_identity *identity,
+    const rns_runtime_link_options_t *link_options,
+    rns_runtime_inbound_link_callback_t accepted_callback,
+    void *callback_context, rns_runtime_destination_t **destination);
+const uint8_t *rns_runtime_destination_hash(
+    const rns_runtime_destination_t *destination);
+void rns_runtime_destination_destroy(rns_runtime_destination_t *destination);
 /* Broadcasts an RNS path request. A responding peer will re-announce the
  * destination, allowing callers to resolve its current route and identity. */
 rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,

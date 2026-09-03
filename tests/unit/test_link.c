@@ -15,11 +15,13 @@ int main(void) {
     rns_packet request_packet = {0};
     uint8_t request_payload[RNS_LINK_REQUEST_BYTES];
     uint8_t request_raw[RNS_MTU];
+    uint8_t legacy_raw[RNS_MTU];
     uint8_t proof[RNS_LINK_PROOF_BYTES];
     uint8_t rtt_token[128];
     uint8_t encrypted[128];
     uint8_t decrypted[128];
     size_t request_length;
+    size_t legacy_length;
     size_t token_length;
     size_t encrypted_length;
     size_t decrypted_length;
@@ -69,6 +71,28 @@ int main(void) {
     encrypted[encrypted_length - 1] ^= 1;
     assert(!rns_link_decrypt(&responder, encrypted, encrypted_length, decrypted,
                              sizeof(decrypted), &decrypted_length));
+
+    /* Peers predating MTU signalling send only their two ephemeral public
+     * keys. Current responders accept that bounded legacy request and answer
+     * with the current proof shape. */
+    request_packet.data = request_payload;
+    request_packet.data_length = RNS_LINK_REQUEST_KEY_BYTES;
+    assert(rns_packet_encode(&request_packet, legacy_raw, sizeof legacy_raw,
+                             &legacy_length));
+    responder_time = 200.0;
+    assert(rns_link_responder_accept(&responder, &destination, legacy_raw,
+                                     legacy_length, 10.0, test_clock,
+                                     &responder_time));
+    assert(responder.mtu == RNS_MTU &&
+           responder.mode == RNS_LINK_MODE_AES256_CBC);
+    assert(rns_link_build_proof(&responder, proof));
+
+    request_packet.data_length = RNS_LINK_REQUEST_KEY_BYTES - 1u;
+    assert(rns_packet_encode(&request_packet, legacy_raw, sizeof legacy_raw,
+                             &legacy_length));
+    assert(!rns_link_responder_accept(&responder, &destination, legacy_raw,
+                                      legacy_length, 10.0, test_clock,
+                                      &responder_time));
 
     initiator.state = RNS_LINK_PENDING;
     initiator.deadline = 101.0;
