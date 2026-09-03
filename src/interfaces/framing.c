@@ -160,7 +160,7 @@ void rns_kiss_decoder_reset(rns_kiss_decoder_t *decoder) {
 }
 
 static rns_status_t kiss_fend(rns_kiss_decoder_t *decoder,
-                              rns_frame_callback_t callback,
+                              rns_kiss_frame_callback_t callback,
                               void *context) {
     rns_status_t status = RNS_OK;
 
@@ -168,9 +168,9 @@ static rns_status_t kiss_fend(rns_kiss_decoder_t *decoder,
         decoder->malformed_frames++;
         decoder->discarding = true;
     }
-    if (decoder->synchronized && decoder->have_command && !decoder->discarding &&
-        (decoder->command & 0x0fU) == RNS_KISS_DATA_COMMAND) {
-        status = callback(decoder->buffer, decoder->length, context);
+    if (decoder->synchronized && decoder->have_command && !decoder->discarding) {
+        status = callback(decoder->port, decoder->command, decoder->buffer,
+                          decoder->length, context);
     }
     decoder->length = 0U;
     decoder->synchronized = true;
@@ -180,11 +180,9 @@ static rns_status_t kiss_fend(rns_kiss_decoder_t *decoder,
     return status;
 }
 
-rns_status_t rns_kiss_decoder_feed(rns_kiss_decoder_t *decoder,
-                                   const uint8_t *input,
-                                   size_t input_length,
-                                   rns_frame_callback_t callback,
-                                   void *context) {
+rns_status_t rns_kiss_decoder_feed_commands(
+    rns_kiss_decoder_t *decoder, const uint8_t *input, size_t input_length,
+    rns_kiss_frame_callback_t callback, void *context) {
     size_t index;
 
     if (decoder == NULL || callback == NULL || decoder->buffer == NULL ||
@@ -204,7 +202,8 @@ rns_status_t rns_kiss_decoder_feed(rns_kiss_decoder_t *decoder,
             continue;
         }
         if (!decoder->have_command) {
-            decoder->command = byte;
+            decoder->port = (uint8_t)(byte >> 4U);
+            decoder->command = (uint8_t)(byte & 0x0fU);
             decoder->have_command = true;
             continue;
         }
@@ -237,45 +236,71 @@ rns_status_t rns_kiss_decoder_feed(rns_kiss_decoder_t *decoder,
     return RNS_OK;
 }
 
+typedef struct kiss_data_adapter {
+    rns_frame_callback_t callback;
+    void *context;
+} kiss_data_adapter_t;
+
+static rns_status_t kiss_data_only(uint8_t port, uint8_t command,
+                                   const uint8_t *frame, size_t frame_length,
+                                   void *opaque) {
+    kiss_data_adapter_t *adapter = opaque;
+    (void)port;
+    if (command != RNS_KISS_DATA_COMMAND) return RNS_OK;
+    return adapter->callback(frame, frame_length, adapter->context);
+}
+
+rns_status_t rns_kiss_decoder_feed(rns_kiss_decoder_t *decoder,
+                                   const uint8_t *input,
+                                   size_t input_length,
+                                   rns_frame_callback_t callback,
+                                   void *context) {
+    if (callback == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    kiss_data_adapter_t adapter = {callback, context};
+    return rns_kiss_decoder_feed_commands(decoder, input, input_length,
+                                          kiss_data_only, &adapter);
+}
+
+rns_status_t rns_kiss_encode_command(uint8_t port, uint8_t command,
+                                     const uint8_t *payload,
+                                     size_t payload_length, uint8_t *output,
+                                     size_t output_capacity,
+                                     size_t *output_length) {
+    size_t index;
+    size_t position = 0U;
+    if (port > 15U || command > 15U ||
+        (payload == NULL && payload_length != 0U) || output == NULL ||
+        output_length == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    *output_length = 0U;
+    if (output_capacity < 3U) return RNS_ERROR_OVERFLOW;
+    output[position++] = RNS_KISS_FEND;
+    output[position++] = (uint8_t)((port << 4U) | command);
+    for (index = 0U; index < payload_length; ++index) {
+        uint8_t byte = payload[index];
+        if (byte == RNS_KISS_FEND || byte == RNS_KISS_FESC) {
+            if (output_capacity - position < 2U) return RNS_ERROR_OVERFLOW;
+            output[position++] = RNS_KISS_FESC;
+            output[position++] = byte == RNS_KISS_FEND ? RNS_KISS_TFEND
+                                                       : RNS_KISS_TFESC;
+        } else {
+            if (position >= output_capacity) return RNS_ERROR_OVERFLOW;
+            output[position++] = byte;
+        }
+    }
+    if (position >= output_capacity) return RNS_ERROR_OVERFLOW;
+    output[position++] = RNS_KISS_FEND;
+    *output_length = position;
+    return RNS_OK;
+}
+
 rns_status_t rns_kiss_encode(uint8_t port,
                              const uint8_t *frame,
                              size_t frame_length,
                              uint8_t *output,
                              size_t output_capacity,
                              size_t *output_length) {
-    size_t index;
-    size_t position = 0U;
-
-    if (port > 15U || (frame == NULL && frame_length != 0U) ||
-        output == NULL || output_length == NULL) {
-        return RNS_ERROR_INVALID_ARGUMENT;
-    }
-    *output_length = 0U;
-    if (output_capacity < 3U) {
-        return RNS_ERROR_OVERFLOW;
-    }
-    output[position++] = RNS_KISS_FEND;
-    output[position++] = (uint8_t)(port << 4U);
-    for (index = 0U; index < frame_length; ++index) {
-        uint8_t byte = frame[index];
-        if (byte == RNS_KISS_FEND || byte == RNS_KISS_FESC) {
-            if (position > output_capacity || output_capacity - position < 2U) {
-                return RNS_ERROR_OVERFLOW;
-            }
-            output[position++] = RNS_KISS_FESC;
-            output[position++] = byte == RNS_KISS_FEND ? RNS_KISS_TFEND : RNS_KISS_TFESC;
-        } else {
-            if (position >= output_capacity) {
-                return RNS_ERROR_OVERFLOW;
-            }
-            output[position++] = byte;
-        }
-    }
-    if (position >= output_capacity) {
-        return RNS_ERROR_OVERFLOW;
-    }
-    output[position++] = RNS_KISS_FEND;
-    *output_length = position;
-    return RNS_OK;
+    return rns_kiss_encode_command(port, RNS_KISS_DATA_COMMAND, frame,
+                                   frame_length, output, output_capacity,
+                                   output_length);
 }
-

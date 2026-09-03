@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "evidence": "behavioral source review and local pseudo-terminal tests",
+  "reticulum": {
+    "version": "1.5.2",
+    "commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+    "source": "RNS/Interfaces/KISSInterface.py"
+  },
+  "reviewed_behavior": [
+    "serial defaults and configuration keys",
+    "KISS command and escaping values",
+    "startup radio parameter commands",
+    "READY flow control and timeout",
+    "five-second reconnect interval"
+  ],
+  "limitations": [
+    "no upstream code was copied",
+    "no live Python or physical KISS device exchange was performed",
+    "pseudo-terminal tests are local C implementation evidence only",
+    "RNode command mode and beacon identification are outside this milestone"
+  ]
+}

@@ -43,6 +43,14 @@ typedef struct rns_config_interface {
     uint16_t forward_port;
     char device[RNS_CONFIG_VALUE_MAX];
     uint32_t speed;
+    uint16_t preamble_ms;
+    uint16_t tx_tail_ms;
+    uint16_t slot_time_ms;
+    uint8_t persistence;
+    uint8_t data_bits;
+    char parity;
+    uint8_t stop_bits;
+    bool flow_control;
     uint32_t frequency;
     uint32_t bandwidth;
     int32_t tx_power;

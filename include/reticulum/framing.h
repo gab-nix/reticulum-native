@@ -18,10 +18,22 @@ extern "C" {
 #define RNS_KISS_TFEND 0xdcU
 #define RNS_KISS_TFESC 0xddU
 #define RNS_KISS_DATA_COMMAND 0x00U
+#define RNS_KISS_TXDELAY_COMMAND 0x01U
+#define RNS_KISS_PERSISTENCE_COMMAND 0x02U
+#define RNS_KISS_SLOTTIME_COMMAND 0x03U
+#define RNS_KISS_TXTAIL_COMMAND 0x04U
+#define RNS_KISS_FULLDUPLEX_COMMAND 0x05U
+#define RNS_KISS_SETHARDWARE_COMMAND 0x06U
+#define RNS_KISS_READY_COMMAND 0x0fU
 
 typedef rns_status_t (*rns_frame_callback_t)(const uint8_t *frame,
                                              size_t frame_length,
                                              void *context);
+typedef rns_status_t (*rns_kiss_frame_callback_t)(uint8_t port,
+                                                  uint8_t command,
+                                                  const uint8_t *frame,
+                                                  size_t frame_length,
+                                                  void *context);
 
 typedef struct rns_hdlc_decoder {
     uint8_t *buffer;
@@ -41,6 +53,7 @@ typedef struct rns_kiss_decoder {
     size_t malformed_frames;
     size_t oversized_frames;
     uint8_t command;
+    uint8_t port;
     bool synchronized;
     bool have_command;
     bool escaped;
@@ -71,6 +84,14 @@ rns_status_t rns_kiss_decoder_feed(rns_kiss_decoder_t *decoder,
                                    size_t input_length,
                                    rns_frame_callback_t callback,
                                    void *context);
+rns_status_t rns_kiss_decoder_feed_commands(
+    rns_kiss_decoder_t *decoder, const uint8_t *input, size_t input_length,
+    rns_kiss_frame_callback_t callback, void *context);
+rns_status_t rns_kiss_encode_command(uint8_t port, uint8_t command,
+                                     const uint8_t *payload,
+                                     size_t payload_length, uint8_t *output,
+                                     size_t output_capacity,
+                                     size_t *output_length);
 rns_status_t rns_kiss_encode(uint8_t port,
                              const uint8_t *frame,
                              size_t frame_length,
@@ -83,4 +104,3 @@ rns_status_t rns_kiss_encode(uint8_t port,
 #endif
 
 #endif
-

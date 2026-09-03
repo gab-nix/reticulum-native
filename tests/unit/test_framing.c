@@ -11,9 +11,30 @@ typedef struct capture {
     size_t count;
 } capture_t;
 
+typedef struct kiss_capture {
+    uint8_t port;
+    uint8_t command;
+    uint8_t bytes[8];
+    size_t length;
+    size_t count;
+} kiss_capture_t;
+
 static rns_status_t capture_frame(const uint8_t *frame, size_t length, void *context) {
     capture_t *capture = context;
     assert(length <= sizeof(capture->bytes));
+    memcpy(capture->bytes, frame, length);
+    capture->length = length;
+    capture->count++;
+    return RNS_OK;
+}
+
+static rns_status_t capture_kiss(uint8_t port, uint8_t command,
+                                 const uint8_t *frame, size_t length,
+                                 void *context) {
+    kiss_capture_t *capture = context;
+    assert(length <= sizeof(capture->bytes));
+    capture->port = port;
+    capture->command = command;
     memcpy(capture->bytes, frame, length);
     capture->length = length;
     capture->count++;
@@ -90,11 +111,28 @@ static void test_encoder_bounds(void) {
            RNS_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_kiss_commands_and_ports(void) {
+    static const uint8_t stream[] = {
+        RNS_KISS_FEND, 0x3fU, RNS_KISS_FEND,
+        RNS_KISS_FEND, 0x21U, RNS_KISS_FESC, RNS_KISS_TFEND,
+        RNS_KISS_FEND
+    };
+    uint8_t storage[8];
+    rns_kiss_decoder_t decoder;
+    kiss_capture_t capture = {0};
+    rns_kiss_decoder_init(&decoder, storage, sizeof(storage));
+    assert(rns_kiss_decoder_feed_commands(&decoder, stream, sizeof(stream),
+                                          capture_kiss, &capture) == RNS_OK);
+    assert(capture.count == 2U && capture.port == 2U);
+    assert(capture.command == RNS_KISS_TXDELAY_COMMAND);
+    assert(capture.length == 1U && capture.bytes[0] == RNS_KISS_FEND);
+}
+
 int main(void) {
     test_hdlc_round_trip_streamed();
     test_hdlc_recovery();
     test_kiss_round_trip_and_recovery();
     test_encoder_bounds();
+    test_kiss_commands_and_ports();
     return 0;
 }
-

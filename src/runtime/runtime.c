@@ -4,6 +4,7 @@
 #include "reticulum/crypto.h"
 #include "reticulum/destination.h"
 #include "reticulum/hal.h"
+#include "reticulum/kiss.h"
 #include "reticulum/local.h"
 #include "reticulum/packet.h"
 #include "reticulum/request.h"
@@ -28,7 +29,9 @@ typedef struct runtime_interface {
     rns_tcp_endpoint_t *tcp;
     rns_tcp_endpoint_t *accepted;
     rns_local_instance_t *local;
+    rns_kiss_endpoint_t *kiss;
     bool local_server;
+    uint64_t kiss_reported_drops;
     double reconnect_at;
     double reconnect_delay;
 } runtime_interface_t;
@@ -241,6 +244,8 @@ static rns_status_t send_internal(rns_runtime_t *runtime, size_t index,
         status = rns_tcp_queue_frame(interface->tcp, packet, length);
     else if (interface->local != NULL)
         status = rns_local_instance_send(interface->local, packet, length);
+    else if (interface->kiss != NULL)
+        status = rns_kiss_endpoint_send(interface->kiss, packet, length);
     if (status == RNS_OK) {
         interface->info.packets_sent++;
         interface->info.bytes_sent += length;
@@ -1041,6 +1046,28 @@ static rns_status_t start_interface(rns_runtime_t *runtime,
             const char *listen_ip = source->listen_ip[0] != '\0' ? source->listen_ip : "0.0.0.0";
             status = rns_tcp_listen(destination->tcp, listen_ip, source->listen_port, 8);
         }
+    } else if (source->type == RNS_CONFIG_KISS) {
+        rns_kiss_options_t options;
+        rns_kiss_options_init(&options);
+        options.device = source->device;
+        if (source->speed != 0U) options.speed = source->speed;
+        if (source->data_bits != 0U) options.data_bits = source->data_bits;
+        if (source->parity != '\0') options.parity = source->parity;
+        if (source->stop_bits != 0U) options.stop_bits = source->stop_bits;
+        options.preamble_ms = source->preamble_ms;
+        options.tx_tail_ms = source->tx_tail_ms;
+        options.persistence = source->persistence;
+        options.slot_time_ms = source->slot_time_ms;
+        options.flow_control = source->flow_control;
+        options.clock = runtime->reconnect_clock;
+        options.clock_context = runtime->reconnect_clock_context;
+        status = rns_kiss_endpoint_create(&destination->kiss, &options);
+        if (status == RNS_OK) {
+            rns_kiss_info_t info;
+            if (rns_kiss_endpoint_info(destination->kiss, &info) == RNS_OK &&
+                info.state == RNS_KISS_DOWN)
+                status = info.last_error;
+        }
     }
     destination->info.last_error = status;
     if (status == RNS_ERROR_UNSUPPORTED) destination->info.state = RNS_RUNTIME_INTERFACE_UNSUPPORTED;
@@ -1052,6 +1079,16 @@ static rns_status_t start_interface(rns_runtime_t *runtime,
         else {
             destination->info.state = RNS_RUNTIME_INTERFACE_DOWN;
             tcp_schedule_reconnect(runtime, destination);
+        }
+    } else if (source->type == RNS_CONFIG_KISS && status == RNS_OK) {
+        rns_kiss_info_t info;
+        if (rns_kiss_endpoint_info(destination->kiss, &info) == RNS_OK) {
+            destination->info.state = info.state == RNS_KISS_UP
+                                          ? RNS_RUNTIME_INTERFACE_UP
+                                          : (info.state == RNS_KISS_CONFIGURING
+                                                 ? RNS_RUNTIME_INTERFACE_STARTING
+                                                 : RNS_RUNTIME_INTERFACE_DOWN);
+            destination->info.last_error = info.last_error;
         }
     } else destination->info.state = status == RNS_OK ? RNS_RUNTIME_INTERFACE_UP : RNS_RUNTIME_INTERFACE_DOWN;
     return status;
@@ -1210,6 +1247,7 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
         rns_tcp_endpoint_destroy(runtime->interfaces[i].accepted);
         rns_tcp_endpoint_destroy(runtime->interfaces[i].tcp);
         rns_local_instance_destroy(runtime->interfaces[i].local);
+        rns_kiss_endpoint_destroy(runtime->interfaces[i].kiss);
     }
     free(runtime->plain_destinations);
     runtime->plain_destinations = NULL;
@@ -1302,6 +1340,31 @@ static rns_status_t poll_local(runtime_interface_t *interface,
     return status;
 }
 
+static rns_status_t poll_kiss(runtime_interface_t *interface,
+                              receive_context_t *context) {
+    size_t processed = 0U;
+    rns_status_t status = rns_kiss_endpoint_poll(
+        interface->kiss, context->remaining, tcp_receive, context, &processed);
+    (void)processed; /* ingress updates the shared processed count. */
+    rns_kiss_info_t info;
+    if (rns_kiss_endpoint_info(interface->kiss, &info) == RNS_OK) {
+        interface->info.state = info.state == RNS_KISS_UP
+                                    ? RNS_RUNTIME_INTERFACE_UP
+                                    : (info.state == RNS_KISS_CONFIGURING
+                                           ? RNS_RUNTIME_INTERFACE_STARTING
+                                           : RNS_RUNTIME_INTERFACE_DOWN);
+        interface->info.last_error = info.last_error;
+        interface->info.connection_attempts = info.connection_attempts;
+        interface->info.connections_established = info.connections_established;
+        interface->info.connections_lost = info.connections_lost;
+        if (info.packets_dropped >= interface->kiss_reported_drops)
+            interface->info.packets_dropped +=
+                info.packets_dropped - interface->kiss_reported_drops;
+        interface->kiss_reported_drops = info.packets_dropped;
+    }
+    return status;
+}
+
 rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t *processed) {
     rns_status_t first_error = RNS_OK;
     if (runtime == NULL || processed == NULL) return RNS_ERROR_INVALID_ARGUMENT;
@@ -1365,6 +1428,8 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
         rns_status_t status = RNS_OK;
         if (interface->local != NULL) {
             status = poll_local(interface, &context);
+        } else if (interface->kiss != NULL) {
+            status = poll_kiss(interface, &context);
         } else if (interface->tcp != NULL &&
             interface->info.state != RNS_RUNTIME_INTERFACE_DISABLED &&
             interface->info.state != RNS_RUNTIME_INTERFACE_UNSUPPORTED) {

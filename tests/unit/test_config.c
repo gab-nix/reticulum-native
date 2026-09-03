@@ -36,6 +36,13 @@ static const char valid_config[] =
     "    type = AutoInterface\n"
     "    enabled = Yes\n";
 
+static const char kiss_config[] =
+    "[reticulum]\nshare_instance = No\n[interfaces]\n[[TNC]]\n"
+    "type = KISSInterface\nenabled = Yes\nport = /dev/tty.test\n"
+    "flow_control = Yes\npreamble = 420\ntxtail = 30\n"
+    "persistence = 128\nslottime = 40\ndatabits = 7\n"
+    "parity = even\nstopbits = 2\n";
+
 int main(void) {
     static const char unsupported[] =
         "[interfaces]\n[[Mystery]]\ntype = PipeInterface\nenabled = Yes\n";
@@ -96,5 +103,20 @@ int main(void) {
     assert(rns_local_options_from_config(&config, RNS_LOCAL_ROLE_AUTO,
                                          &local_options) ==
            RNS_ERROR_UNSUPPORTED);
+    assert(rns_config_parse(kiss_config, sizeof(kiss_config) - 1U, &config,
+                            &diagnostic) == RNS_OK);
+    assert(config.interfaces[0].speed == 9600U);
+    assert(config.interfaces[0].preamble_ms == 420U &&
+           config.interfaces[0].tx_tail_ms == 30U &&
+           config.interfaces[0].slot_time_ms == 40U &&
+           config.interfaces[0].persistence == 128U &&
+           config.interfaces[0].flow_control &&
+           config.interfaces[0].data_bits == 7U &&
+           config.interfaces[0].parity == 'E' &&
+           config.interfaces[0].stop_bits == 2U);
+    assert(rns_config_emit(&config, emitted, sizeof(emitted),
+                           &emitted_length) == RNS_OK);
+    assert(rns_config_parse(emitted, emitted_length, &reparsed, &diagnostic) ==
+           RNS_OK);
     return 0;
 }

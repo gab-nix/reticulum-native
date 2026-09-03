@@ -227,6 +227,49 @@ static rns_status_t parse_interface_value(rns_config_interface_t *interface,
         if (copy_value(interface->device, sizeof(interface->device), value)) return RNS_OK;
     } else if (strcmp(key, "speed") == 0) {
         if (parse_unsigned(value, UINT32_MAX, &interface->speed) && interface->speed != 0U) return RNS_OK;
+    } else if (strcmp(key, "preamble") == 0) {
+        if (parse_unsigned(value, UINT16_MAX, &number)) {
+            interface->preamble_ms = (uint16_t)number;
+            return RNS_OK;
+        }
+    } else if (strcmp(key, "txtail") == 0) {
+        if (parse_unsigned(value, UINT16_MAX, &number)) {
+            interface->tx_tail_ms = (uint16_t)number;
+            return RNS_OK;
+        }
+    } else if (strcmp(key, "slottime") == 0) {
+        if (parse_unsigned(value, UINT16_MAX, &number)) {
+            interface->slot_time_ms = (uint16_t)number;
+            return RNS_OK;
+        }
+    } else if (strcmp(key, "persistence") == 0) {
+        if (parse_unsigned(value, UINT8_MAX, &number)) {
+            interface->persistence = (uint8_t)number;
+            return RNS_OK;
+        }
+    } else if (strcmp(key, "flow_control") == 0) {
+        if (parse_bool(value, &interface->flow_control)) return RNS_OK;
+    } else if (strcmp(key, "databits") == 0) {
+        if (parse_unsigned(value, 8U, &number) && number >= 5U) {
+            interface->data_bits = (uint8_t)number;
+            return RNS_OK;
+        }
+    } else if (strcmp(key, "parity") == 0) {
+        if (equal_ignore_case(value, "N") || equal_ignore_case(value, "none"))
+            interface->parity = 'N';
+        else if (equal_ignore_case(value, "E") ||
+                 equal_ignore_case(value, "even"))
+            interface->parity = 'E';
+        else if (equal_ignore_case(value, "O") ||
+                 equal_ignore_case(value, "odd"))
+            interface->parity = 'O';
+        else goto invalid_value;
+        return RNS_OK;
+    } else if (strcmp(key, "stopbits") == 0) {
+        if (parse_unsigned(value, 2U, &number) && number >= 1U) {
+            interface->stop_bits = (uint8_t)number;
+            return RNS_OK;
+        }
     } else if (strcmp(key, "frequency") == 0) {
         if (parse_unsigned(value, UINT32_MAX, &interface->frequency)) return RNS_OK;
     } else if (strcmp(key, "bandwidth") == 0) {
@@ -248,6 +291,7 @@ static rns_status_t parse_interface_value(rns_config_interface_t *interface,
                        "unsupported option '%s' in interface '%s'", key, interface->name);
         return RNS_ERROR_UNSUPPORTED;
     }
+invalid_value:
     set_diagnostic(diagnostic, line, RNS_ERROR_PROTOCOL,
                    "invalid value '%s' for option '%s' in interface '%s'",
                    value, key, interface->name);
@@ -347,6 +391,14 @@ rns_status_t rns_config_parse(const char *text,
                 }
                 current = &config->interfaces[config->interface_count++];
                 memset(current, 0, sizeof(*current));
+                current->speed = 9600U;
+                current->preamble_ms = 350U;
+                current->tx_tail_ms = 20U;
+                current->slot_time_ms = 20U;
+                current->persistence = 64U;
+                current->data_bits = 8U;
+                current->parity = 'N';
+                current->stop_bits = 1U;
                 if (!copy_value(current->name, sizeof(current->name), name)) {
                     set_diagnostic(diagnostic, line_number, RNS_ERROR_OVERFLOW, "interface name is too long");
                     return RNS_ERROR_OVERFLOW;
@@ -462,6 +514,18 @@ rns_status_t rns_config_emit(const rns_config_t *config,
         if ((item->type == RNS_CONFIG_KISS || item->type == RNS_CONFIG_RNODE) &&
             !emit(&emitter, "    port = %s\n    speed = %u\n", item->device,
                   (unsigned int)item->speed)) return RNS_ERROR_OVERFLOW;
+        if (item->type == RNS_CONFIG_KISS &&
+            !emit(&emitter,
+                  "    preamble = %u\n    txtail = %u\n    persistence = %u\n"
+                  "    slottime = %u\n    flow_control = %s\n"
+                  "    databits = %u\n    parity = %c\n    stopbits = %u\n",
+                  (unsigned int)item->preamble_ms,
+                  (unsigned int)item->tx_tail_ms,
+                  (unsigned int)item->persistence,
+                  (unsigned int)item->slot_time_ms,
+                  item->flow_control ? "Yes" : "No",
+                  (unsigned int)item->data_bits, item->parity,
+                  (unsigned int)item->stop_bits)) return RNS_ERROR_OVERFLOW;
         if (item->type == RNS_CONFIG_RNODE &&
             !emit(&emitter, "    frequency = %u\n    bandwidth = %u\n    txpower = %d\n"
                            "    spreadingfactor = %u\n    codingrate = %u\n",
