@@ -86,6 +86,11 @@ static int responder_common(rns_link *link, const rns_identity *identity, const 
     mtu = RNS_MTU; mode = RNS_LINK_MODE_AES256_CBC;
     if (packet.data_length == 67 &&
         !rns_link_signalling_decode(packet.data + 64, &mtu, &mode)) return 0;
+    /* A responder must never confirm a peer-proposed MTU larger than its own
+     * packet and framing buffers. Stream peers can advertise much larger link
+     * MTUs; echoing that value makes their Resource parts impossible to
+     * receive safely. */
+    if (mtu > RNS_MTU) mtu = RNS_MTU;
     memset(link, 0, sizeof(*link)); link->role = RNS_LINK_RESPONDER; link->state = RNS_LINK_HANDSHAKE;
     link->clock = clock; link->clock_context = context; link->request_time = clock(context); link->deadline = link->request_time + timeout;
     link->mtu = mtu; link->mode = mode; memcpy(link->peer_public, packet.data, 32); memcpy(link->peer_signing_public, packet.data + 32, 32);

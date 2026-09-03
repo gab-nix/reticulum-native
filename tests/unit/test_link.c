@@ -87,6 +87,30 @@ int main(void) {
            responder.mode == RNS_LINK_MODE_AES256_CBC);
     assert(rns_link_build_proof(&responder, proof));
 
+    /* A high-MTU stream initiator is negotiated down to this
+     * implementation's bounded packet storage. */
+    rns_link large_mtu_initiator;
+    assert(rns_link_initiator_init(&large_mtu_initiator, &destination,
+                                   16384U, 10.0, test_clock,
+                                   &initiator_time));
+    assert(rns_link_build_request_payload(&large_mtu_initiator,
+                                          request_payload));
+    request_packet.data = request_payload;
+    request_packet.data_length = sizeof request_payload;
+    assert(rns_packet_encode(&request_packet, request_raw, sizeof request_raw,
+                             &request_length));
+    assert(rns_link_initiator_set_request_packet(&large_mtu_initiator,
+                                                 request_raw,
+                                                 request_length));
+    assert(rns_link_responder_accept(&responder, &destination, request_raw,
+                                     request_length, 10.0, test_clock,
+                                     &responder_time));
+    assert(responder.mtu == RNS_MTU);
+    assert(rns_link_build_proof(&responder, proof));
+    assert(rns_link_initiator_accept_proof(&large_mtu_initiator, proof,
+                                           sizeof proof));
+    assert(large_mtu_initiator.mtu == RNS_MTU);
+
     request_packet.data_length = RNS_LINK_REQUEST_KEY_BYTES - 1u;
     assert(rns_packet_encode(&request_packet, legacy_raw, sizeof legacy_raw,
                              &legacy_length));
