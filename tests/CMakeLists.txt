@@ -90,6 +90,7 @@ reticulum_add_test(test_resource_sender integration/test_resource_sender.c)
 reticulum_add_test(test_runtime_resource integration/test_runtime_resource.c)
 reticulum_add_test(test_lxmf_propagation_session integration/test_lxmf_propagation_session.c)
 reticulum_add_test(test_hosted_node unit/test_hosted_node.c)
+reticulum_add_test(test_hosted_form unit/test_hosted_form.c)
 reticulum_add_test(test_hosted_node_link integration/test_hosted_node_link.c)
 
 if(TARGET rnid)

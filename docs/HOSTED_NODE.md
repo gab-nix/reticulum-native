@@ -22,6 +22,13 @@ each request, capped at 16 KiB by default. The configurable upper bound is
 runtime's current single-segment Resource implementation. Setting a larger
 storage bound does not add multi-segment transfer support.
 
+`reticulum/hosted_form.h` provides the separate allocation-free decoder for
+bounded form request objects. It accepts exactly one MessagePack map (or nil),
+retains scalar keys beginning `field_` or `var_`, and structurally validates
+and skips other entries. Returned spans alias the caller's immutable request
+buffer. This API deliberately does not create environment strings or execute
+the page; it is a safe seam for a future application-owned page callback.
+
 ## Safety and current boundaries
 
 - Roots are pinned by directory descriptors. Each descendant is opened with
@@ -44,6 +51,10 @@ storage bound does not add multi-segment transfer support.
 - Automatic scans, default index generation, executable pages,
   UTF-8 path names, refresh jobs, request statistics, daemon/TUI controls and
   streaming downloads remain unimplemented.
+- Executable pages are intentionally blocked on the current portable design.
+  macOS has no usable descriptor-execution primitive equivalent to `fexecve`;
+  reopening a validated pathname for execution would permit a local file-swap
+  race. No pathname fallback or shell invocation is used.
 
 ## Evidence
 
@@ -55,3 +66,5 @@ allow/deny/malformed changes, the upstream denial page, fresh small-page packet
 responses, 2 KiB Resource responses and service lifetime. These are C-to-C tests,
 not stock NomadNet interoperability evidence. Executable `.allowed` generators
 from upstream remain unsupported rather than being run implicitly.
+`test_hosted_form` covers the bounded MessagePack form view independently of
+execution. Its local codec tests are not upstream network evidence.
