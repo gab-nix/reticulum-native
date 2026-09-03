@@ -49,11 +49,17 @@ static size_t ensure_contact(tui_state_t *state,
 
 /* Copies one stored message into the in-memory history and its conversation. */
 static bool ingest_message(tui_state_t *state, const lxmf_store_message_t *message) {
-    if (state->message_count >= TUI_MAX_MESSAGES) return false;
+    if (state->message_count >= TUI_MAX_MESSAGES ||
+        message->content.len > LXMF_STORE_MAX_CONTENT ||
+        (message->content.len != 0u && message->content.data == NULL)) return false;
     tui_message_t *copy = &state->messages[state->message_count];
     copy->value = *message;
-    memcpy(copy->content, message->content.data, message->content.len);
+    if (message->content.len != 0u)
+        memcpy(copy->content, message->content.data, message->content.len);
     copy->value.content.data = copy->content;
+    /* Full representations belong to the journal, not to this preview cache.
+     * Callback and compose-buffer spans expire when their owner returns. */
+    copy->value.packed = (lxmf_slice_t){NULL, 0u};
     const uint8_t *peer = message_peer(state, message);
     size_t index = ensure_contact(state, peer);
     if (index == state->contact_count) return false;
@@ -239,6 +245,29 @@ static void recalculate_contact(tui_state_t *state, size_t contact) {
     }
 }
 
+static void remove_cached_message(tui_state_t *state, size_t position) {
+    uint8_t peer[LXMF_DESTINATION_LENGTH];
+    lxmf_store_message_t *value = &state->messages[position].value;
+    memcpy(peer, message_peer(state, value), sizeof peer);
+    bool incoming = memcmp(value->source, state->local,
+                           LXMF_DESTINATION_LENGTH) != 0;
+    if (position + 1u < state->message_count)
+        memmove(&state->messages[position], &state->messages[position + 1u],
+                (state->message_count - position - 1u) * sizeof state->messages[0]);
+    state->message_count--;
+    /* memmove relocates the inline buffers but not the pointers into them. */
+    for (size_t i = position; i < state->message_count; ++i)
+        state->messages[i].value.content.data = state->messages[i].content;
+    memset(&state->messages[state->message_count], 0, sizeof state->messages[0]);
+    size_t contact = contact_index(state, peer);
+    if (contact < state->contact_count) {
+        if (incoming && state->contacts[contact].unread > 0u)
+            state->contacts[contact].unread--;
+        recalculate_contact(state, contact);
+    }
+    state->filter_dirty = true;
+}
+
 void tui_state_apply_router_event(tui_state_t *state,
                                   const lxmf_router_event_t *event) {
     if (state == NULL || event == NULL) return;
@@ -297,22 +326,7 @@ void tui_state_apply_signature(tui_state_t *state,
                                         : "Message sender is not verified yet");
         return;
     }
-    uint8_t peer[LXMF_DESTINATION_LENGTH];
-    memcpy(peer, message_peer(state, &message->value), sizeof peer);
-    bool incoming = memcmp(message->value.source, state->local,
-                           LXMF_DESTINATION_LENGTH) != 0;
-    if (position + 1u < state->message_count)
-        memmove(&state->messages[position], &state->messages[position + 1u],
-                (state->message_count - position - 1u) * sizeof state->messages[0]);
-    state->message_count--;
-    memset(&state->messages[state->message_count], 0, sizeof state->messages[0]);
-    size_t contact = contact_index(state, peer);
-    if (contact < state->contact_count) {
-        if (incoming && state->contacts[contact].unread > 0u)
-            state->contacts[contact].unread--;
-        recalculate_contact(state, contact);
-    }
-    state->filter_dirty = true;
+    remove_cached_message(state, position);
     tui_state_set_status(state, "Rejected message with an invalid signature");
 }
 

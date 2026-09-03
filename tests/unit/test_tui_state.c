@@ -456,7 +456,30 @@ static void test_router_events_update_visible_state(void) {
     destroy_state(state);
 }
 
+static void test_rejected_message_keeps_owned_previews(void) {
+    tui_state_t *state = make_state();
+    add_contact(state, 0xa1u, TUI_TRUST_UNKNOWN);
+    add_message(state, 0xa1u, false, "rejected");
+    add_message(state, 0xa1u, false, "second");
+    add_message(state, 0xa1u, false, "third message");
+    for (size_t i = 0u; i < 3u; ++i)
+        state->messages[i].value.message_id[0] = (uint8_t)(i + 1u);
+    uint8_t rejected[LXMF_MESSAGE_ID_LENGTH] = {1u};
+    tui_state_apply_signature(state, rejected, LXMF_SIGNATURE_FAILED);
+    assert(state->message_count == 2u);
+    assert(state->messages[0].value.content.data == state->messages[0].content);
+    assert(state->messages[1].value.content.data == state->messages[1].content);
+    assert(memcmp(state->messages[0].value.content.data, "second", 6u) == 0);
+    assert(memcmp(state->messages[1].value.content.data, "third message", 13u) == 0);
+    rejected[0] = 2u;
+    tui_state_apply_signature(state, rejected, LXMF_SIGNATURE_FAILED);
+    assert(state->message_count == 1u);
+    assert(memcmp(state->messages[0].value.content.data, "third message", 13u) == 0);
+    destroy_state(state);
+}
+
 int main(void) {
+    test_rejected_message_keeps_owned_previews();
     test_verified_peer_stamp_cost_resolution();
     test_node_selection_survives_resort();
     test_node_move_clamps();
