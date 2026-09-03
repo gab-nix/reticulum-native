@@ -140,14 +140,33 @@ int main(void) {
     assert(path_known);
 
     static const uint8_t body[] = "direct over an authenticated link";
+    static const uint8_t title[] = "wire-preserved title";
+    static const uint8_t empty_fields[] = {0x80U};
+    uint8_t original_packed[LXMF_STORE_MAX_PACKED];
+    size_t original_packed_length = 0U;
+    lxmf_message_t original = {0}, decoded;
+    memcpy(original.destination, bob_destination, 16U);
+    memcpy(original.source, alice_destination, 16U);
+    original.timestamp = 91.0;
+    original.title = (lxmf_slice_t){title, sizeof title - 1U};
+    original.content = (lxmf_slice_t){body, sizeof body - 1U};
+    original.fields_msgpack =
+        (lxmf_slice_t){empty_fields, sizeof empty_fields};
+    assert(lxmf_pack(&original, lxmf_identity_signer, &alice, original_packed,
+                     sizeof original_packed, &original_packed_length) ==
+           LXMF_OK);
+    assert(lxmf_unpack(original_packed, original_packed_length, NULL, NULL,
+                       &decoded) == LXMF_OK);
     lxmf_store_message_t outbound = {0};
-    outbound.message_id[0] = 0x91U;
+    memcpy(outbound.message_id, decoded.message_id, LXMF_MESSAGE_ID_LENGTH);
     memcpy(outbound.destination, bob_destination, 16U);
     memcpy(outbound.source, alice_destination, 16U);
     outbound.timestamp = 91.0;
     outbound.status = LXMF_DELIVERY_QUEUED;
     outbound.signature_state = LXMF_SIGNATURE_VERIFIED;
     outbound.content = (lxmf_slice_t){body, sizeof body - 1U};
+    outbound.packed =
+        (lxmf_slice_t){original_packed, original_packed_length};
     bool inserted = false;
     assert(lxmf_store_put(&alice_store, &outbound, &inserted) == LXMF_OK &&
            inserted);
@@ -170,6 +189,13 @@ int main(void) {
     assert(confirmed && bob_inbox.received);
     assert(bob_inbox.content_length == sizeof body - 1U);
     assert(memcmp(bob_inbox.content, body, sizeof body - 1U) == 0);
+    {
+        uint8_t received_content[64];
+        lxmf_store_message_t received;
+        assert(lxmf_store_read(&bob_store, decoded.message_id, &received,
+                               received_content,
+                               sizeof received_content) == LXMF_OK);
+    }
 
     rns_runtime_link_t *established = NULL;
     for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i)
@@ -182,6 +208,7 @@ int main(void) {
      * opening another handshake. */
     outbound.message_id[0] = 0x92U;
     outbound.timestamp = 92.0;
+    outbound.packed = (lxmf_slice_t){0};
     inserted = false;
     bob_inbox.received = false;
     assert(lxmf_store_put(&alice_store, &outbound, &inserted) == LXMF_OK &&

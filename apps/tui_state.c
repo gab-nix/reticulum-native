@@ -800,6 +800,7 @@ lxmf_status_t tui_state_queue_message(tui_state_t *state) {
     stored.timestamp = source.timestamp;
     stored.status = LXMF_DELIVERY_QUEUED;
     stored.content = source.content;
+    stored.packed = (lxmf_slice_t){packed, packed_length};
     status = lxmf_store_put(&state->store, &stored, &inserted);
     state->send_attempted = false;
     state->send_ok = false;

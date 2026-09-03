@@ -308,14 +308,33 @@ static lxmf_status_t send_direct(
     }
     uint8_t packed[LXMF_STORE_MAX_PACKED];
     size_t packed_length = 0U;
-    lxmf_message_t message = {0};
-    message.content = stored->content;
-    memcpy(message.destination, stored->destination, LXMF_DESTINATION_LENGTH);
-    memcpy(message.source, stored->source, LXMF_SOURCE_LENGTH);
-    message.timestamp = stored->timestamp;
-    status = lxmf_pack(&message, lxmf_identity_signer,
-                       router->config.identity, packed, sizeof packed,
-                       &packed_length);
+    status = lxmf_store_read_packed(router->config.store, id, packed,
+                                    sizeof packed, &packed_length);
+    bool retained_wire = status == LXMF_OK;
+    if (status == LXMF_OK) {
+        lxmf_message_t retained;
+        status = lxmf_unpack(packed, packed_length, NULL, NULL, &retained);
+        if (status == LXMF_OK &&
+            (memcmp(retained.message_id, id, LXMF_MESSAGE_ID_LENGTH) != 0 ||
+             memcmp(retained.destination, stored->destination,
+                    LXMF_DESTINATION_LENGTH) != 0 ||
+             memcmp(retained.source, stored->source,
+                    LXMF_SOURCE_LENGTH) != 0))
+            status = LXMF_ERR_FORMAT;
+    }
+    if (!retained_wire && status == LXMF_ERR_FORMAT) {
+        /* Compatibility with stores written before outbound representations
+         * were retained. New messages always take the exact durable bytes. */
+        lxmf_message_t message = {0};
+        message.content = stored->content;
+        memcpy(message.destination, stored->destination,
+               LXMF_DESTINATION_LENGTH);
+        memcpy(message.source, stored->source, LXMF_SOURCE_LENGTH);
+        message.timestamp = stored->timestamp;
+        status = lxmf_pack(&message, lxmf_identity_signer,
+                           router->config.identity, packed, sizeof packed,
+                           &packed_length);
+    }
     if (status != LXMF_OK) {
         *queue_reason = LXMF_QUEUE_REASON_RESOURCE;
         return status == LXMF_ERR_BOUNDS ? LXMF_ERR_PENDING : status;
