@@ -1377,10 +1377,17 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
     node_config.transport.path_capacity = options != NULL && options->path_capacity ? options->path_capacity : 128U;
     node_config.transport.dedupe_capacity = options != NULL && options->dedupe_capacity ? options->dedupe_capacity : 256U;
     node_config.transport.reverse_capacity = options != NULL && options->reverse_capacity ? options->reverse_capacity : 256U;
+    node_config.transport.link_capacity =
+        options != NULL && options->transport_link_capacity
+            ? options->transport_link_capacity
+            : RNS_TRANSPORT_DEFAULT_LINK_CAPACITY;
     node_config.transport.random_blob_history = 8U;
     node_config.transport.path_lifetime = 604800.0;
     node_config.transport.dedupe_lifetime = 60.0;
     node_config.transport.reverse_lifetime = RNS_TRANSPORT_REVERSE_TIMEOUT;
+    node_config.transport.link_lifetime = RNS_TRANSPORT_LINK_TIMEOUT;
+    node_config.transport.link_proof_timeout_per_hop =
+        RNS_TRANSPORT_LINK_PROOF_TIMEOUT_PER_HOP;
     node_config.transport.clock = runtime_clock;
     {
         static const char *const path_aspects[] = {"path", "request"};

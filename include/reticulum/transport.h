@@ -10,6 +10,9 @@
 #define RNS_TRANSPORT_MAX_RANDOM_BLOBS 16u
 #define RNS_PATH_REQUEST_MAX_TAG_SIZE 16u
 #define RNS_TRANSPORT_REVERSE_TIMEOUT 480.0
+#define RNS_TRANSPORT_LINK_TIMEOUT 900.0
+#define RNS_TRANSPORT_LINK_PROOF_TIMEOUT_PER_HOP 6.0
+#define RNS_TRANSPORT_DEFAULT_LINK_CAPACITY 64u
 
 typedef double (*rns_monotonic_clock)(void *context);
 
@@ -17,10 +20,13 @@ typedef struct {
     size_t path_capacity;
     size_t dedupe_capacity;
     size_t reverse_capacity;
+    size_t link_capacity;
     size_t random_blob_history;
     double path_lifetime;
     double dedupe_lifetime;
     double reverse_lifetime;
+    double link_lifetime;
+    double link_proof_timeout_per_hop;
     rns_monotonic_clock clock;
     void *clock_context;
 } rns_transport_config;
@@ -29,6 +35,8 @@ typedef struct {
     uint8_t destination_hash[16];
     uint8_t next_hop[16];
     uint8_t announce_packet_hash[32];
+    uint8_t identity_public_key[64];
+    int has_identity;
     uint8_t random_blobs[RNS_TRANSPORT_MAX_RANDOM_BLOBS][10];
     size_t random_blob_count;
     uint64_t announce_timebase;
@@ -58,10 +66,28 @@ typedef struct {
 } rns_reverse_entry;
 
 typedef struct {
+    uint8_t link_id[16];
+    uint8_t next_hop[16];
+    uint8_t destination_hash[16];
+    uint8_t destination_public_key[64];
+    uint64_t next_hop_interface_id;
+    uint64_t received_interface_id;
+    uint8_t remaining_hops;
+    uint8_t taken_hops;
+    int validated;
+    double created_at;
+    double updated_at;
+    double proof_deadline;
+    double expires_at;
+    int occupied;
+} rns_transport_link_entry;
+
+typedef struct {
     rns_transport_config config;
     rns_path_entry *paths;
     rns_dedupe_entry *dedupe;
     rns_reverse_entry *reverse;
+    rns_transport_link_entry *links;
 } rns_transport;
 
 typedef enum {
@@ -75,6 +101,15 @@ typedef enum {
     RNS_REVERSE_MATCHED = 1,
     RNS_REVERSE_WRONG_INTERFACE = 2
 } rns_reverse_result;
+
+typedef enum {
+    RNS_LINK_ROUTE_MISSING = 0,
+    RNS_LINK_ROUTE_MATCHED = 1,
+    RNS_LINK_ROUTE_WRONG_INTERFACE = 2,
+    RNS_LINK_ROUTE_WRONG_HOPS = 3,
+    RNS_LINK_ROUTE_NOT_VALIDATED = 4,
+    RNS_LINK_ROUTE_INVALID_PROOF = 5
+} rns_link_route_result;
 
 typedef struct {
     uint8_t destination_hash[16];
@@ -110,6 +145,38 @@ int rns_transport_record_reverse(rns_transport *transport,
 rns_reverse_result rns_transport_consume_reverse(
     rns_transport *transport, const uint8_t packet_hash[16],
     uint64_t proof_interface_id, uint64_t *received_interface_id);
+
+/* Associates the verified announce identity with its current path. */
+int rns_transport_set_path_identity(rns_transport *transport,
+                                    const uint8_t destination_hash[16],
+                                    const uint8_t public_key[64]);
+
+/* Records a forwarded link request. The table owns a bounded copy of all
+ * routing and proof-verifier state. Oldest-first eviction is deterministic. */
+int rns_transport_record_link_request(
+    rns_transport *transport, const uint8_t link_id[16],
+    const rns_path_entry *path, uint64_t received_interface_id,
+    uint8_t taken_hops);
+
+const rns_transport_link_entry *rns_transport_link_lookup(
+    rns_transport *transport, const uint8_t link_id[16]);
+
+/* Validates and activates an LRPROOF, returning the exact ingress-side
+ * interface on which it must be forwarded. */
+rns_link_route_result rns_transport_accept_link_proof(
+    rns_transport *transport, const uint8_t link_id[16],
+    const uint8_t *proof, size_t proof_length, uint8_t proof_hops,
+    uint64_t proof_interface_id, uint64_t *forward_interface_id);
+
+/* Selects the opposite side of an active link. received_hops is the already
+ * incremented hop count used by the Reticulum transport core. */
+rns_link_route_result rns_transport_route_link(
+    rns_transport *transport, const uint8_t link_id[16],
+    uint8_t received_hops, uint64_t received_interface_id,
+    uint64_t *forward_interface_id);
+
+int rns_transport_forget_link(rns_transport *transport,
+                              const uint8_t link_id[16]);
 
 int rns_path_request_build(const uint8_t destination_hash[16],
                            const uint8_t requesting_transport[16],

@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "fixture": "Reticulum transport link-table behavior",
+  "upstream": {
+    "repository": "https://github.com/markqvist/Reticulum.git",
+    "commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+    "version": "1.5.2",
+    "sources": ["RNS/Transport.py", "RNS/Link.py", "RNS/Packet.py"]
+  },
+  "reviewed_behavior": {
+    "key": "link ID derived from the forwarded link request hashable part",
+    "pending_value": [
+      "next-hop transport ID",
+      "next-hop interface",
+      "remaining hops",
+      "received interface",
+      "taken hops",
+      "original destination",
+      "proof deadline"
+    ],
+    "activation": "valid destination-signed LRPROOF on the next-hop interface with the expected remaining hop count",
+    "active_timeout_seconds": 900,
+    "proof_timeout_seconds_per_hop": 6,
+    "routing": "validated traffic is sent only through the opposite recorded interface at its expected directional hop count",
+    "global_packet_deduplication": false
+  },
+  "coverage": "test_link_transport uses an injected clock and signed local link proof; test_runtime_link_transport exercises a three-runtime UDP topology.",
+  "notes": "This records a pinned source audit and deterministic local C evidence. It is not a Python exchange or upstream interoperability claim."
+}

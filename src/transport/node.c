@@ -1,6 +1,7 @@
 #include "reticulum/node.h"
 
 #include "reticulum/announce.h"
+#include "reticulum/link.h"
 #include "reticulum/packet.h"
 
 #include <stdlib.h>
@@ -114,6 +115,74 @@ static int ordinary_proof_ingress(rns_node *node, const rns_packet *packet,
     return 1;
 }
 
+static rns_node_reason link_route_reason(rns_link_route_result route) {
+    switch (route) {
+        case RNS_LINK_ROUTE_NOT_VALIDATED:
+            return RNS_NODE_REASON_LINK_NOT_VALIDATED;
+        case RNS_LINK_ROUTE_WRONG_INTERFACE:
+            return RNS_NODE_REASON_WRONG_LINK_INTERFACE;
+        case RNS_LINK_ROUTE_WRONG_HOPS:
+            return RNS_NODE_REASON_WRONG_LINK_HOPS;
+        case RNS_LINK_ROUTE_INVALID_PROOF:
+            return RNS_NODE_REASON_INVALID_LINK_PROOF;
+        case RNS_LINK_ROUTE_MISSING:
+        default:
+            return RNS_NODE_REASON_NO_LINK;
+    }
+}
+
+static int link_proof_ingress(rns_node *node, const rns_packet *packet,
+                              uint8_t received_hops, uint64_t interface_id,
+                              uint8_t *output, size_t output_capacity,
+                              rns_node_result *result) {
+    uint64_t forward_interface = 0;
+    rns_link_route_result route;
+    if (packet->header_type != RNS_PACKET_HEADER_1 ||
+        packet->transport_type != 0 || packet->destination_type != 3 ||
+        packet->packet_type != 3 ||
+        packet->context != RNS_NODE_LINK_REQUEST_PROOF_CONTEXT) {
+        result->reason = RNS_NODE_REASON_BAD_PROOF;
+        return 1;
+    }
+    route = rns_transport_accept_link_proof(
+        &node->transport, packet->destination_hash, packet->data,
+        packet->data_length, received_hops, interface_id, &forward_interface);
+    if (route != RNS_LINK_ROUTE_MATCHED) {
+        result->reason = link_route_reason(route);
+        return 1;
+    }
+    if (!rewrite_proof(packet, received_hops, output, output_capacity,
+                       &result->output_length)) {
+        result->reason = RNS_NODE_REASON_OUTPUT_TOO_SMALL;
+        return 1;
+    }
+    result->forward_interface_id = forward_interface;
+    result->action = RNS_NODE_FORWARD;
+    return 1;
+}
+
+static int link_packet_ingress(rns_node *node, const rns_packet *packet,
+                               uint8_t received_hops, uint64_t interface_id,
+                               uint8_t *output, size_t output_capacity,
+                               rns_node_result *result) {
+    uint64_t forward_interface = 0;
+    rns_link_route_result route = rns_transport_route_link(
+        &node->transport, packet->destination_hash, received_hops,
+        interface_id, &forward_interface);
+    if (route != RNS_LINK_ROUTE_MATCHED) {
+        result->reason = link_route_reason(route);
+        return 1;
+    }
+    if (!rewrite_proof(packet, received_hops, output, output_capacity,
+                       &result->output_length)) {
+        result->reason = RNS_NODE_REASON_OUTPUT_TOO_SMALL;
+        return 1;
+    }
+    result->forward_interface_id = forward_interface;
+    result->action = RNS_NODE_FORWARD;
+    return 1;
+}
+
 static int announce_ingress(rns_node *node, const rns_packet *packet, const uint8_t packet_hash[32],
                             uint8_t received_hops, uint64_t interface_id, int32_t interface_gravity,
                             uint8_t *output, size_t output_capacity, rns_node_result *result) {
@@ -143,6 +212,13 @@ static int announce_ingress(rns_node *node, const rns_packet *packet, const uint
         result->reason = RNS_NODE_REASON_INVALID_ANNOUNCE;
         return 1;
     }
+    if (!rns_transport_set_path_identity(&node->transport,
+                                         packet->destination_hash,
+                                         announce.public_key)) {
+        result->has_verified_announce = 0;
+        result->reason = RNS_NODE_REASON_INVALID_ANNOUNCE;
+        return 1;
+    }
     memcpy(result->next_hop, next_hop, 16);
     if (packet->context == RNS_NODE_PATH_RESPONSE_CONTEXT) { result->action = RNS_NODE_DELIVER; return 1; }
     if (!rewrite_announce(packet, received_hops, node->transport_id, output,
@@ -167,12 +243,21 @@ int rns_node_ingress(rns_node *node, const uint8_t *raw, size_t raw_length,
                      uint64_t interface_id, int32_t interface_gravity,
                      uint8_t *output, size_t output_capacity, rns_node_result *result) {
     rns_packet packet; const rns_path_entry *path; uint8_t received_hops;
+    int has_transport_link;
     if (!result) return 0; memset(result, 0, sizeof(*result)); result->action = RNS_NODE_DROP;
     result->received_interface_id = interface_id;
     if (!node || !raw || !rns_packet_decode(&packet, raw, raw_length) ||
         !rns_packet_hash(raw, raw_length, result->packet_hash)) { result->reason = RNS_NODE_REASON_MALFORMED; return 1; }
     memcpy(result->destination_hash, packet.destination_hash, 16);
-    if (!rns_transport_accept_packet_hash(&node->transport, result->packet_hash)) { result->reason = RNS_NODE_REASON_DUPLICATE; return 1; }
+    has_transport_link = rns_transport_link_lookup(
+                             &node->transport,
+                             packet.destination_hash) != NULL;
+    if (!has_transport_link &&
+        !rns_transport_accept_packet_hash(&node->transport,
+                                          result->packet_hash)) {
+        result->reason = RNS_NODE_REASON_DUPLICATE;
+        return 1;
+    }
     if (packet.hops >= node->max_hops) { result->reason = RNS_NODE_REASON_MAX_HOPS; return 1; }
     received_hops = (uint8_t)(packet.hops + 1); result->hops = received_hops;
     if (packet.packet_type == 1)
@@ -180,9 +265,19 @@ int rns_node_ingress(rns_node *node, const uint8_t *raw, size_t raw_length,
                                 interface_gravity, output, output_capacity, result);
     if (memcmp(packet.destination_hash, node->path_request_destination, 16) == 0)
         return path_request_ingress(node, &packet, result);
+    if (packet.packet_type == 3 &&
+        packet.context == RNS_NODE_LINK_REQUEST_PROOF_CONTEXT &&
+        has_transport_link)
+        return link_proof_ingress(node, &packet, received_hops, interface_id,
+                                  output, output_capacity, result);
     if (packet.packet_type == 3 && packet.context == 0)
         return ordinary_proof_ingress(node, &packet, received_hops, interface_id,
                                       output, output_capacity, result);
+    if (has_transport_link && packet.packet_type != 1 &&
+        packet.packet_type != 2 &&
+        packet.context != RNS_NODE_LINK_REQUEST_PROOF_CONTEXT)
+        return link_packet_ingress(node, &packet, received_hops, interface_id,
+                                   output, output_capacity, result);
     if (local_destination(node, packet.destination_hash)) { result->action = RNS_NODE_DELIVER; return 1; }
     if (packet.packet_type == 3) {
         result->reason = RNS_NODE_REASON_BAD_PROOF;
@@ -195,6 +290,17 @@ int rns_node_ingress(rns_node *node, const uint8_t *raw, size_t raw_length,
     if (!path) { result->reason = RNS_NODE_REASON_NO_PATH; return 1; }
     if (!rewrite_packet(&packet, received_hops, path, output, output_capacity, &result->output_length)) {
         result->reason = RNS_NODE_REASON_OUTPUT_TOO_SMALL; return 1;
+    }
+    if (packet.packet_type == 2) {
+        uint8_t link_id[16];
+        if (!rns_link_id_from_request_packet(raw, raw_length, link_id) ||
+            !rns_transport_record_link_request(&node->transport, link_id,
+                                               path, interface_id,
+                                               received_hops)) {
+            result->reason = RNS_NODE_REASON_NO_LINK;
+            result->output_length = 0;
+            return 1;
+        }
     }
     if (packet.packet_type == 0 && packet.header_type == RNS_PACKET_HEADER_2 &&
         packet.transport_type == 1 &&

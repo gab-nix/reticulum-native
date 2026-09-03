@@ -226,6 +226,7 @@ typedef struct rns_runtime_options {
     size_t path_capacity;
     size_t dedupe_capacity;
     size_t reverse_capacity;
+    size_t transport_link_capacity;
     size_t local_destination_capacity;
     /* Optional monotonic clock used by the caller-polled TCP reconnect
      * scheduler. Defaults to the platform HAL monotonic clock. */

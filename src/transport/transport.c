@@ -1,5 +1,8 @@
 #include "reticulum/transport.h"
 
+#include "reticulum/identity.h"
+#include "reticulum/link.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,28 +22,48 @@ int rns_transport_init(rns_transport *transport, const rns_transport_config *con
         config->random_blob_history == 0 ||
         config->random_blob_history > RNS_TRANSPORT_MAX_RANDOM_BLOBS ||
         config->path_lifetime <= 0 || config->dedupe_lifetime <= 0 ||
-        config->reverse_lifetime <= 0) return 0;
+        config->reverse_lifetime <= 0 || config->link_lifetime < 0 ||
+        config->link_proof_timeout_per_hop < 0) return 0;
     memset(transport, 0, sizeof(*transport)); transport->config = *config;
+    if (transport->config.link_capacity == 0)
+        transport->config.link_capacity = RNS_TRANSPORT_DEFAULT_LINK_CAPACITY;
+    if (transport->config.link_lifetime == 0)
+        transport->config.link_lifetime = RNS_TRANSPORT_LINK_TIMEOUT;
+    if (transport->config.link_proof_timeout_per_hop == 0)
+        transport->config.link_proof_timeout_per_hop =
+            RNS_TRANSPORT_LINK_PROOF_TIMEOUT_PER_HOP;
     transport->paths = calloc(config->path_capacity, sizeof(*transport->paths));
     transport->dedupe = calloc(config->dedupe_capacity, sizeof(*transport->dedupe));
     transport->reverse = calloc(config->reverse_capacity, sizeof(*transport->reverse));
-    if (!transport->paths || !transport->dedupe || !transport->reverse) { rns_transport_free(transport); return 0; }
+    transport->links = calloc(transport->config.link_capacity,
+                              sizeof(*transport->links));
+    if (!transport->paths || !transport->dedupe || !transport->reverse ||
+        !transport->links) { rns_transport_free(transport); return 0; }
     return 1;
 }
 
 void rns_transport_free(rns_transport *transport) {
-    if (!transport) return; free(transport->paths); free(transport->dedupe); free(transport->reverse); memset(transport, 0, sizeof(*transport));
+    if (!transport) return; free(transport->paths); free(transport->dedupe); free(transport->reverse); free(transport->links); memset(transport, 0, sizeof(*transport));
 }
 
 size_t rns_transport_expire(rns_transport *transport) {
     size_t removed = 0; double now;
-    if (!transport || !transport->paths || !transport->dedupe || !transport->reverse) return 0; now = now_of(transport);
+    if (!transport || !transport->paths || !transport->dedupe || !transport->reverse || !transport->links) return 0; now = now_of(transport);
     for (size_t i = 0; i < transport->config.path_capacity; ++i)
         if (transport->paths[i].occupied && now >= transport->paths[i].expires_at) { memset(&transport->paths[i], 0, sizeof(transport->paths[i])); ++removed; }
     for (size_t i = 0; i < transport->config.dedupe_capacity; ++i)
         if (transport->dedupe[i].occupied && now >= transport->dedupe[i].expires_at) { memset(&transport->dedupe[i], 0, sizeof(transport->dedupe[i])); ++removed; }
     for (size_t i = 0; i < transport->config.reverse_capacity; ++i)
         if (transport->reverse[i].occupied && now >= transport->reverse[i].expires_at) { memset(&transport->reverse[i], 0, sizeof(transport->reverse[i])); ++removed; }
+    for (size_t i = 0; i < transport->config.link_capacity; ++i) {
+        rns_transport_link_entry *entry = &transport->links[i];
+        if (!entry->occupied) continue;
+        if ((!entry->validated && now >= entry->proof_deadline) ||
+            (entry->validated && now >= entry->expires_at)) {
+            memset(entry, 0, sizeof(*entry));
+            ++removed;
+        }
+    }
     return removed;
 }
 
@@ -186,6 +209,189 @@ rns_reverse_result rns_transport_consume_reverse(
                                               : RNS_REVERSE_WRONG_INTERFACE;
     }
     return RNS_REVERSE_MISSING;
+}
+
+int rns_transport_set_path_identity(rns_transport *transport,
+                                    const uint8_t destination_hash[16],
+                                    const uint8_t public_key[64]) {
+    rns_path_entry *entry;
+    if (!transport || !destination_hash || !public_key) return 0;
+    entry = find_path(transport, destination_hash);
+    if (!entry || now_of(transport) >= entry->expires_at) return 0;
+    memcpy(entry->identity_public_key, public_key,
+           sizeof(entry->identity_public_key));
+    entry->has_identity = 1;
+    return 1;
+}
+
+static rns_transport_link_entry *find_link(rns_transport *transport,
+                                           const uint8_t link_id[16]) {
+    if (!transport || !link_id || !transport->links) return NULL;
+    for (size_t i = 0; i < transport->config.link_capacity; ++i) {
+        rns_transport_link_entry *entry = &transport->links[i];
+        if (entry->occupied && memcmp(entry->link_id, link_id, 16) == 0)
+            return entry;
+    }
+    return NULL;
+}
+
+static rns_transport_link_entry *link_slot(rns_transport *transport,
+                                           double now) {
+    rns_transport_link_entry *oldest = NULL;
+    for (size_t i = 0; i < transport->config.link_capacity; ++i) {
+        rns_transport_link_entry *entry = &transport->links[i];
+        int expired = entry->validated ? now >= entry->expires_at
+                                       : now >= entry->proof_deadline;
+        if (!entry->occupied || expired) return entry;
+        if (!oldest || entry->created_at < oldest->created_at) oldest = entry;
+    }
+    return oldest;
+}
+
+int rns_transport_record_link_request(
+    rns_transport *transport, const uint8_t link_id[16],
+    const rns_path_entry *path, uint64_t received_interface_id,
+    uint8_t taken_hops) {
+    rns_transport_link_entry *entry;
+    double now;
+    uint8_t remaining;
+    if (!transport || !link_id || !path || !path->occupied ||
+        !path->has_identity || received_interface_id == 0 ||
+        path->interface_id == 0 || taken_hops == 0 || !transport->links)
+        return 0;
+    now = now_of(transport);
+    entry = find_link(transport, link_id);
+    if (!entry) entry = link_slot(transport, now);
+    if (!entry) return 0;
+    remaining = path->hops != 0 ? path->hops : 1u;
+    memset(entry, 0, sizeof(*entry));
+    memcpy(entry->link_id, link_id, sizeof(entry->link_id));
+    memcpy(entry->next_hop, path->next_hop, sizeof(entry->next_hop));
+    memcpy(entry->destination_hash, path->destination_hash,
+           sizeof(entry->destination_hash));
+    memcpy(entry->destination_public_key, path->identity_public_key,
+           sizeof(entry->destination_public_key));
+    entry->next_hop_interface_id = path->interface_id;
+    entry->received_interface_id = received_interface_id;
+    entry->remaining_hops = remaining;
+    entry->taken_hops = taken_hops;
+    entry->created_at = now;
+    entry->updated_at = now;
+    entry->proof_deadline = now +
+        transport->config.link_proof_timeout_per_hop * (double)remaining;
+    entry->occupied = 1;
+    return 1;
+}
+
+static rns_transport_link_entry *live_link(rns_transport *transport,
+                                           const uint8_t link_id[16]) {
+    rns_transport_link_entry *entry = find_link(transport, link_id);
+    double now;
+    if (!entry) return NULL;
+    now = now_of(transport);
+    if ((!entry->validated && now >= entry->proof_deadline) ||
+        (entry->validated && now >= entry->expires_at)) {
+        memset(entry, 0, sizeof(*entry));
+        return NULL;
+    }
+    return entry;
+}
+
+const rns_transport_link_entry *rns_transport_link_lookup(
+    rns_transport *transport, const uint8_t link_id[16]) {
+    return live_link(transport, link_id);
+}
+
+static int valid_link_proof(const rns_transport_link_entry *entry,
+                            const uint8_t *proof, size_t proof_length) {
+    rns_identity identity;
+    uint8_t signed_data[83];
+    size_t signed_length = 80;
+    if (!entry || !proof || (proof_length != 96u && proof_length != 99u) ||
+        !rns_identity_from_public(&identity, entry->destination_public_key))
+        return 0;
+    memcpy(signed_data, entry->link_id, 16);
+    memcpy(signed_data + 16, proof + 64, 32);
+    memcpy(signed_data + 48, identity.signing_public, 32);
+    if (proof_length == 99u) {
+        uint32_t mtu;
+        uint8_t mode;
+        uint8_t signalling[3];
+        if (!rns_link_signalling_decode(proof + 96, &mtu, &mode) ||
+            !rns_link_signalling_encode(mtu, mode, signalling) ||
+            memcmp(signalling, proof + 96, sizeof(signalling)) != 0)
+            return 0;
+        memcpy(signed_data + 80, signalling, sizeof(signalling));
+        signed_length += sizeof(signalling);
+    }
+    return rns_identity_verify(&identity, signed_data, signed_length, proof);
+}
+
+rns_link_route_result rns_transport_accept_link_proof(
+    rns_transport *transport, const uint8_t link_id[16],
+    const uint8_t *proof, size_t proof_length, uint8_t proof_hops,
+    uint64_t proof_interface_id, uint64_t *forward_interface_id) {
+    rns_transport_link_entry *entry;
+    double now;
+    if (!transport || !link_id || !proof || !forward_interface_id)
+        return RNS_LINK_ROUTE_MISSING;
+    entry = live_link(transport, link_id);
+    if (!entry) return RNS_LINK_ROUTE_MISSING;
+    if (proof_interface_id != entry->next_hop_interface_id)
+        return RNS_LINK_ROUTE_WRONG_INTERFACE;
+    if (proof_hops != entry->remaining_hops)
+        return RNS_LINK_ROUTE_WRONG_HOPS;
+    if (!valid_link_proof(entry, proof, proof_length))
+        return RNS_LINK_ROUTE_INVALID_PROOF;
+    now = now_of(transport);
+    entry->validated = 1;
+    entry->updated_at = now;
+    entry->expires_at = now + transport->config.link_lifetime;
+    *forward_interface_id = entry->received_interface_id;
+    return RNS_LINK_ROUTE_MATCHED;
+}
+
+rns_link_route_result rns_transport_route_link(
+    rns_transport *transport, const uint8_t link_id[16],
+    uint8_t received_hops, uint64_t received_interface_id,
+    uint64_t *forward_interface_id) {
+    rns_transport_link_entry *entry;
+    double now;
+    if (!transport || !link_id || !forward_interface_id)
+        return RNS_LINK_ROUTE_MISSING;
+    entry = live_link(transport, link_id);
+    if (!entry) return RNS_LINK_ROUTE_MISSING;
+    if (!entry->validated) return RNS_LINK_ROUTE_NOT_VALIDATED;
+    if (entry->next_hop_interface_id == entry->received_interface_id) {
+        if (received_interface_id != entry->next_hop_interface_id)
+            return RNS_LINK_ROUTE_WRONG_INTERFACE;
+        if (received_hops != entry->remaining_hops &&
+            received_hops != entry->taken_hops)
+            return RNS_LINK_ROUTE_WRONG_HOPS;
+        *forward_interface_id = entry->next_hop_interface_id;
+    } else if (received_interface_id == entry->next_hop_interface_id) {
+        if (received_hops != entry->remaining_hops)
+            return RNS_LINK_ROUTE_WRONG_HOPS;
+        *forward_interface_id = entry->received_interface_id;
+    } else if (received_interface_id == entry->received_interface_id) {
+        if (received_hops != entry->taken_hops)
+            return RNS_LINK_ROUTE_WRONG_HOPS;
+        *forward_interface_id = entry->next_hop_interface_id;
+    } else {
+        return RNS_LINK_ROUTE_WRONG_INTERFACE;
+    }
+    now = now_of(transport);
+    entry->updated_at = now;
+    entry->expires_at = now + transport->config.link_lifetime;
+    return RNS_LINK_ROUTE_MATCHED;
+}
+
+int rns_transport_forget_link(rns_transport *transport,
+                              const uint8_t link_id[16]) {
+    rns_transport_link_entry *entry = find_link(transport, link_id);
+    if (!entry) return 0;
+    memset(entry, 0, sizeof(*entry));
+    return 1;
 }
 
 int rns_path_request_build(const uint8_t destination_hash[16], const uint8_t requesting_transport[16],
