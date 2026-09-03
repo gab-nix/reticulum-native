@@ -25,6 +25,7 @@
 #include "reticulum/packet.h"
 #include "reticulum/proof.h"
 #include "reticulum/runtime.h"
+#include "reticulum/rrc.h"
 #include "reticulum/request.h"
 #include "reticulum/resource.h"
 #include "reticulum/status.h"

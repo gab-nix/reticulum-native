@@ -60,6 +60,7 @@ target_sources(test_tui_settings PRIVATE
 target_include_directories(test_tui_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
 reticulum_add_test(test_node_registry unit/test_node_registry.c)
 reticulum_add_test(test_micron unit/test_micron.c)
+reticulum_add_test(test_rrc unit/test_rrc.c)
 reticulum_add_test(test_udp integration/test_udp.c)
 reticulum_add_test(test_tcp integration/test_tcp.c)
 reticulum_add_test(test_udp_lxmf integration/test_udp_lxmf.c)

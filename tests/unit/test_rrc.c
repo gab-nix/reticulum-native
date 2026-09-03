@@ -1,0 +1,6 @@
+#include "reticulum/rrc.h"
+#include <assert.h>
+#include <string.h>
+int main(void){
+static const uint8_t fixture[]={0xa8,0x00,0x01,0x01,0x14,0x02,0x48,0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x03,0x1b,0x00,0x00,0x01,0x8b,0xcf,0xe5,0x68,0x7b,0x04,0x50,0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,0x05,0x65,'l','o','b','b','y',0x06,0x65,'h','e','l','l','o',0x07,0x63,'r','e','i'};
+rns_rrc_envelope_t e;assert(rns_rrc_envelope_parse(fixture,sizeof fixture,&e)==RNS_OK);assert(e.version==1&&e.type==RNS_RRC_MESSAGE&&e.timestamp_ms==UINT64_C(1700000000123));assert(e.room.length==5&&!memcmp(e.room.data,"lobby",5));assert(e.body_cbor.length==6&&e.body_cbor.data[0]==0x65);assert(e.nick.length==3&&!memcmp(e.nick.data,"rei",3));uint8_t out[128];size_t n=0;assert(rns_rrc_envelope_encode(&e,out,sizeof out,&n)==RNS_OK&&n==sizeof fixture&&!memcmp(out,fixture,n));uint8_t text[8];assert(rns_rrc_cbor_text((const uint8_t*)"hi",2,text,sizeof text,&n)==RNS_OK&&n==3&&text[0]==0x62);uint8_t bad[sizeof fixture];memcpy(bad,fixture,sizeof bad);bad[0]=0xbf;assert(rns_rrc_envelope_parse(bad,sizeof bad,&e)==RNS_ERROR_PROTOCOL);memcpy(bad,fixture,sizeof bad);bad[48]=0xff;assert(rns_rrc_envelope_parse(bad,sizeof bad,&e)==RNS_ERROR_PROTOCOL);assert(rns_rrc_envelope_parse(fixture,sizeof fixture-1,&e)==RNS_ERROR_PROTOCOL);return 0;}
