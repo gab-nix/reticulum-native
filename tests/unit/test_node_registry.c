@@ -62,4 +62,14 @@ int main(void){rns_node_registry r;rns_node_registry_init(&r,10);rns_node_record
     assert(rns_node_registry_consider_announce(&r,&a));
     record=rns_node_registry_get(&r,a.destination_hash);
     assert(record&&record->kind==RNS_NODE_KIND_LXMF&&record->propagation);
+    rns_node_record filtered[RNS_NODE_REGISTRY_MAX];
+    size_t matches=rns_node_registry_sorted_filter(&r,filtered,RNS_NODE_REGISTRY_MAX,"rei");
+    assert(matches>=2);
+    assert(rns_node_registry_sorted_filter(&r,filtered,RNS_NODE_REGISTRY_MAX,"REI")==matches);
+    char partial[9];
+    (void)snprintf(partial,sizeof partial,"%02X%02X%02X%02X",r.records[0].destination[0],
+                   r.records[0].destination[1],r.records[0].destination[2],
+                   r.records[0].destination[3]);
+    assert(rns_node_registry_sorted_filter(&r,filtered,RNS_NODE_REGISTRY_MAX,partial)>=1);
+    assert(rns_node_registry_sorted_filter(&r,filtered,RNS_NODE_REGISTRY_MAX,"missing")==0);
     return 0;}

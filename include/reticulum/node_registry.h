@@ -35,6 +35,9 @@ const rns_node_record *rns_node_registry_get(const rns_node_registry *r, const u
 size_t rns_node_registry_list(const rns_node_registry *r, rns_node_record *out, size_t capacity, const char *filter);
 int rns_node_registry_consider_announce(rns_node_registry *r, const rns_node_result *announce);
 size_t rns_node_registry_sorted(const rns_node_registry *r, rns_node_record *out, size_t capacity);
+size_t rns_node_registry_sorted_filter(const rns_node_registry *r,
+                                       rns_node_record *out, size_t capacity,
+                                       const char *filter);
 int rns_node_registry_save(const rns_node_registry *r, const char *path);
 int rns_node_registry_load(rns_node_registry *r, const char *path, double lifetime);
 #endif

@@ -2,6 +2,7 @@
 #include "reticulum/lxmf_router.h"
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 #include "reticulum/destination.h"
 #define REGISTRY_MAGIC "RNSN2\0\0\0"
 #define REGISTRY_MAGIC_V1 "RNSN1\0\0\0"
@@ -37,7 +38,39 @@ int rns_node_registry_upsert(rns_node_registry *r, const rns_node_record *x) {
 }
 size_t rns_node_registry_expire(rns_node_registry *r, double now) { if (!r) return 0; size_t n=0; for(size_t i=0;i<r->count;) { if(r->records[i].expires_at>0&&r->records[i].expires_at<=now){r->records[i]=r->records[--r->count];n++;} else i++; } return n; }
 const rns_node_record *rns_node_registry_get(const rns_node_registry *r,const uint8_t d[16]) { if(!r||!d)return NULL; for(size_t i=0;i<r->count;i++)if(!memcmp(r->records[i].destination,d,16))return &r->records[i]; return NULL; }
-size_t rns_node_registry_list(const rns_node_registry *r,rns_node_record *out,size_t cap,const char *filter){if(!r)return 0;size_t n=0;for(size_t i=0;i<r->count&&n<cap;i++){if(filter&&*filter&&!strstr(r->records[i].name,filter))continue;if(out)out[n]=r->records[i];n++;}return n;}
+static bool contains_ascii_casefold(const char *haystack, const char *needle) {
+    if (*needle == '\0') return true;
+    for (size_t i = 0u; haystack[i] != '\0'; ++i) {
+        size_t j = 0u;
+        while (needle[j] != '\0' && haystack[i + j] != '\0' &&
+               tolower((unsigned char)haystack[i + j]) ==
+                   tolower((unsigned char)needle[j]))
+            ++j;
+        if (needle[j] == '\0') return true;
+    }
+    return false;
+}
+
+static bool record_matches(const rns_node_record *record, const char *filter) {
+    if (filter == NULL || *filter == '\0') return true;
+    if (contains_ascii_casefold(record->name, filter)) return true;
+    char address[33];
+    for (size_t i = 0u; i < sizeof record->destination; ++i)
+        (void)snprintf(address + i * 2u, 3u, "%02x", record->destination[i]);
+    return contains_ascii_casefold(address, filter);
+}
+
+size_t rns_node_registry_list(const rns_node_registry *r, rns_node_record *out,
+                              size_t cap, const char *filter) {
+    if (r == NULL) return 0u;
+    size_t count = 0u;
+    for (size_t i = 0u; i < r->count && count < cap; ++i) {
+        if (!record_matches(&r->records[i], filter)) continue;
+        if (out != NULL) out[count] = r->records[i];
+        ++count;
+    }
+    return count;
+}
 int rns_node_registry_consider_announce(rns_node_registry *r,const rns_node_result *a){
     if(!r||!a||!a->has_verified_announce||
        a->announce_app_data_length>RNS_NODE_APP_DATA_MAX||
@@ -85,7 +118,26 @@ int rns_node_registry_consider_announce(rns_node_registry *r,const rns_node_resu
     return rns_node_registry_upsert(r,&n);
 }
 static int before(const rns_node_record *a,const rns_node_record *b){if(a->reachable!=b->reachable)return a->reachable;if(a->seen_at!=b->seen_at)return a->seen_at>b->seen_at;return memcmp(a->destination,b->destination,16)<0;}
-size_t rns_node_registry_sorted(const rns_node_registry *r,rns_node_record *out,size_t cap){size_t n=rns_node_registry_list(r,out,cap,NULL);for(size_t i=1;i<n;i++){rns_node_record x=out[i];size_t j=i;while(j&&before(&x,&out[j-1])){out[j]=out[j-1];j--;}out[j]=x;}return n;}
+size_t rns_node_registry_sorted_filter(const rns_node_registry *r,
+                                       rns_node_record *out, size_t cap,
+                                       const char *filter) {
+    size_t count = rns_node_registry_list(r, out, cap, filter);
+    for (size_t i = 1u; i < count; ++i) {
+        rns_node_record value = out[i];
+        size_t j = i;
+        while (j != 0u && before(&value, &out[j - 1u])) {
+            out[j] = out[j - 1u];
+            --j;
+        }
+        out[j] = value;
+    }
+    return count;
+}
+
+size_t rns_node_registry_sorted(const rns_node_registry *r, rns_node_record *out,
+                                size_t cap) {
+    return rns_node_registry_sorted_filter(r, out, cap, NULL);
+}
 int rns_node_registry_save(const rns_node_registry *r,const char *path){if(!r||!path)return 0;FILE *f=fopen(path,"wb");if(!f)return 0;uint32_t n=(uint32_t)r->count;int ok=fwrite(REGISTRY_MAGIC,1,8,f)==8&&fwrite(&n,sizeof n,1,f)==1&&fwrite(r->records,sizeof(r->records[0]),r->count,f)==r->count&&fflush(f)==0;if(fclose(f)!=0)ok=0;return ok;}
 int rns_node_registry_load(rns_node_registry *r,const char *path,double lifetime){
     if(!r||!path)return 0;FILE *f=fopen(path,"rb");if(!f)return 0;
