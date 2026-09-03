@@ -478,7 +478,60 @@ static void test_rejected_message_keeps_owned_previews(void) {
     destroy_state(state);
 }
 
+static void test_saved_block_policy_and_deferred_rejection(void) {
+    tui_state_t *state = make_state();
+    add_contact(state, 0xa1u, TUI_TRUST_TRUSTED);
+    uint8_t source[LXMF_SOURCE_LENGTH] = {0xa1u};
+    assert(!tui_state_source_blocked(state, source));
+    state->contacts[0].blocked = true;
+    assert(tui_state_source_blocked(state, source));
+    state->contacts[0].blocked = false;
+    state->contacts[0].trust = TUI_TRUST_UNTRUSTED;
+    assert(!tui_state_source_blocked(state, source));
+
+    char path[] = "/tmp/nomad-ui-blocks-XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0 && close(fd) == 0 && unlink(path) == 0);
+    assert(lxmf_peer_store_open(&state->peer_store, path) == LXMF_OK);
+    lxmf_peer_t peer = {0};
+    peer.address[0] = 0xb1u;
+    peer.blocked = true;
+    bool inserted = false;
+    assert(lxmf_peer_store_put(&state->peer_store, &peer, &inserted) == LXMF_OK);
+    assert(lxmf_peer_store_save(&state->peer_store) == LXMF_OK);
+    lxmf_peer_store_close(&state->peer_store);
+    assert(lxmf_peer_store_open(&state->peer_store, path) == LXMF_OK);
+    assert(tui_state_source_blocked(state, peer.address));
+    peer.address[0] = 0xc1u;
+    assert(!tui_state_source_blocked(state, peer.address));
+    assert(!tui_state_source_blocked(NULL, source));
+    assert(!tui_state_source_blocked(state, NULL));
+
+    add_message(state, 0xa1u, false, "deferred");
+    add_message(state, 0xa1u, false, "accepted");
+    state->messages[0].value.message_id[0] = 0x42u;
+    state->messages[0].value.signature_state = LXMF_SIGNATURE_UNVERIFIED;
+    state->messages[1].value.message_id[0] = 0x43u;
+    state->messages[1].value.signature_state = LXMF_SIGNATURE_VERIFIED;
+    state->contacts[0].unread = 2u;
+    lxmf_router_event_t event = {
+        .state = LXMF_DELIVERY_FAILED, .result = LXMF_ERR_BLOCKED
+    };
+    event.message_id[0] = 0x42u;
+    tui_state_apply_router_event(state, &event);
+    assert(state->message_count == 1u && state->contacts[0].messages == 1u);
+    assert(state->contacts[0].unread == 1u);
+    assert(state->messages[0].value.signature_state == LXMF_SIGNATURE_VERIFIED);
+    assert(memcmp(state->messages[0].value.content.data, "accepted", 8u) == 0);
+    assert(strstr(state->status, "blocked") != NULL);
+    assert(strstr(state->status, "signature") == NULL);
+    lxmf_peer_store_close(&state->peer_store);
+    assert(unlink(path) == 0);
+    destroy_state(state);
+}
+
 int main(void) {
+    test_saved_block_policy_and_deferred_rejection();
     test_rejected_message_keeps_owned_previews();
     test_verified_peer_stamp_cost_resolution();
     test_node_selection_survives_resort();

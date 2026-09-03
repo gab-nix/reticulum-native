@@ -271,7 +271,22 @@ static void remove_cached_message(tui_state_t *state, size_t position) {
 void tui_state_apply_router_event(tui_state_t *state,
                                   const lxmf_router_event_t *event) {
     if (state == NULL || event == NULL) return;
-    tui_message_t *message = find_message(state, event->message_id, NULL);
+    size_t position = 0u;
+    tui_message_t *message = find_message(state, event->message_id, &position);
+    if (event->state == LXMF_DELIVERY_FAILED &&
+        (event->result == LXMF_ERR_BLOCKED || event->result == LXMF_ERR_BOUNDS) &&
+        (message == NULL ||
+         memcmp(message->value.source, state->local, LXMF_SOURCE_LENGTH) != 0)) {
+        /* The router removed a deferred message when policy changed. Reflect
+         * that removal without calling a blocked sender's signature invalid. */
+        if (message != NULL &&
+            message->value.signature_state == LXMF_SIGNATURE_UNVERIFIED)
+            remove_cached_message(state, position);
+        tui_state_set_status(state, event->result == LXMF_ERR_BLOCKED
+                                      ? "Incoming message blocked by saved preference"
+                                      : "Incoming message exceeds the configured size limit");
+        return;
+    }
     if (message != NULL) {
         message->value.status = event->state;
         state->filter_dirty = true;
@@ -343,6 +358,22 @@ static void on_delivery(void *context,
 
 static void on_router_event(void *context, const lxmf_router_event_t *event) {
     tui_state_apply_router_event(context, event);
+}
+
+bool tui_state_source_blocked(const tui_state_t *state,
+                               const uint8_t source[LXMF_SOURCE_LENGTH]) {
+    if (state == NULL || source == NULL) return false;
+    size_t index = contact_index(state, source);
+    if (index < state->contact_count) return state->contacts[index].blocked;
+    /* The durable directory can be larger than the visible contact cache. */
+    lxmf_peer_t peer;
+    return lxmf_peer_store_get(&state->peer_store, source, &peer) == LXMF_OK &&
+           peer.blocked;
+}
+
+static bool source_blocked(void *context,
+                             const uint8_t source[LXMF_SOURCE_LENGTH]) {
+    return tui_state_source_blocked(context, source);
 }
 
 static void on_signature(void *context,
@@ -525,6 +556,8 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
             .inbound_stamp_cost = state->settings.has_stamp_cost
                                       ? state->settings.stamp_cost
                                       : 0u,
+            .is_source_blocked = source_blocked,
+            .source_policy_context = state,
             .runtime = state->runtime,
             .resolve_identity = resolve_peer,
             .resolve_context = state,

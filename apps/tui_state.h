@@ -190,6 +190,9 @@ void tui_state_persist_contacts(tui_state_t *state);
 void tui_state_set_trust(tui_state_t *state, tui_trust_t trust);
 void tui_state_toggle_pin(tui_state_t *state);
 void tui_state_toggle_block(tui_state_t *state);
+/* Reads app-owned preferences; the LXMF router enforces the returned policy. */
+bool tui_state_source_blocked(const tui_state_t *state,
+                               const uint8_t source[LXMF_SOURCE_LENGTH]);
 void tui_state_toggle_note(tui_state_t *state);
 
 size_t tui_state_node_count(const tui_state_t *state);
