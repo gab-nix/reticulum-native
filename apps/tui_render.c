@@ -144,6 +144,100 @@ static const char *interface_state_name(rns_runtime_interface_state_t state) {
     return "invalid";
 }
 
+static const char *rrc_state_name(rns_rrc_session_state_t state) {
+    switch (state) {
+        case RNS_RRC_SESSION_DISCONNECTED: return "disconnected";
+        case RNS_RRC_SESSION_DISCOVERING: return "discovering path";
+        case RNS_RRC_SESSION_LINKING: return "authenticating link";
+        case RNS_RRC_SESSION_HELLO: return "waiting for WELCOME";
+        case RNS_RRC_SESSION_CONNECTED: return "connected";
+        case RNS_RRC_SESSION_RECONNECT_WAIT: return "reconnect wait";
+        case RNS_RRC_SESSION_FAILED: return "failed";
+    }
+    return "invalid";
+}
+
+static const char *rrc_item_value(const tui_state_t *state,
+                                  tui_rrc_item_t item) {
+    if (state->field == TUI_FIELD_RRC && state->rrc.selected == item)
+        return tui_editor_text(&state->setting);
+    const char *value = tui_rrc_edit_value(&state->rrc, item);
+    if (value != NULL) return value;
+    if (item == TUI_RRC_ITEM_CONNECT)
+        return state->rrc.session == NULL ? "Connect" : "Disconnect";
+    if (item == TUI_RRC_ITEM_JOIN) return "Send JOIN";
+    if (item == TUI_RRC_ITEM_PART) return "Send PART";
+    if (item == TUI_RRC_ITEM_SEND) return "Send message";
+    return "";
+}
+
+static void draw_rrc(const tui_state_t *state, const tui_layout_t *layout) {
+    static const char *const labels[] = {
+        "Hub address", "Hub public identity", "Nick", "Connection",
+        "Room", "Join", "Part", "Message", "Send"};
+    char heading[256];
+    (void)snprintf(heading, sizeof heading, "RRC  state: %s  attempts: %zu",
+                   rrc_state_name(state->rrc.info.state),
+                   state->rrc.info.hello_attempts);
+    (void)attron(A_BOLD);
+    clipped(stdscr, 3, 1, layout->columns - 2, heading);
+    (void)attroff(A_BOLD);
+    int row = 4;
+    int item_rows = layout->hint_row - 3 - row;
+    if (item_rows < 1) item_rows = 1;
+    size_t first_item = 0u;
+    if ((size_t)item_rows < TUI_RRC_ITEM_COUNT &&
+        (size_t)state->rrc.selected >= (size_t)item_rows)
+        first_item = (size_t)state->rrc.selected - (size_t)item_rows + 1u;
+    for (size_t i = first_item; i < TUI_RRC_ITEM_COUNT &&
+         (int)(i - first_item) < item_rows && row < layout->hint_row - 3;
+         ++i, ++row) {
+        char line[512];
+        (void)snprintf(line, sizeof line, "%-20s %s", labels[i],
+                       rrc_item_value(state, (tui_rrc_item_t)i));
+        if (i == (size_t)state->rrc.selected) (void)attron(A_REVERSE);
+        clipped(stdscr, row, 2, layout->columns - 4, line);
+        if (i == (size_t)state->rrc.selected) (void)attroff(A_REVERSE);
+    }
+    if (state->rrc.info.state == RNS_RRC_SESSION_CONNECTED &&
+        row < layout->hint_row - 2) {
+        char hub_name[RNS_RRC_MAX_HUB_NAME_BYTES + 1u];
+        char caps[256];
+        (void)tui_text_sanitize(state->rrc.info.welcome.hub_name,
+            state->rrc.info.welcome.hub_name_length, hub_name,
+            sizeof hub_name);
+        (void)snprintf(caps, sizeof caps,
+            "Hub %s  msg:%zuB room:%zuB rooms:%zu rate:%zu/min resource:%s",
+            hub_name[0] != '\0' ? hub_name : "(unnamed)",
+            state->rrc.info.welcome.max_message_bytes,
+            state->rrc.info.welcome.max_room_bytes,
+            state->rrc.info.welcome.max_rooms,
+            state->rrc.info.welcome.rate_per_minute,
+            state->rrc.info.welcome.resource_envelopes ? "advertised" : "no");
+        clipped(stdscr, row++, 2, layout->columns - 4, caps);
+    }
+    if (row < layout->hint_row - 1)
+        clipped(stdscr, row++, 2, layout->columns - 4,
+            "Basic session only: room/member history and Resource envelopes are unavailable.");
+    size_t shown = state->rrc.message_count;
+    size_t available = row < layout->hint_row ? (size_t)(layout->hint_row - row) : 0u;
+    if (shown > available) shown = available;
+    size_t first = state->rrc.message_count - shown;
+    for (size_t i = first; i < state->rrc.message_count; ++i) {
+        const tui_rrc_message_t *message = &state->rrc.messages[i];
+        char line[512];
+        (void)snprintf(line, sizeof line, "#%s <%s> %s",
+                       message->room[0] != '\0' ? message->room : "*",
+                       message->nick[0] != '\0' ? message->nick : "unknown",
+                       message->body);
+        clipped(stdscr, row++, 2, layout->columns - 4, line);
+    }
+    clipped(stdscr, layout->hint_row, 0, layout->columns,
+            "j/k select  Enter edit/action  r status  C or Esc conversations  q quit");
+    clipped(stdscr, layout->input_row, 0, layout->columns,
+            state->rrc.status);
+}
+
 static void draw_interfaces(const tui_state_t *state,
                             const tui_layout_t *layout) {
     size_t count = tui_state_interface_count(state);
@@ -338,7 +432,9 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
         case TUI_FIELD_NODE_SEARCH:
             editor = &state->node_search; prompt = "Find node: "; break;
         case TUI_FIELD_ADDRESS: editor = &state->address; prompt = "Address: "; break;
-        case TUI_FIELD_SETTING: break;
+        case TUI_FIELD_SETTING:
+        case TUI_FIELD_RRC:
+            break;
         case TUI_FIELD_NONE: break;
     }
     (void)mvhline(layout->divider_row, 0, ACS_HLINE, layout->columns);
@@ -867,13 +963,13 @@ static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
                 page->truncated ? "Page was truncated to fit the parser bounds"
                                 : "Tables and partials are shown unformatted");
     clipped(stdscr, layout->hint_row, 0, layout->columns,
-            "j/k link  Enter open  PgUp/PgDn scroll  Backspace back  R reload  N network");
+            "j/k link  Enter open  PgUp/PgDn scroll  Backspace back  r reload  N network");
 }
 
 static void draw_guide(const tui_layout_t *layout) {
     static const char *const lines[] = {
         "Nomad Chat Guide",
-        "C Conversations   N Network   B Browser   S Settings   I Interfaces",
+        "C Conversations   N Network   B Browser   R RRC   S Settings   I Interfaces",
         "F validated Reticulum configuration",
         "j/k or arrows select; Enter activates; Esc returns to Conversations",
         "",
@@ -881,7 +977,7 @@ static void draw_guide(const tui_layout_t *layout) {
         "Contact actions: i details, p pin, x block, t trust, u untrust",
         "Delivery: d selects direct or propagation-node upload for queued messages",
         "Network: / search nodes, Enter details, then b browse, m message, p relay",
-        "Browser: j/k select links, Enter follow, Backspace back, R reload",
+        "Browser: j/k select links, Enter follow, Backspace back, r reload",
         "Settings: j/k select, Enter edit or activate Announce Now",
         "",
         "Delivery is proof-backed. A queued message is not shown as delivered.",
@@ -936,6 +1032,11 @@ void tui_render_draw(tui_state_t *state) {
     }
     if (state->screen == TUI_SCREEN_CONFIG) {
         draw_config(state, &layout);
+        (void)refresh();
+        return;
+    }
+    if (state->screen == TUI_SCREEN_RRC) {
+        draw_rrc(state, &layout);
         (void)refresh();
         return;
     }
@@ -998,8 +1099,9 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             "Screen: Guide\n"
             "Conversations: C, trust tabs 1/2/3, / search, a address, Enter compose\n"
             "Network: N, / search, Enter node actions, b browse, m message, r path\n"
-            "Browser: B, j/k links, Enter follow, Backspace back, R reload\n"
+            "Browser: B, j/k links, Enter follow, Backspace back, r reload\n"
             "Settings: S, j/k select, Enter edit/activate\n"
+            "RRC: R, j/k select, Enter edit/connect/join/part/send\n"
             "Escape: close active layer or return to Conversations\n"
             "Status: %s\n", state->status);
         return ferror(output) ? -1 : 0;
@@ -1051,6 +1153,32 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             }
         }
         (void)fprintf(output, "Status: %s\n", state->status);
+        return ferror(output) ? -1 : 0;
+    }
+    if (state->screen == TUI_SCREEN_RRC) {
+        (void)fprintf(output,
+            "Screen: RRC\nState: %s\nHub address: %s\nHub public identity: %s\nNick: %s\nRoom: %s\nMessages: %zu\n",
+            rrc_state_name(state->rrc.info.state), state->rrc.hub_address,
+            state->rrc.hub_identity, state->rrc.nick, state->rrc.room,
+            state->rrc.message_count);
+        if (state->rrc.info.state == RNS_RRC_SESSION_CONNECTED)
+            (void)fprintf(output,
+                "Limits: message=%zu room=%zu rooms=%zu rate=%zu resource=%s\n",
+                state->rrc.info.welcome.max_message_bytes,
+                state->rrc.info.welcome.max_room_bytes,
+                state->rrc.info.welcome.max_rooms,
+                state->rrc.info.welcome.rate_per_minute,
+                state->rrc.info.welcome.resource_envelopes ? "advertised" : "no");
+        for (size_t i = 0u; i < state->rrc.message_count; ++i)
+            (void)fprintf(output, "#%s <%s> %s\n",
+                state->rrc.messages[i].room[0] != '\0'
+                    ? state->rrc.messages[i].room : "*",
+                state->rrc.messages[i].nick[0] != '\0'
+                    ? state->rrc.messages[i].nick : "unknown",
+                state->rrc.messages[i].body);
+        (void)fprintf(output,
+            "Missing: persistent room/member history and Resource envelopes\nStatus: %s\n",
+            state->rrc.status);
         return ferror(output) ? -1 : 0;
     }
     const tui_contact_t *contact = tui_state_selected_contact(state);

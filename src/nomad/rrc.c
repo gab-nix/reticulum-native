@@ -60,3 +60,16 @@ rns_status_t rns_rrc_envelope_encode(const rns_rrc_envelope_t *e,
                                                  : RNS_ERROR_OVERFLOW;
 }
 rns_status_t rns_rrc_cbor_text(const uint8_t*t,size_t n,uint8_t*out,size_t cap,size_t*written){if((!t&&n)||!out||!written||!utf8(t,n))return RNS_ERROR_INVALID_ARGUMENT;writer_t w={out,cap};if(!puthead(&w,3,n)||!put(&w,t,n))return RNS_ERROR_OVERFLOW;*written=cap-w.left;return RNS_OK;}
+rns_status_t rns_rrc_cbor_text_parse(const uint8_t *input,
+                                     size_t input_length,
+                                     rns_rrc_slice_t *text) {
+    if (input == NULL || input_length == 0u || text == NULL ||
+        input_length > RNS_RRC_MAX_ENVELOPE_SIZE)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    reader_t reader = {input, input + input_length, 0u};
+    rns_rrc_slice_t parsed = {0};
+    if (!stringv(&reader, 3u, &parsed) || reader.p != reader.end)
+        return RNS_ERROR_PROTOCOL;
+    *text = parsed;
+    return RNS_OK;
+}

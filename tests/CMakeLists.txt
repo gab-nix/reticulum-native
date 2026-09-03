@@ -66,6 +66,7 @@ target_include_directories(test_tui_editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/.
 reticulum_add_test(test_tui_state unit/test_tui_state.c)
 target_sources(test_tui_state PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
@@ -75,6 +76,11 @@ target_sources(test_tui_settings PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
 target_include_directories(test_tui_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
+reticulum_add_test(test_tui_rrc unit/test_tui_rrc.c)
+target_sources(test_tui_rrc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
+target_include_directories(test_tui_rrc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
 reticulum_add_test(test_node_registry unit/test_node_registry.c)
 reticulum_add_test(test_micron unit/test_micron.c)
 reticulum_add_test(test_rrc unit/test_rrc.c)
@@ -112,6 +118,7 @@ if(TARGET nomad-chat)
         unit/test_tui_settings_ui.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
@@ -142,6 +149,7 @@ if(TARGET nomad-chat)
         unit/test_tui_dispatch.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c

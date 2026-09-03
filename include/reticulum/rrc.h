@@ -26,6 +26,10 @@ rns_status_t rns_rrc_envelope_parse(const uint8_t *input,size_t input_length,
  rns_rrc_envelope_t *envelope);
 rns_status_t rns_rrc_cbor_text(const uint8_t *text,size_t text_length,
  uint8_t *output,size_t capacity,size_t *output_length);
+/* Returns a borrowed UTF-8 text span from exactly one canonical CBOR text
+ * object. Trailing bytes, indefinite lengths and invalid UTF-8 are rejected. */
+rns_status_t rns_rrc_cbor_text_parse(const uint8_t *input,
+ size_t input_length,rns_rrc_slice_t *text);
 #ifdef __cplusplus
 }
 #endif

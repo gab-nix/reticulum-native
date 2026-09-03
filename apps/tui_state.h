@@ -2,6 +2,7 @@
 #define NOMAD_TUI_STATE_H
 
 #include "tui_editor.h"
+#include "tui_rrc.h"
 #include "tui_settings.h"
 
 #include "reticulum/browser.h"
@@ -49,7 +50,8 @@ typedef enum {
     TUI_FIELD_SEARCH,
     TUI_FIELD_NODE_SEARCH,
     TUI_FIELD_ADDRESS,
-    TUI_FIELD_SETTING
+    TUI_FIELD_SETTING,
+    TUI_FIELD_RRC
 } tui_field_t;
 
 typedef enum {
@@ -183,6 +185,8 @@ typedef struct tui_state {
     tui_setting_item_t setting_selected;
     bool settings_load_error;
 
+    tui_rrc_model_t rrc;
+
     char status[TUI_STATUS_MAX];
 } tui_state_t;
 
@@ -268,6 +272,11 @@ bool tui_state_use_propagation_node(tui_state_t *state,
                                     const rns_node_record *record);
 /* Direct remains the default; propagated messages never silently downgrade. */
 void tui_state_toggle_delivery_method(tui_state_t *state);
+
+void tui_state_rrc_move(tui_state_t *state, int delta);
+void tui_state_rrc_activate(tui_state_t *state, uint64_t now_ms);
+bool tui_state_rrc_apply(tui_state_t *state);
+void tui_state_rrc_cancel(tui_state_t *state);
 
 /* Pure state updates used by router callbacks and unit tests. */
 void tui_state_apply_router_event(tui_state_t *state,

@@ -4,6 +4,8 @@
 #include "tui_state.h"
 #include "tui_text.h"
 
+#include "reticulum/hal.h"
+
 #include <curses.h>
 #include <locale.h>
 #include <string.h>
@@ -29,6 +31,7 @@ static bool field_visible(tui_state_t *state) {
             return state->screen == TUI_SCREEN_CONVERSATIONS;
         case TUI_FIELD_NODE_SEARCH: return state->screen == TUI_SCREEN_NETWORK;
         case TUI_FIELD_SETTING: return state->screen == TUI_SCREEN_SETTINGS;
+        case TUI_FIELD_RRC: return state->screen == TUI_SCREEN_RRC;
         case TUI_FIELD_NONE: return true;
     }
     return false;
@@ -56,6 +59,7 @@ static tui_editor_t *active_editor(tui_state_t *state) {
         case TUI_FIELD_NODE_SEARCH: return &state->node_search;
         case TUI_FIELD_ADDRESS: return &state->address;
         case TUI_FIELD_SETTING: return &state->setting;
+        case TUI_FIELD_RRC: return &state->setting;
         case TUI_FIELD_NONE: break;
     }
     return NULL;
@@ -115,11 +119,13 @@ static void handle_field_key(tui_state_t *state, int key) {
     if (editor == NULL) return;
     if (key == 27) {
         if (state->field == TUI_FIELD_SETTING) tui_state_setting_cancel(state);
+        else if (state->field == TUI_FIELD_RRC) tui_state_rrc_cancel(state);
         else state->field = TUI_FIELD_NONE;
         return;
     }
     if (key == '\n' || key == KEY_ENTER) {
         if (state->field == TUI_FIELD_SETTING) (void)tui_state_setting_apply(state);
+        else if (state->field == TUI_FIELD_RRC) (void)tui_state_rrc_apply(state);
         else if (state->field == TUI_FIELD_ADDRESS) submit_address(state);
         else if (state->field == TUI_FIELD_SEARCH) {
             state->field = TUI_FIELD_NONE;
@@ -175,6 +181,8 @@ static void select_previous(tui_state_t *state) {
         tui_state_node_move(state, -1);
     } else if (state->screen == TUI_SCREEN_INTERFACES) {
         tui_state_interface_move(state, -1);
+    } else if (state->screen == TUI_SCREEN_RRC) {
+        tui_state_rrc_move(state, -1);
     } else if (state->screen == TUI_SCREEN_CONVERSATIONS)
         tui_state_select_offset(state, -1);
 }
@@ -189,6 +197,8 @@ static void select_next(tui_state_t *state) {
         tui_state_node_move(state, 1);
     } else if (state->screen == TUI_SCREEN_INTERFACES) {
         tui_state_interface_move(state, 1);
+    } else if (state->screen == TUI_SCREEN_RRC) {
+        tui_state_rrc_move(state, 1);
     } else if (state->screen == TUI_SCREEN_CONVERSATIONS)
         tui_state_select_offset(state, 1);
 }
@@ -204,6 +214,10 @@ static void activate(tui_state_t *state) {
             if (!tui_state_selected_node(state, &selected)) tui_state_node_move(state, 0);
             state->overlay = TUI_OVERLAY_NODE_ACTIONS;
         } else tui_state_set_status(state, "No known nodes: wait for a verified announce");
+    } else if (state->screen == TUI_SCREEN_RRC) {
+        uint64_t now_ms = 0u;
+        (void)rns_hal_monotonic_ms(&now_ms);
+        tui_state_rrc_activate(state, now_ms);
     } else if (state->screen == TUI_SCREEN_CONVERSATIONS) {
         if (conversation_selected(state)) state->field = TUI_FIELD_COMPOSE;
         else tui_state_set_status(state, "No visible conversation: provide a destination address");
@@ -216,7 +230,12 @@ static void reload(tui_state_t *state) {
         (void)tui_state_browse(state, state->url, false);
     else if (state->screen == TUI_SCREEN_SETTINGS)
         tui_state_set_status(state, "Select Announce Now to send an LXMF announce");
-    else unavailable_screen(state, "RRC");
+    else if (state->screen == TUI_SCREEN_RRC)
+    {
+        const char *text = "RRC refresh is automatic; use Connect to retry";
+        (void)snprintf(state->rrc.status, sizeof state->rrc.status, "%s", text);
+        tui_state_set_status(state, "%s", text);
+    }
 }
 
 /* Returns false when the client should exit. */
@@ -248,6 +267,14 @@ static bool handle_command_key(tui_state_t *state, int key) {
                 tui_state_set_status(state, "Interfaces: j/k inspect live counters, Esc Chats");
             else if (state->screen == TUI_SCREEN_CONFIG)
                 tui_state_set_status(state, "Config: validated read-only runtime configuration, Esc Chats");
+            else if (state->screen == TUI_SCREEN_RRC)
+            {
+                const char *text =
+                    "RRC: j/k select, Enter edit/activate, Esc Chats";
+                (void)snprintf(state->rrc.status, sizeof state->rrc.status,
+                               "%s", text);
+                tui_state_set_status(state, "%s", text);
+            }
             else tui_state_set_status(state, "Screen unavailable: C or Esc returns to Conversations");
             break;
         case '1':
@@ -325,7 +352,8 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'I': state->screen = TUI_SCREEN_INTERFACES; break;
         case 'F': state->screen = TUI_SCREEN_CONFIG; break;
         case 'l': case 'L': unavailable_screen(state, "Logs"); break;
-        case 'r': case 'R': reload(state); break;
+        case 'R': state->screen = TUI_SCREEN_RRC; break;
+        case 'r': reload(state); break;
         case '\n': case KEY_ENTER: activate(state); break;
         case KEY_BACKSPACE: case 127: case 8:
             if (state->screen == TUI_SCREEN_BROWSER) tui_state_browse_back(state);

@@ -1,4 +1,5 @@
 #include "tui.h"
+#include "tui_render.h"
 #include "tui_state.h"
 
 #include <assert.h>
@@ -15,6 +16,7 @@ static tui_state_t *state_create(void) {
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     tui_settings_defaults(&state->settings);
+    tui_rrc_init(&state->rrc);
     rns_node_registry_init(&state->nodes, 3600.0);
     state->contact_count = 2u;
     state->contacts[0].peer[0] = 0x11u;
@@ -73,7 +75,8 @@ static void test_screen_scoping(void) {
         else assert(state->selected == selected);
         assert(tui_dispatch_key(state, 'k'));
         assert(state->selected == selected);
-        if (screen != TUI_SCREEN_CONVERSATIONS && screen != TUI_SCREEN_SETTINGS) {
+        if (screen != TUI_SCREEN_CONVERSATIONS && screen != TUI_SCREEN_SETTINGS &&
+            screen != TUI_SCREEN_RRC) {
             assert(tui_dispatch_key(state, '\n'));
             assert(state->field == TUI_FIELD_NONE && state->overlay == TUI_OVERLAY_NONE);
             assert(state->screen == (tui_screen_t)screen);
@@ -130,9 +133,11 @@ static void test_delivery_shortcut_is_screen_scoped(void) {
 
 static void test_hidden_editors(void) {
     for (int screen = 0; screen < TUI_SCREEN_COUNT; ++screen) {
-        for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_SETTING; ++field) {
+        for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_RRC; ++field) {
             bool visible = field == TUI_FIELD_SETTING
                              ? screen == TUI_SCREEN_SETTINGS
+                             : field == TUI_FIELD_RRC
+                                   ? screen == TUI_SCREEN_RRC
                              : field == TUI_FIELD_NODE_SEARCH
                                    ? screen == TUI_SCREEN_NETWORK
                                    : screen == TUI_SCREEN_CONVERSATIONS;
@@ -259,6 +264,19 @@ static void test_shortcuts_drafts_and_node_action(void) {
     assert(strstr(state->status, "validated read-only") != NULL);
     assert(tui_dispatch_key(state, 27));
     assert(state->screen == TUI_SCREEN_CONVERSATIONS);
+    assert(tui_dispatch_key(state, 'R'));
+    assert(state->screen == TUI_SCREEN_RRC);
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_RRC);
+    for (size_t i = 0u; i < TUI_RRC_HUB_ADDRESS_HEX; ++i)
+        assert(tui_dispatch_key(state, 'a'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_NONE);
+    assert(strlen(state->rrc.hub_address) == TUI_RRC_HUB_ADDRESS_HEX);
+    assert(tui_dispatch_key(state, 'j'));
+    assert(state->rrc.selected == TUI_RRC_ITEM_HUB_IDENTITY);
+    assert(tui_dispatch_key(state, 27));
+    assert(state->screen == TUI_SCREEN_CONVERSATIONS);
     assert(!tui_dispatch_key(state, 'Q'));
     free(state);
 }
@@ -282,6 +300,37 @@ static void test_browser_terminal_escape(void) {
     free(state);
 }
 
+static void test_rrc_headless_dump(void) {
+    tui_state_t *state = state_create();
+    state->screen = TUI_SCREEN_RRC;
+    assert(tui_rrc_edit_apply(&state->rrc, TUI_RRC_ITEM_HUB_ADDRESS,
+        "00112233445566778899aabbccddeeff", 32u));
+    assert(tui_rrc_edit_apply(&state->rrc, TUI_RRC_ITEM_NICK, "Rei", 3u));
+    assert(tui_rrc_edit_apply(&state->rrc, TUI_RRC_ITEM_ROOM, "lobby", 5u));
+    static const uint8_t body[] = {0x65u, 'h', 'e', 'l', 'l', 'o'};
+    rns_rrc_envelope_t envelope = {
+        .version = RNS_RRC_VERSION,
+        .type = RNS_RRC_MESSAGE,
+        .timestamp_ms = 10u,
+        .room = {(const uint8_t *)"lobby", 5u},
+        .body_cbor = {body, sizeof body},
+        .nick = {(const uint8_t *)"Rei", 3u}};
+    tui_rrc_apply_envelope(&state->rrc, &envelope);
+    FILE *dump = tmpfile();
+    assert(dump != NULL);
+    assert(tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    char output[2048];
+    size_t length = fread(output, 1u, sizeof output - 1u, dump);
+    output[length] = '\0';
+    assert(strstr(output, "Screen: RRC") != NULL);
+    assert(strstr(output, "State: disconnected") != NULL);
+    assert(strstr(output, "#lobby <Rei> hello") != NULL);
+    assert(strstr(output, "Resource envelopes") != NULL);
+    assert(fclose(dump) == 0);
+    free(state);
+}
+
 int main(void) {
     assert(!tui_dispatch_key(NULL, '\n'));
     test_screen_scoping();
@@ -291,5 +340,6 @@ int main(void) {
     test_modal_isolation();
     test_shortcuts_drafts_and_node_action();
     test_browser_terminal_escape();
+    test_rrc_headless_dump();
     return 0;
 }

@@ -793,6 +793,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
+    tui_rrc_init(&state->rrc);
     tui_settings_defaults(&state->settings);
     rns_config_init(&state->parsed_config);
     state->tab = TUI_TRUST_UNKNOWN;
@@ -881,6 +882,7 @@ void tui_state_close(tui_state_t *state) {
         (void)tui_settings_save(state->settings_path, &state->settings);
     rns_browser_destroy(state->browser);
     state->browser = NULL;
+    tui_rrc_close(&state->rrc);
     if (state->router_ready) lxmf_router_destroy(&state->router);
     state->router_ready = false;
     rns_runtime_destroy(state->runtime);
@@ -981,6 +983,7 @@ void tui_state_poll(tui_state_t *state) {
     poll_browser(state);
     if (rns_hal_monotonic_ms(&now) == RNS_OK) {
         (void)rns_node_registry_expire(&state->nodes, (double)now / 1000.0);
+        tui_rrc_poll(&state->rrc, now);
         apply_propagation_route(state);
         if (state->next_announce_ms == 0u)
             state->next_announce_ms = now + tui_settings_interval_ms(&state->settings);
@@ -1189,6 +1192,62 @@ void tui_state_toggle_note(tui_state_t *state) {
     tui_state_set_status(state, "Contact note saved");
 }
 
+/* ----------------------------------------------------------------------- RRC */
+
+void tui_state_rrc_move(tui_state_t *state, int delta) {
+    if (state == NULL || state->field != TUI_FIELD_NONE) return;
+    tui_rrc_move(&state->rrc, delta);
+}
+
+void tui_state_rrc_activate(tui_state_t *state, uint64_t now_ms) {
+    if (state == NULL) return;
+    tui_rrc_item_t selected = state->rrc.selected;
+    size_t capacity = tui_rrc_edit_capacity(selected);
+    if (capacity != 0u) {
+        const char *value = tui_rrc_edit_value(&state->rrc, selected);
+        tui_editor_init(&state->setting, capacity);
+        if (value != NULL)
+            (void)tui_editor_insert(&state->setting, value, strlen(value));
+        state->field = TUI_FIELD_RRC;
+        return;
+    }
+    switch (selected) {
+        case TUI_RRC_ITEM_CONNECT:
+            (void)tui_rrc_connect_toggle(&state->rrc, state->runtime,
+                                          &state->identity, now_ms);
+            break;
+        case TUI_RRC_ITEM_JOIN: (void)tui_rrc_join(&state->rrc); break;
+        case TUI_RRC_ITEM_PART: (void)tui_rrc_part(&state->rrc); break;
+        case TUI_RRC_ITEM_SEND: (void)tui_rrc_send(&state->rrc); break;
+        case TUI_RRC_ITEM_HUB_ADDRESS:
+        case TUI_RRC_ITEM_HUB_IDENTITY:
+        case TUI_RRC_ITEM_NICK:
+        case TUI_RRC_ITEM_ROOM:
+        case TUI_RRC_ITEM_MESSAGE:
+        case TUI_RRC_ITEM_COUNT:
+            break;
+    }
+}
+
+bool tui_state_rrc_apply(tui_state_t *state) {
+    if (state == NULL || state->field != TUI_FIELD_RRC) return false;
+    if (!tui_rrc_edit_apply(&state->rrc, state->rrc.selected,
+                            tui_editor_text(&state->setting),
+                            tui_editor_length(&state->setting)))
+        return false;
+    tui_editor_clear(&state->setting);
+    state->field = TUI_FIELD_NONE;
+    return true;
+}
+
+void tui_state_rrc_cancel(tui_state_t *state) {
+    if (state == NULL) return;
+    tui_editor_clear(&state->setting);
+    state->field = TUI_FIELD_NONE;
+    (void)snprintf(state->rrc.status, sizeof state->rrc.status,
+                   "%s", "RRC edit cancelled");
+}
+
 /* ---------------------------------------------------------------- settings */
 
 bool tui_state_save_settings(tui_state_t *state) {
@@ -1215,7 +1274,7 @@ void tui_state_setting_move(tui_state_t *state, int delta) {
 }
 
 static void begin_setting_edit(tui_state_t *state, const char *value) {
-    tui_editor_clear(&state->setting);
+    tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     if (value != NULL)
         (void)tui_editor_insert(&state->setting, value, strlen(value));
     state->field = TUI_FIELD_SETTING;

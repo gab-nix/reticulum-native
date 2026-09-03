@@ -45,6 +45,9 @@ starting an asynchronous attempt is never presented as a failure by itself.
 - `F`: show the validated Reticulum configuration, including interface
   endpoints and core transport/share policy. This checkpoint is read-only;
   edit the selected configuration file outside the TUI and restart to apply it.
+- `R`: open the basic RRC client. Enter the hub's 32-hex destination and
+  128-hex public identity, choose a nick and room, then use the action rows to
+  connect, join, part and send. The values are session-only in this checkpoint.
 - `?`: show the keyboard help overlay.
 - `Esc`: close the active editor or dialog first; cancel an active Browser
   request; return other screens to Conversations. In Conversations, a second
@@ -57,7 +60,9 @@ bounded active-node registry from verified announces, and Browser renders parsed
 Micron content with link selection plus bounded back history. Under `--config`
 the browser performs real path discovery, link establishment and page requests,
 and reports loading, failure and cancellation states. Settings, Interfaces,
-Config and Guide are also functional; Logs and RRC UI remain explicit gaps.
+Config and Guide are also functional. RRC has a basic authenticated live client
+for text messages; room/member history, Resource envelopes and hub management
+remain explicit gaps. Logs remains unavailable.
 
 In Network, use `j`/`k` or the arrow keys to select a verified announce. The
 list scrolls around the selection, and the selection is held by destination
