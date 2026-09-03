@@ -26,6 +26,7 @@
 #include "reticulum/proof.h"
 #include "reticulum/runtime.h"
 #include "reticulum/rrc.h"
+#include "reticulum/rrc_session.h"
 #include "reticulum/request.h"
 #include "reticulum/resource.h"
 #include "reticulum/status.h"

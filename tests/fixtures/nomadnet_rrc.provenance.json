@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "fixture": "nomadnet_rrc_vectors.h",
-  "fixture_sha256": "f8909b03d0b9b85d66af288818e20ff113b274333987284b0de1c7fcde421a08",
+  "fixture_sha256": "827c20c317dc44df01bcdeccf51c9221338399e55c8212ea2f403ed91f285775",
   "generator": "tools/generate_nomadnet_rrc_fixtures.py",
   "nomadnet": {
     "version": "1.2.0",
@@ -13,7 +13,7 @@
     ]
   },
   "coverage": [
-    "HELLO and WELCOME capability and limit maps",
+    "exact client HELLO and WELCOME capability and limit maps",
     "JOIN, JOINED, PART and PARTED envelopes",
     "MSG, NOTICE, PING, PONG and ERROR envelopes",
     "resource envelope metadata",

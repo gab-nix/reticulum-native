@@ -169,6 +169,15 @@ def main() -> None:
         "    uint8_t has_unknown_outer;",
         "} nomadnet_rrc_fixture;",
     ]
+    session_hello_body = cbor.encode({
+        rrc.B_HELLO_NAME: "nomadnet",
+        rrc.B_HELLO_VER: "0.1",
+        rrc.B_HELLO_CAPS: {rrc.CAP_RESOURCE_ENVELOPE: True},
+    })
+    lines.append(
+        "static const uint8_t nomadnet_rrc_session_hello_body[] = {" +
+        c_bytes(session_hello_body) + "};"
+    )
     references = []
     for index, vector in enumerate(vectors):
         refs = {}
