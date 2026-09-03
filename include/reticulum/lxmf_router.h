@@ -65,6 +65,39 @@ typedef void (*lxmf_router_message_callback_fn)(
 typedef void (*lxmf_router_signature_callback_fn)(
     void *context, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     lxmf_signature_state_t state);
+
+typedef enum {
+    LXMF_DELIVERY_METHOD_UNKNOWN = 0,
+    LXMF_DELIVERY_METHOD_DIRECT,
+    LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+    LXMF_DELIVERY_METHOD_PROPAGATED
+} lxmf_delivery_method_t;
+
+typedef enum {
+    LXMF_QUEUE_REASON_NONE = 0,
+    LXMF_QUEUE_REASON_PEER_IDENTITY,
+    LXMF_QUEUE_REASON_PATH,
+    LXMF_QUEUE_REASON_STAMP,
+    LXMF_QUEUE_REASON_LINK,
+    LXMF_QUEUE_REASON_RESOURCE,
+    LXMF_QUEUE_REASON_PROPAGATION_NODE,
+    LXMF_QUEUE_REASON_RETRY_BACKOFF
+} lxmf_queue_reason_t;
+
+/* Privacy-safe delivery diagnostics. This deliberately contains no message
+ * title, content, fields, key material or packet bytes. */
+typedef struct {
+    uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
+    lxmf_delivery_method_t method;
+    lxmf_delivery_status_t state;
+    lxmf_queue_reason_t queue_reason;
+    lxmf_status_t result;
+    uint32_t attempt;
+} lxmf_router_event_t;
+
+typedef void (*lxmf_router_event_callback_fn)(
+    void *context, const lxmf_router_event_t *event);
+
 typedef struct {
     rns_identity *identity;
     lxmf_store_t *store;
@@ -78,6 +111,8 @@ typedef struct {
     void *message_context;
     lxmf_router_signature_callback_fn signature_callback;
     void *signature_context;
+    lxmf_router_event_callback_fn event_callback;
+    void *event_context;
 } lxmf_router_config_t;
 typedef struct { lxmf_router_config_t config; } lxmf_router_t;
 
@@ -85,6 +120,7 @@ typedef struct {
     size_t attempted;
     size_t sent;
     size_t failed;
+    size_t deferred;
 } lxmf_router_poll_result_t;
 
 lxmf_status_t lxmf_router_init(lxmf_router_t *router,
@@ -122,6 +158,9 @@ typedef struct {
 lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
                                          const uint8_t source[LXMF_SOURCE_LENGTH],
                                          lxmf_router_verify_result_t *result);
+
+const char *lxmf_delivery_method_string(lxmf_delivery_method_t method);
+const char *lxmf_queue_reason_string(lxmf_queue_reason_t reason);
 
 lxmf_status_t lxmf_contact_book_init(lxmf_contact_book_t *book,
                                      lxmf_contact_t *storage, size_t capacity,

@@ -12,6 +12,48 @@ static void report(lxmf_router_t *router,
                                          state, result);
 }
 
+static void report_event(lxmf_router_t *router,
+                         const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
+                         lxmf_delivery_method_t method,
+                         lxmf_delivery_status_t state,
+                         lxmf_queue_reason_t queue_reason,
+                         lxmf_status_t result) {
+    if (router->config.event_callback == NULL) return;
+    lxmf_router_event_t event = {
+        .method = method,
+        .state = state,
+        .queue_reason = queue_reason,
+        .result = result,
+        .attempt = 0u
+    };
+    memcpy(event.message_id, id, sizeof event.message_id);
+    router->config.event_callback(router->config.event_context, &event);
+}
+
+const char *lxmf_delivery_method_string(lxmf_delivery_method_t method) {
+    switch (method) {
+        case LXMF_DELIVERY_METHOD_UNKNOWN: return "unknown";
+        case LXMF_DELIVERY_METHOD_DIRECT: return "direct";
+        case LXMF_DELIVERY_METHOD_OPPORTUNISTIC: return "opportunistic";
+        case LXMF_DELIVERY_METHOD_PROPAGATED: return "propagated";
+        default: return "invalid";
+    }
+}
+
+const char *lxmf_queue_reason_string(lxmf_queue_reason_t reason) {
+    switch (reason) {
+        case LXMF_QUEUE_REASON_NONE: return "none";
+        case LXMF_QUEUE_REASON_PEER_IDENTITY: return "peer identity";
+        case LXMF_QUEUE_REASON_PATH: return "path";
+        case LXMF_QUEUE_REASON_STAMP: return "stamp";
+        case LXMF_QUEUE_REASON_LINK: return "link";
+        case LXMF_QUEUE_REASON_RESOURCE: return "resource";
+        case LXMF_QUEUE_REASON_PROPAGATION_NODE: return "propagation node";
+        case LXMF_QUEUE_REASON_RETRY_BACKOFF: return "retry backoff";
+        default: return "invalid";
+    }
+}
+
 lxmf_status_t lxmf_router_init(lxmf_router_t *router,
                                const lxmf_router_config_t *config) {
     if (router == NULL || config == NULL || config->identity == NULL ||
@@ -36,7 +78,12 @@ lxmf_status_t lxmf_router_send_message(
     const rns_identity *destination = router->config.resolve_identity(
         router->config.resolve_context, stored.destination);
     /* A missing announce is a normal discovery state, not a delivery failure. */
-    if (destination == NULL) return LXMF_ERR_FORMAT;
+    if (destination == NULL) {
+        report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+                     LXMF_DELIVERY_QUEUED, LXMF_QUEUE_REASON_PEER_IDENTITY,
+                     LXMF_ERR_PENDING);
+        return LXMF_ERR_PENDING;
+    }
     lxmf_message_t message = {0};
     message.content = (lxmf_slice_t){content, stored.content.len};
     memcpy(message.destination, stored.destination, sizeof message.destination);
@@ -47,6 +94,8 @@ lxmf_status_t lxmf_router_send_message(
                                  LXMF_DELIVERY_SENDING) != LXMF_OK)
         return LXMF_ERR_CRYPTO;
     report(router, id, LXMF_DELIVERY_SENDING, LXMF_OK);
+    report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+                 LXMF_DELIVERY_SENDING, LXMF_QUEUE_REASON_NONE, LXMF_OK);
     size_t packet_length = 0;
     lxmf_status_t status = lxmf_opportunistic_packet_pack(
         &message, router->config.identity, destination, packet, sizeof packet,
@@ -59,10 +108,14 @@ lxmf_status_t lxmf_router_send_message(
         status = LXMF_ERR_CRYPTO;
     if (status == LXMF_OK) {
         report(router, id, LXMF_DELIVERY_SENT, LXMF_OK);
+        report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+                     LXMF_DELIVERY_SENT, LXMF_QUEUE_REASON_NONE, LXMF_OK);
     } else {
         (void)lxmf_store_update_status(router->config.store, id,
                                        LXMF_DELIVERY_FAILED);
         report(router, id, LXMF_DELIVERY_FAILED, status);
+        report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+                     LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_NONE, status);
     }
     return status;
 }
@@ -96,6 +149,7 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
         status = lxmf_router_send_message(router, pending.ids[i]);
         result->attempted++;
         if (status == LXMF_OK) result->sent++;
+        else if (status == LXMF_ERR_PENDING) result->deferred++;
         else result->failed++;
     }
     return LXMF_OK;
@@ -139,6 +193,10 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
     if (status != LXMF_OK) return status;
     if (inserted && router->config.message_callback != NULL)
         router->config.message_callback(router->config.message_context, &stored);
+    if (inserted)
+        report_event(router, stored.message_id,
+                     LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+                     LXMF_DELIVERY_DELIVERED, LXMF_QUEUE_REASON_NONE, LXMF_OK);
     return LXMF_OK;
 }
 

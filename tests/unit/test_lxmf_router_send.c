@@ -13,6 +13,8 @@ typedef struct {
     bool fail;
     size_t callbacks;
     lxmf_delivery_status_t last_status;
+    size_t events;
+    lxmf_router_event_t last_event;
 } send_state_t;
 
 static const rns_identity *resolve(void *context, const uint8_t hash[16]) {
@@ -41,6 +43,13 @@ static void delivery(void *context, const uint8_t id[32],
     (void)result;
     state->callbacks++;
     state->last_status = status;
+}
+
+static void event(void *context, const lxmf_router_event_t *delivery_event) {
+    send_state_t *state = context;
+    assert(delivery_event != NULL);
+    state->events++;
+    state->last_event = *delivery_event;
 }
 
 typedef struct { size_t count; uint8_t id[32]; } incoming_state_t;
@@ -89,10 +98,15 @@ int main(void) {
         .identity = &alice, .store = &store, .resolve_identity = resolve,
         .resolve_context = &state, .send_packet = send_packet,
         .send_context = &state, .delivery_callback = delivery,
-        .delivery_context = &state};
+        .delivery_context = &state, .event_callback = event,
+        .event_context = &state};
     assert(lxmf_router_init(&router, &config) == LXMF_OK);
     assert(lxmf_router_send_message(&router, message.message_id) == LXMF_OK);
     assert(state.length > 0u && state.last_status == LXMF_DELIVERY_SENT);
+    assert(state.events == 2u);
+    assert(state.last_event.method == LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
+    assert(state.last_event.state == LXMF_DELIVERY_SENT);
+    assert(state.last_event.queue_reason == LXMF_QUEUE_REASON_NONE);
     lxmf_store_message_t got;
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
@@ -125,18 +139,33 @@ int main(void) {
     message.message_id[0] = 3u;
     assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
     state.peer = NULL;
-    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_FORMAT);
+    size_t events_before_wait = state.events;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    assert(state.events == events_before_wait + 1u);
+    assert(state.last_event.state == LXMF_DELIVERY_QUEUED);
+    assert(state.last_event.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY);
+    assert(state.last_event.result == LXMF_ERR_PENDING);
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_QUEUED);
+    lxmf_router_poll_result_t result;
+    assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK);
+    assert(result.attempted == 1u && result.deferred == 1u);
+    assert(result.sent == 0u && result.failed == 0u);
     state.peer = &bob;
     assert(lxmf_store_update_status(&store, message.message_id,
                                     LXMF_DELIVERY_SENT) == LXMF_OK);
 
+    assert(strcmp(lxmf_delivery_method_string(LXMF_DELIVERY_METHOD_DIRECT),
+                  "direct") == 0);
+    assert(strcmp(lxmf_queue_reason_string(LXMF_QUEUE_REASON_RETRY_BACKOFF),
+                  "retry backoff") == 0);
+    assert(strcmp(lxmf_status_string(LXMF_ERR_PENDING),
+                  "waiting for delivery prerequisite") == 0);
+
     message.message_id[0] = 2u;
     assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
     state.fail = true;
-    lxmf_router_poll_result_t result;
     assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK);
     assert(result.attempted == 1u && result.failed == 1u);
     assert(state.last_status == LXMF_DELIVERY_FAILED);

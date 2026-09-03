@@ -27,6 +27,9 @@ typedef enum {
     LXMF_ERR_CRYPTO,
     LXMF_ERR_SIGNATURE,
     LXMF_ERR_CANCELLED,
+    /* The operation is valid but cannot progress until an external condition,
+     * such as learning a peer identity or path, becomes available. */
+    LXMF_ERR_PENDING,
     /* The signer's identity is not held locally, so the signature can be
      * neither confirmed nor refuted. Distinct from LXMF_ERR_SIGNATURE, which
      * means a known identity did not sign the message. */
