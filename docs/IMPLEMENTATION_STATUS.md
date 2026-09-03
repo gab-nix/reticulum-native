@@ -1,59 +1,43 @@
-# Implementation status
+# Release status
 
-The detailed source of truth is [FEATURE_STATUS.md](FEATURE_STATUS.md). Passing
-local tests is not a claim of full Reticulum or Nomad Network interoperability.
+This is a development checkpoint, not a NomadNet-compatible v1 release.
+[FEATURE_STATUS.md](FEATURE_STATUS.md) is the canonical detailed ledger;
+[COMPATIBILITY.md](COMPATIBILITY.md) records the pinned RNS 1.5.2, LXMF 1.1.0
+and NomadNet 1.2.0 revisions. A local test pass is not upstream verification.
 
-## Implemented
+## Available now
 
-- C17 CMake library, install/export rules, strict warnings, ASan/UBSan and CI.
-- POSIX HAL, bounded buffers and explicit status values.
-- SHA-256, HMAC, HKDF, X25519, Ed25519 and AES-256 modified-Fernet tokens.
-- Identity generation/import/export/signing and ephemeral single-packet
-  encryption.
-- Destination hashes, Header 1/Header 2 packets and packet hashes.
-- Signed announce construction, parsing and validation, including ratchets.
-- Bounded path and deduplication tables plus verified ingress/forward decisions.
-- IFAC protection and explicit/implicit packet proofs with reference vectors.
-- HDLC/KISS framing and nonblocking IPv4/IPv6 TCP and UDP transports.
-- A caller-polled UDP/TCP runtime and `rnsd` configuration/event loop.
-- Link request/proof key exchange, RTT confirmation, encryption and timeout
-  state.
-- Bounded Link Channel envelopes, sequencing, receive ordering, acknowledgements,
-  retry timers and adaptive send windows.
-- LXMF base message packing, signatures, ticket and proof-of-work stamps,
-  delivery announce app-data, contacts, and a crash-recovering message journal.
-- Opportunistic LXMF packet construction/decryption and UDP CLI send/receive.
-- `rnid` and an initial `nomad-chat` CLI for identities, packed messages,
-  history and direct UDP testing.
-- A responsive ncurses chat UI with conversation navigation, durable composer,
-  delivery markers, narrow-terminal fallback and deterministic headless output.
+- C17 library and POSIX UDP/TCP runtime with verified announces, packet receipts,
+  bidirectional authenticated links, request handlers and single-segment
+  Resource sending/receiving.
+- Native LXMF direct packet/Resource and opportunistic delivery; persistent
+  ratchets and tickets; caller-polled outbound stamps; inbound block, stamp and
+  size policies; and durable messages retaining full incoming representations.
+- An ncurses client with conversations, Network discovery, remote Micron page
+  requests and Settings announcements, plus the existing diagnostic CLI tools.
+- Opt-in [static page hosting](HOSTED_NODE.md) and a bounded
+  [propagation client session](PROPAGATION_CLIENT.md) at library level. Complete
+  hosting and propagation application workflows are not yet available.
 
-## Not yet implemented
+## Evidence and release gates
 
-- Shared-instance IPC, AutoInterface, serial KISS and RNode drivers.
-- Complete transport forwarding: reverse/proof/link/tunnel tables, cached path
-  responses, announce scheduling/rate limits and persistent path state.
-- Link receipts, keepalives, identification, requests/responses, Channel-to-Link
-  packet wiring and buffers.
-- Resource segmentation, compression, retries, resume and cancellation.
-- LXMF direct-over-link/resource routing, outbound retry queues, propagation
-  node upload/sync, ticket lifecycle and offline delivery.
-- Contact discovery wired to live announces, full Nomad/Sideband interop tests,
-  live TUI delivery/receiving, and the remaining operational utilities.
-- Embedded HAL examples and non-OpenSSL crypto provider.
+The repository has strict Clang builds, unit/headless tests, loopback UDP/TCP
+integration tests, focused ASan/UBSan coverage, and provenance-recorded pinned
+Python protocol fixtures. The [live opportunistic report](LXMF_LIVE_TESTING.md)
+verifies short identity-key packets in both directions over loopback UDP.
+The [live direct report](LXMF_DIRECT_INTEROP.md) verifies bidirectional 17-byte
+packet and 2,048-byte incompressible Resource messages, including proofs and
+retained metadata, against the pinned Python stack over loopback UDP. These
+reports are narrow evidence, not full messaging or TUI parity. See each report
+and the ledger for source revisions and exclusions. Build and test commands
+are in the [README](../README.md#build-and-test).
 
-## Current verification
+Remaining release gates include multi-segment Resources/resume; complete retry,
+propagation and offline delivery; full Micron forms, executable pages and remote
+files; hosted-node and propagation-node operation in the apps; RRC sessions and
+remaining TUI workflows; multi-hop routing; AutoInterface/shared IPC/KISS/RNode;
+broader bidirectional upstream tests; and physical RNode validation.
 
-- Warning-as-error builds pass with Clang.
-- Unit and non-socket tests pass under ASan and UBSan.
-- TCP and UDP loopback tests pass when local socket access is permitted.
-- Two C nodes exchange and verify an encrypted LXMF packet over UDP.
-- The daemon validates supported configurations and composes TCP/UDP interfaces
-  with the ingress/forwarding engine.
-- The LXMF payload order has a golden byte vector generated by the pinned Python
-  implementation.
-- The TUI model and headless rendering contract have automated acceptance tests;
-  the interactive curses lifecycle has also been smoke-tested in a PTY.
-
-Full v1 acceptance remains blocked until bidirectional tests pass against the
-pinned Python Reticulum, LXMF and Nomad Network releases.
+Current bounds remain explicit: one 74-part Resource segment, an 8 MiB packed
+message limit, a 4 KiB content-preview admission limit and a 16 MiB journal quota.
+Increasing a storage limit does not complete the missing transport behavior.

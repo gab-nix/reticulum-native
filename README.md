@@ -1,18 +1,20 @@
 # reticulum-c
 
 A portable C17 implementation of the Reticulum networking stack and LXMF client.
-The project is under active development. Pinned Python-generated protocol
-fixtures exist, but complete live interoperability has not yet passed, so this
-is not yet a drop-in replacement for Nomad Network.
+The project is under active development. Pinned protocol fixtures and specific
+live Python interoperability checks exist, but the complete acceptance matrix
+has not passed. This is not yet a drop-in replacement for Nomad Network.
 
-See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for the exact
-implemented feature set and remaining interoperability work. The current CLI is
-an early integration tool, not yet a replacement for Nomad Network.
+See the [release summary](docs/IMPLEMENTATION_STATUS.md) and canonical
+[feature ledger](docs/FEATURE_STATUS.md) for implemented behavior, evidence and
+remaining work. Compatibility targets the revisions recorded in the
+[compatibility baseline](docs/COMPATIBILITY.md), not an unpinned latest release.
 
 ## Requirements
 
 - A C17 compiler (Clang or GCC)
 - CMake 3.21 or newer
+- Ninja for the build commands below
 - OpenSSL 3.x development headers and libraries
 - POSIX threads and ncursesw (macOS and Linux)
 - libbz2 for compressed Reticulum Resources
@@ -82,10 +84,43 @@ See [docs/TCP_SETUP.md](docs/TCP_SETUP.md) for direct TCP configuration,
 
 ## Current release boundary
 
-UDP/TCP announces, packet receipts, bidirectional authenticated links,
-proof-backed packet-sized direct LXMF, single-segment Resource transport,
-Micron page requests, Settings announcements, and the early RRC envelope codec
-have automated coverage. Large LXMF router integration, stamps/tickets policy,
-propagation sync, hosted nodes, full RRC sessions, AutoInterface/shared IPC,
-KISS/RNode drivers, multi-hop parity, and the physical RNode gate remain work in
-progress. The feature ledger is authoritative if this summary ever lags.
+The native library and early client include:
+
+- UDP/TCP networking, verified announces, packet receipts, authenticated inbound
+  and outbound links, request handlers, and single-segment Resource transfer.
+- Proof-backed direct LXMF over reusable links and Resources, opportunistic
+  packets, ratchet history, ticket reuse, bounded asynchronous stamp generation,
+  and durable delivery state. Accepted incoming messages retain their full
+  representation, including title, unknown fields and stamps.
+- Core inbound source-block and message-size policy, with stamp enforcement
+  independent of contact trust. Application preferences remain separate from
+  wire validation and cryptography.
+- Network discovery, remote Micron page requests, conversation/history access,
+  and Settings-controlled `lxmf.delivery` announcements.
+- An opt-in [static page hosting API](docs/HOSTED_NODE.md) and a caller-polled
+  [propagation client session API](docs/PROPAGATION_CLIENT.md). These are library
+  capabilities, not completed hosted-node or propagation-sync TUI workflows.
+
+Resource transfers remain single-segment and limited to the 74 parts described
+by one advertisement. The 8 MiB codec/storage bound does not imply that all
+messages of that size can be delivered: the history content-preview admission
+limit is 4 KiB and the journal quota is 16 MiB.
+
+Major remaining work includes multi-segment transfer and resume; complete retry
+and offline propagation workflows; full Micron forms, executable pages and
+remote file downloads; hosted-node/propagation application controls; RRC sessions
+and remaining TUI workflows; multi-hop transport parity; AutoInterface, shared
+IPC, KISS and RNode drivers; and physical RNode validation.
+
+## Interoperability evidence
+
+[Live opportunistic testing](docs/LXMF_LIVE_TESTING.md) records bidirectional
+short identity-key LXMF packets against pinned Python RNS/LXMF over loopback UDP.
+[Live direct testing](docs/LXMF_DIRECT_INTEROP.md) records 17-byte packet and
+2,048-byte incompressible Resource messages in both directions, including final
+proofs and retained title/unknown fields. These narrow gates do not establish
+TCP, transport-hop, stamp, propagation or complete TUI interoperability.
+Python-generated fixtures and C-to-C tests cover additional layers but are not
+substitutes for the complete upstream matrix. The feature ledger and linked
+reports record the exact scope of each result; no full NomadNet or Reticulum
+parity is claimed.
