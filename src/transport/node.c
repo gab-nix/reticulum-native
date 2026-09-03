@@ -48,12 +48,70 @@ int rns_node_unregister_destination(rns_node *node, const uint8_t destination_ha
     return 0;
 }
 
-static int rewrite_packet(const rns_packet *packet, uint8_t hops, const uint8_t transport_id[16],
-                          uint8_t *output, size_t capacity, size_t *length) {
+static int rewrite_packet(const rns_packet *packet, uint8_t hops,
+                          const rns_path_entry *path, uint8_t *output,
+                          size_t capacity, size_t *length) {
     rns_packet rewritten = *packet;
-    rewritten.header_type = RNS_PACKET_HEADER_2; rewritten.transport_type = 1; rewritten.hops = hops;
+    rewritten.hops = hops;
+    if (path->hops <= 1u) {
+        rewritten.header_type = RNS_PACKET_HEADER_1;
+        rewritten.transport_type = 0;
+        memset(rewritten.transport_id, 0, sizeof rewritten.transport_id);
+    } else {
+        rewritten.header_type = RNS_PACKET_HEADER_2;
+        rewritten.transport_type = 1;
+        memcpy(rewritten.transport_id, path->next_hop, 16);
+    }
+    return rns_packet_encode(&rewritten, output, capacity, length);
+}
+
+static int rewrite_proof(const rns_packet *packet, uint8_t hops,
+                         uint8_t *output, size_t capacity, size_t *length) {
+    rns_packet rewritten = *packet;
+    rewritten.hops = hops;
+    return rns_packet_encode(&rewritten, output, capacity, length);
+}
+
+static int rewrite_announce(const rns_packet *packet, uint8_t hops,
+                            const uint8_t transport_id[16], uint8_t *output,
+                            size_t capacity, size_t *length) {
+    rns_packet rewritten = *packet;
+    rewritten.header_type = RNS_PACKET_HEADER_2;
+    rewritten.transport_type = 1;
+    rewritten.hops = hops;
     memcpy(rewritten.transport_id, transport_id, 16);
     return rns_packet_encode(&rewritten, output, capacity, length);
+}
+
+static int ordinary_proof_ingress(rns_node *node, const rns_packet *packet,
+                                  uint8_t received_hops, uint64_t interface_id,
+                                  uint8_t *output, size_t output_capacity,
+                                  rns_node_result *result) {
+    uint64_t return_interface = 0;
+    rns_reverse_result reverse;
+    if (packet->header_type != RNS_PACKET_HEADER_1 || packet->transport_type != 0 ||
+        packet->destination_type != 0 || packet->context != 0 ||
+        (packet->data_length != 64u && packet->data_length != 96u)) {
+        result->reason = RNS_NODE_REASON_BAD_PROOF;
+        return 1;
+    }
+    reverse = rns_transport_consume_reverse(&node->transport,
+                                            packet->destination_hash,
+                                            interface_id, &return_interface);
+    if (reverse != RNS_REVERSE_MATCHED) {
+        result->reason = reverse == RNS_REVERSE_WRONG_INTERFACE
+                             ? RNS_NODE_REASON_WRONG_REVERSE_INTERFACE
+                             : RNS_NODE_REASON_NO_REVERSE_PATH;
+        return 1;
+    }
+    if (!rewrite_proof(packet, received_hops, output, output_capacity,
+                       &result->output_length)) {
+        result->reason = RNS_NODE_REASON_OUTPUT_TOO_SMALL;
+        return 1;
+    }
+    result->forward_interface_id = return_interface;
+    result->action = RNS_NODE_FORWARD;
+    return 1;
 }
 
 static int announce_ingress(rns_node *node, const rns_packet *packet, const uint8_t packet_hash[32],
@@ -87,7 +145,8 @@ static int announce_ingress(rns_node *node, const rns_packet *packet, const uint
     }
     memcpy(result->next_hop, next_hop, 16);
     if (packet->context == RNS_NODE_PATH_RESPONSE_CONTEXT) { result->action = RNS_NODE_DELIVER; return 1; }
-    if (!rewrite_packet(packet, received_hops, node->transport_id, output, output_capacity, &result->output_length)) {
+    if (!rewrite_announce(packet, received_hops, node->transport_id, output,
+                          output_capacity, &result->output_length)) {
         result->reason = RNS_NODE_REASON_OUTPUT_TOO_SMALL; return 1;
     }
     result->action = RNS_NODE_REBROADCAST; return 1;
@@ -121,14 +180,31 @@ int rns_node_ingress(rns_node *node, const uint8_t *raw, size_t raw_length,
                                 interface_gravity, output, output_capacity, result);
     if (memcmp(packet.destination_hash, node->path_request_destination, 16) == 0)
         return path_request_ingress(node, &packet, result);
+    if (packet.packet_type == 3 && packet.context == 0)
+        return ordinary_proof_ingress(node, &packet, received_hops, interface_id,
+                                      output, output_capacity, result);
     if (local_destination(node, packet.destination_hash)) { result->action = RNS_NODE_DELIVER; return 1; }
+    if (packet.packet_type == 3) {
+        result->reason = RNS_NODE_REASON_BAD_PROOF;
+        return 1;
+    }
     if (packet.header_type == RNS_PACKET_HEADER_2 && memcmp(packet.transport_id, node->transport_id, 16) != 0) {
         result->reason = RNS_NODE_REASON_NOT_FOR_US; return 1;
     }
     path = rns_transport_lookup(&node->transport, packet.destination_hash);
     if (!path) { result->reason = RNS_NODE_REASON_NO_PATH; return 1; }
-    if (!rewrite_packet(&packet, received_hops, path->next_hop, output, output_capacity, &result->output_length)) {
+    if (!rewrite_packet(&packet, received_hops, path, output, output_capacity, &result->output_length)) {
         result->reason = RNS_NODE_REASON_OUTPUT_TOO_SMALL; return 1;
     }
-    memcpy(result->next_hop, path->next_hop, 16); result->action = RNS_NODE_FORWARD; return 1;
+    if (packet.packet_type == 0 && packet.header_type == RNS_PACKET_HEADER_2 &&
+        packet.transport_type == 1 &&
+        !rns_transport_record_reverse(&node->transport, result->packet_hash,
+                                      interface_id, path->interface_id)) {
+        result->reason = RNS_NODE_REASON_NO_REVERSE_PATH;
+        result->output_length = 0;
+        return 1;
+    }
+    memcpy(result->next_hop, path->next_hop, 16);
+    result->forward_interface_id = path->interface_id;
+    result->action = RNS_NODE_FORWARD; return 1;
 }

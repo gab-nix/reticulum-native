@@ -1012,7 +1012,17 @@ static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, s
     if (result.has_verified_announce && runtime->announce_callback != NULL)
         runtime->announce_callback(runtime, &result, runtime->callback_context);
     if ((runtime->config.enable_transport || runtime->shared_server) &&
-        (result.action == RNS_NODE_FORWARD || result.action == RNS_NODE_REBROADCAST)) {
+        result.action == RNS_NODE_FORWARD) {
+        bool forwarded = false;
+        for (size_t i = 0U; i < runtime->interface_count; ++i)
+            if (runtime->interfaces[i].info.id == result.forward_interface_id) {
+                (void)send_internal(runtime, i, output, result.output_length);
+                forwarded = true;
+                break;
+            }
+        if (!forwarded) source->info.packets_dropped++;
+    } else if ((runtime->config.enable_transport || runtime->shared_server) &&
+               result.action == RNS_NODE_REBROADCAST) {
         for (size_t i = 0U; i < runtime->interface_count; ++i)
             if (i != context->interface_index || source->local_server)
                 (void)send_internal(runtime, i, output,
@@ -1231,9 +1241,11 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
     memset(&node_config, 0, sizeof(node_config));
     node_config.transport.path_capacity = options != NULL && options->path_capacity ? options->path_capacity : 128U;
     node_config.transport.dedupe_capacity = options != NULL && options->dedupe_capacity ? options->dedupe_capacity : 256U;
+    node_config.transport.reverse_capacity = options != NULL && options->reverse_capacity ? options->reverse_capacity : 256U;
     node_config.transport.random_blob_history = 8U;
     node_config.transport.path_lifetime = 604800.0;
     node_config.transport.dedupe_lifetime = 60.0;
+    node_config.transport.reverse_lifetime = RNS_TRANSPORT_REVERSE_TIMEOUT;
     node_config.transport.clock = runtime_clock;
     {
         static const char *const path_aspects[] = {"path", "request"};

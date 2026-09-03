@@ -35,8 +35,9 @@ are in the [README](../README.md#build-and-test).
 Remaining release gates include multi-segment Resources/resume; complete retry,
 propagation and offline delivery; full Micron forms, executable pages and remote
 files; hosted-node and propagation-node operation in the apps; RRC sessions and
-remaining TUI workflows; multi-hop routing; AutoInterface/shared IPC/KISS/RNode;
-broader bidirectional upstream tests; and physical RNode validation.
+remaining TUI workflows; broader multi-hop routing and bidirectional upstream
+one-hop evidence; AutoInterface/shared IPC/KISS/RNode; broader upstream tests;
+and physical RNode validation.
 
 Current bounds remain explicit: one 74-part Resource segment, an 8 MiB packed
 message limit, a 4 KiB content-preview admission limit and a 16 MiB journal quota.

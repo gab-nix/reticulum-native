@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "fixture": "Reticulum ordinary-proof reverse-path behavior",
+  "upstream": {
+    "repository": "https://github.com/markqvist/Reticulum.git",
+    "commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+    "version": "1.5.2",
+    "sources": ["RNS/Transport.py", "RNS/Packet.py"]
+  },
+  "reviewed_behavior": {
+    "reverse_key": "first 16 bytes of the forwarded packet hash",
+    "reverse_value": ["received interface", "outbound interface", "creation timestamp"],
+    "timeout_seconds": 480,
+    "proof_destination_type": "SINGLE",
+    "ordinary_proof_context": 0,
+    "implicit_proof_bytes": 64,
+    "explicit_proof_bytes": 96,
+    "consume_on_wrong_interface": true
+  },
+  "coverage": "test_reverse_path constructs the bounded packet representation and exercises C transport behavior with an injected clock.",
+  "notes": "This records a pinned source audit and deterministic local evidence. It is not a Python exchange or transport interoperability claim."
+}

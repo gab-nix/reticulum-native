@@ -9,6 +9,8 @@
 
 #define RNS_NODE_PATH_REQUEST_CONTEXT 0x00u
 #define RNS_NODE_PATH_RESPONSE_CONTEXT 0x0bu
+#define RNS_NODE_RESOURCE_PROOF_CONTEXT 0x05u
+#define RNS_NODE_LINK_REQUEST_PROOF_CONTEXT 0xffu
 
 typedef enum {
     RNS_NODE_DROP = 0,
@@ -27,6 +29,9 @@ typedef enum {
     RNS_NODE_REASON_STALE_ANNOUNCE,
     RNS_NODE_REASON_NOT_FOR_US,
     RNS_NODE_REASON_NO_PATH,
+    RNS_NODE_REASON_NO_REVERSE_PATH,
+    RNS_NODE_REASON_WRONG_REVERSE_INTERFACE,
+    RNS_NODE_REASON_BAD_PROOF,
     RNS_NODE_REASON_BAD_PATH_REQUEST,
     RNS_NODE_REASON_OUTPUT_TOO_SMALL
 } rns_node_reason;
@@ -61,6 +66,7 @@ typedef struct {
     int has_path_request;
     int has_verified_announce;
     uint64_t received_interface_id;
+    uint64_t forward_interface_id;
     rns_path_update_result path_update;
     rns_identity announce_identity;
     const uint8_t *announce_app_data;

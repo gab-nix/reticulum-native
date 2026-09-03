@@ -52,6 +52,14 @@ decrypted RTT plaintext. Random-IV ciphertext and live link establishment are
 intentionally outside this fixture, so this is deterministic representation
 evidence rather than bidirectional link interoperability.
 
+The ordinary-proof reverse-path implementation was audited against the pinned
+`RNS/Transport.py` and `RNS/Packet.py`: a forwarded packet is keyed by its
+16-byte truncated packet hash, records ingress and downstream interfaces, is
+culled after 480 seconds, and is consumed when a proof attempts to return.
+`tests/fixtures/rns_reverse_path.provenance.json` records those inputs and the
+separate ordinary explicit/implicit proof representation. The deterministic C
+test is source-derived local evidence, not bidirectional transport interop.
+
 The NomadNet RRC vectors in `tests/fixtures/nomadnet_rrc_vectors.h` execute the
 pinned 1.2.0 `_make_envelope()` helper and vendored CBOR encoder/decoder. They
 cover every defined envelope type, optional fields, nested capability/limit

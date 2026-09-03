@@ -9,15 +9,18 @@
 #define RNS_TRANSPORT_RANDOM_BLOB_SIZE 10u
 #define RNS_TRANSPORT_MAX_RANDOM_BLOBS 16u
 #define RNS_PATH_REQUEST_MAX_TAG_SIZE 16u
+#define RNS_TRANSPORT_REVERSE_TIMEOUT 480.0
 
 typedef double (*rns_monotonic_clock)(void *context);
 
 typedef struct {
     size_t path_capacity;
     size_t dedupe_capacity;
+    size_t reverse_capacity;
     size_t random_blob_history;
     double path_lifetime;
     double dedupe_lifetime;
+    double reverse_lifetime;
     rns_monotonic_clock clock;
     void *clock_context;
 } rns_transport_config;
@@ -46,9 +49,19 @@ typedef struct {
 } rns_dedupe_entry;
 
 typedef struct {
+    uint8_t packet_hash[16];
+    uint64_t received_interface_id;
+    uint64_t outbound_interface_id;
+    double created_at;
+    double expires_at;
+    int occupied;
+} rns_reverse_entry;
+
+typedef struct {
     rns_transport_config config;
     rns_path_entry *paths;
     rns_dedupe_entry *dedupe;
+    rns_reverse_entry *reverse;
 } rns_transport;
 
 typedef enum {
@@ -56,6 +69,12 @@ typedef enum {
     RNS_PATH_INSERTED = 1,
     RNS_PATH_UPDATED = 2
 } rns_path_update_result;
+
+typedef enum {
+    RNS_REVERSE_MISSING = 0,
+    RNS_REVERSE_MATCHED = 1,
+    RNS_REVERSE_WRONG_INTERFACE = 2
+} rns_reverse_result;
 
 typedef struct {
     uint8_t destination_hash[16];
@@ -79,6 +98,18 @@ rns_path_update_result rns_transport_consider_announce(
 
 /* Returns 1 for a new hash (and records it), 0 for a live duplicate or error. */
 int rns_transport_accept_packet_hash(rns_transport *transport, const uint8_t packet_hash[32]);
+
+/* Records one successfully forwarded ordinary packet. The oldest live entry
+ * is replaced when the caller-specified bound is full. */
+int rns_transport_record_reverse(rns_transport *transport,
+                                 const uint8_t packet_hash[16],
+                                 uint64_t received_interface_id,
+                                 uint64_t outbound_interface_id);
+/* Consumes a live reverse path only when the proof arrived on its recorded
+ * outbound interface. A wrong-side proof consumes the entry, as in RNS 1.5.2. */
+rns_reverse_result rns_transport_consume_reverse(
+    rns_transport *transport, const uint8_t packet_hash[16],
+    uint64_t proof_interface_id, uint64_t *received_interface_id);
 
 int rns_path_request_build(const uint8_t destination_hash[16],
                            const uint8_t requesting_transport[16],

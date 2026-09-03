@@ -18,8 +18,10 @@ int main(void) {
     size_t announce_length, raw_length, path_length; rns_packet packet = {0}, decoded; rns_node_result result;
     const char *aspects[] = {"delivery"};
     config.transport.path_capacity = 4; config.transport.dedupe_capacity = 8;
+    config.transport.reverse_capacity = 4;
     config.transport.random_blob_history = 4; config.transport.path_lifetime = 60;
     config.transport.dedupe_lifetime = 10; config.transport.clock = clock_now; config.transport.clock_context = &now;
+    config.transport.reverse_lifetime = 60;
     fill(config.transport_id, 16, 0x77); fill(config.path_request_destination, 16, 0x88);
     config.max_hops = 128; config.local_destination_capacity = 2;
     assert(rns_node_init(&node, &config));
@@ -65,7 +67,7 @@ int main(void) {
     assert(rns_packet_encode(&packet, raw, sizeof(raw), &raw_length));
     assert(rns_node_ingress(&node, raw, raw_length, 42, 1, output, sizeof(output), &result));
     assert(result.action == RNS_NODE_FORWARD && rns_packet_decode(&decoded, output, result.output_length));
-    assert(decoded.header_type == 1 && decoded.hops == 1 && memcmp(decoded.transport_id, destination, 16) == 0);
+    assert(decoded.header_type == 0 && decoded.transport_type == 0 && decoded.hops == 1);
 
     /* Header-2 packets addressed to another transport are not forwarded. */
     packet.header_type = 1; packet.transport_type = 1; fill(packet.transport_id, 16, 0x66);

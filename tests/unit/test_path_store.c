@@ -32,9 +32,11 @@ int main(void) {
     rns_transport_config config = {
         .path_capacity = 4u,
         .dedupe_capacity = 4u,
+        .reverse_capacity = 4u,
         .random_blob_history = 3u,
         .path_lifetime = 30.0,
         .dedupe_lifetime = 5.0,
+        .reverse_lifetime = 480.0,
         .clock = clock_now,
         .clock_context = NULL,
     };

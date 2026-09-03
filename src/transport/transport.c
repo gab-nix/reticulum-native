@@ -15,27 +15,32 @@ static uint64_t blob_timebase(const uint8_t blob[10]) {
 
 int rns_transport_init(rns_transport *transport, const rns_transport_config *config) {
     if (!transport || !config || !config->clock || config->path_capacity == 0 ||
-        config->dedupe_capacity == 0 || config->random_blob_history == 0 ||
+        config->dedupe_capacity == 0 || config->reverse_capacity == 0 ||
+        config->random_blob_history == 0 ||
         config->random_blob_history > RNS_TRANSPORT_MAX_RANDOM_BLOBS ||
-        config->path_lifetime <= 0 || config->dedupe_lifetime <= 0) return 0;
+        config->path_lifetime <= 0 || config->dedupe_lifetime <= 0 ||
+        config->reverse_lifetime <= 0) return 0;
     memset(transport, 0, sizeof(*transport)); transport->config = *config;
     transport->paths = calloc(config->path_capacity, sizeof(*transport->paths));
     transport->dedupe = calloc(config->dedupe_capacity, sizeof(*transport->dedupe));
-    if (!transport->paths || !transport->dedupe) { rns_transport_free(transport); return 0; }
+    transport->reverse = calloc(config->reverse_capacity, sizeof(*transport->reverse));
+    if (!transport->paths || !transport->dedupe || !transport->reverse) { rns_transport_free(transport); return 0; }
     return 1;
 }
 
 void rns_transport_free(rns_transport *transport) {
-    if (!transport) return; free(transport->paths); free(transport->dedupe); memset(transport, 0, sizeof(*transport));
+    if (!transport) return; free(transport->paths); free(transport->dedupe); free(transport->reverse); memset(transport, 0, sizeof(*transport));
 }
 
 size_t rns_transport_expire(rns_transport *transport) {
     size_t removed = 0; double now;
-    if (!transport || !transport->paths || !transport->dedupe) return 0; now = now_of(transport);
+    if (!transport || !transport->paths || !transport->dedupe || !transport->reverse) return 0; now = now_of(transport);
     for (size_t i = 0; i < transport->config.path_capacity; ++i)
         if (transport->paths[i].occupied && now >= transport->paths[i].expires_at) { memset(&transport->paths[i], 0, sizeof(transport->paths[i])); ++removed; }
     for (size_t i = 0; i < transport->config.dedupe_capacity; ++i)
         if (transport->dedupe[i].occupied && now >= transport->dedupe[i].expires_at) { memset(&transport->dedupe[i], 0, sizeof(transport->dedupe[i])); ++removed; }
+    for (size_t i = 0; i < transport->config.reverse_capacity; ++i)
+        if (transport->reverse[i].occupied && now >= transport->reverse[i].expires_at) { memset(&transport->reverse[i], 0, sizeof(transport->reverse[i])); ++removed; }
     return removed;
 }
 
@@ -134,6 +139,53 @@ int rns_transport_accept_packet_hash(rns_transport *transport, const uint8_t pac
     }
     if (!slot) slot = oldest; memset(slot, 0, sizeof(*slot)); memcpy(slot->hash, packet_hash, 32);
     slot->seen_at = now; slot->expires_at = now + transport->config.dedupe_lifetime; slot->occupied = 1; return 1;
+}
+
+int rns_transport_record_reverse(rns_transport *transport,
+                                 const uint8_t packet_hash[16],
+                                 uint64_t received_interface_id,
+                                 uint64_t outbound_interface_id) {
+    rns_reverse_entry *slot = NULL, *oldest = NULL; double now;
+    if (!transport || !packet_hash || !transport->reverse) return 0;
+    now = now_of(transport);
+    for (size_t i = 0; i < transport->config.reverse_capacity; ++i) {
+        rns_reverse_entry *entry = &transport->reverse[i];
+        if (entry->occupied && memcmp(entry->packet_hash, packet_hash, 16) == 0) {
+            slot = entry;
+            break;
+        }
+        if (!entry->occupied || now >= entry->expires_at) { if (!slot) slot = entry; }
+        else if (!oldest || entry->created_at < oldest->created_at) oldest = entry;
+    }
+    if (!slot) slot = oldest;
+    if (!slot) return 0;
+    memset(slot, 0, sizeof(*slot));
+    memcpy(slot->packet_hash, packet_hash, 16);
+    slot->received_interface_id = received_interface_id;
+    slot->outbound_interface_id = outbound_interface_id;
+    slot->created_at = now;
+    slot->expires_at = now + transport->config.reverse_lifetime;
+    slot->occupied = 1;
+    return 1;
+}
+
+rns_reverse_result rns_transport_consume_reverse(
+    rns_transport *transport, const uint8_t packet_hash[16],
+    uint64_t proof_interface_id, uint64_t *received_interface_id) {
+    double now;
+    if (!transport || !packet_hash || !received_interface_id || !transport->reverse) return RNS_REVERSE_MISSING;
+    now = now_of(transport);
+    for (size_t i = 0; i < transport->config.reverse_capacity; ++i) {
+        rns_reverse_entry *entry = &transport->reverse[i];
+        if (!entry->occupied || memcmp(entry->packet_hash, packet_hash, 16) != 0) continue;
+        if (now >= entry->expires_at) { memset(entry, 0, sizeof(*entry)); return RNS_REVERSE_MISSING; }
+        uint64_t outbound = entry->outbound_interface_id;
+        *received_interface_id = entry->received_interface_id;
+        memset(entry, 0, sizeof(*entry));
+        return proof_interface_id == outbound ? RNS_REVERSE_MATCHED
+                                              : RNS_REVERSE_WRONG_INTERFACE;
+    }
+    return RNS_REVERSE_MISSING;
 }
 
 int rns_path_request_build(const uint8_t destination_hash[16], const uint8_t requesting_transport[16],

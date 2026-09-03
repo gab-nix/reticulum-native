@@ -10,7 +10,13 @@ static void blob(uint8_t out[10], uint8_t nonce, uint64_t timestamp) {
 }
 
 int main(void) {
-    double now = 100; rns_transport transport; rns_transport_config config = {2, 2, 3, 30, 5, test_clock, &now};
+    double now = 100; rns_transport transport;
+    rns_transport_config config = {
+        .path_capacity = 2, .dedupe_capacity = 2, .reverse_capacity = 2,
+        .random_blob_history = 3, .path_lifetime = 30,
+        .dedupe_lifetime = 5, .reverse_lifetime = 8,
+        .clock = test_clock, .clock_context = &now
+    };
     uint8_t dst[16], hop[16], packet_hash[32], b1[10], b2[10], b3[10], request_body[48], tag[4] = {1,2,3,4};
     size_t request_length; rns_path_request request; const rns_path_entry *entry;
     fill(dst, 16, 1); fill(hop, 16, 2); fill(packet_hash, 32, 3); blob(b1, 1, 1000); blob(b2, 2, 1001); blob(b3, 3, 999);
