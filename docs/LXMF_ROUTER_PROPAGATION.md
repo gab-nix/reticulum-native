@@ -1,4 +1,4 @@
-# Router propagation upload
+# Router propagation upload and synchronization
 
 The LXMF router can optionally send messages through one caller-selected,
 verified `lxmf.propagation` node. This is a library feature; no curses or
@@ -49,10 +49,40 @@ exhaustion and restart recovery. `test_lxmf_stamp_job` includes a deterministic
 Python-derived expanded-stamp vector. This is IMPLEMENTED evidence, not a live
 Python propagation-node exchange.
 
+## Inbound synchronization
+
+`lxmf_router_propagation_sync_start()` begins one explicit, caller-polled
+list/download/ack transaction against the same selected node. The router polls
+the existing propagation session from `lxmf_router_poll()` and exposes an
+immutable snapshot with `lxmf_router_propagation_sync_status()`. Its state
+distinguishes path discovery, link establishment, list, download, ack,
+completion, remote/transport failure and cancellation. An inbound sync and an
+outbound propagation upload are serialized; selecting a different node while
+either operation is active returns `LXMF_ERR_PENDING`.
+
+Downloaded bytes remain untrusted encrypted LXMF. The router verifies the
+transient hash and local destination, decrypts with the local identity and its
+configured private-ratchet history, then uses the same bounded signature,
+stamp, source-block and durable-store path as packet and direct Resource
+delivery. Only a durable insertion or an already durable message-ID duplicate
+is acknowledged. Rejected signatures, stamps, blocked sources, wrong
+destinations and malformed ciphertext stay on the node. `retain_on_node`
+suppresses acknowledgements even after successful storage. COMPLETE means the
+network transaction ended; `result` and `rejected` remain nonzero when one or
+more items were deliberately retained after local validation failed.
+
+`test_lxmf_router_propagation_sync` exercises C-to-C UDP list/download/ack,
+packet and Resource responses, exact destination/transient checks, block,
+stamp and signature rejection, explicit retain, cancellation, active-node
+replacement protection, and durable duplicate acknowledgement after closing
+and reopening the message store. This is deterministic local integration
+evidence, not verification against a stock LXMF propagation node.
+
 Remaining gaps: small uploads always use a Resource instead of Python's packet
 selection; invalid-stamp signalling after Resource acceptance is not handled;
 the runtime Resource implementation is limited to one 74-part segment; there
 is no durable encrypted transient blob, upload resume, propagation-node
-reselection, inbound sync integration, propagation hosting, TUI binding or
-live pinned-upstream upload proof. These prevent a general propagation parity
-claim.
+reselection during an active operation, automatic/periodic sync scheduling,
+sync resume/session persistence, propagation hosting, TUI sync control or live
+pinned-upstream upload/download proof. These prevent a general propagation
+parity claim.

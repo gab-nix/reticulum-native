@@ -217,6 +217,27 @@ typedef struct {
     uint32_t attempt;
 } lxmf_router_propagation_slot_t;
 
+/* COMPLETE describes the finished network transaction. If result is non-OK
+ * and rejected is nonzero, those messages failed local policy or cryptographic
+ * validation and were deliberately left on the propagation node. */
+typedef struct {
+    lxmf_pn_session_state_t state;
+    lxmf_status_t result;
+    rns_status_t transport_error;
+    uint8_t remote_error;
+    size_t available, received, acknowledged;
+    size_t accepted, duplicates, rejected;
+    bool retain_on_node;
+    bool active;
+} lxmf_router_propagation_sync_status_t;
+
+typedef struct {
+    lxmf_pn_session_t *session;
+    lxmf_router_t *router;
+    lxmf_router_propagation_sync_status_t status;
+    lxmf_status_t first_rejection;
+} lxmf_router_propagation_sync_slot_t;
+
 struct lxmf_router {
     lxmf_router_config_t config;
     lxmf_router_receipt_slot_t receipts[LXMF_ROUTER_MAX_RECEIPTS];
@@ -228,6 +249,7 @@ struct lxmf_router {
     uint8_t stamp_message_id[LXMF_MESSAGE_ID_LENGTH];
     uint8_t stamp_cost;
     lxmf_router_propagation_slot_t propagation;
+    lxmf_router_propagation_sync_slot_t propagation_sync;
     rns_identity propagation_node;
     /* A bounded process-local fast path for scanner repeats. Durable replay
      * suppression remains keyed by the LXMF message ID in the message store. */
@@ -274,6 +296,16 @@ lxmf_status_t lxmf_router_set_inbound_stamp_cost(lxmf_router_t *router,
 lxmf_status_t lxmf_router_set_propagation_node(
     lxmf_router_t *router, const rns_identity *identity,
     const uint8_t destination[LXMF_DESTINATION_LENGTH], uint8_t stamp_cost);
+/* Starts one caller-polled list/download/ack transaction against the selected
+ * verified propagation node. It is serialized with outbound uploads. Received
+ * ciphertext enters the normal inbound signature, stamp, block and durable
+ * store path before it can be acknowledged. */
+lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,
+                                                 bool retain_on_node);
+lxmf_status_t lxmf_router_propagation_sync_cancel(lxmf_router_t *router);
+lxmf_status_t lxmf_router_propagation_sync_status(
+    const lxmf_router_t *router,
+    lxmf_router_propagation_sync_status_t *status);
 /* Accepts a single encrypted opportunistic LXMF packet for the local identity.
  * Valid new messages are persisted as DELIVERED before message_callback runs.
  * A message signed by an identity the resolver does not yet hold cannot be

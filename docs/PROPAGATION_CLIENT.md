@@ -1,8 +1,9 @@
 # Propagation client service
 
 `lxmf_propagation_session.h` exposes a native, caller-polled propagation
-transport session. It is separate from the message router and has no TUI or
-storage dependency. It is not yet wired to the application's Sync action.
+transport session. The primitive has no TUI or storage dependency; the LXMF
+router now owns it for explicit upload and inbound synchronization operations.
+It is not yet wired to the application's Sync action.
 
 Create a session with a borrowed runtime, local private identity, verified
 propagation-node public identity and its `lxmf.propagation` destination hash.
@@ -25,7 +26,10 @@ duplicate, before returning true. A false return leaves the remote copy intact.
 Downloaded hashes must match the requested IDs and duplicates are rejected
 before callbacks run. `retain_on_node` disables acknowledgements. Acknowledged
 counts advance only after the server confirms the acknowledgement request.
-The application must persist its own transient-ID duplicate cache.
+The primitive's application callback must provide durable duplicate handling.
+The router integration does this with the existing durable LXMF message-ID
+index, so a semantically identical message is acknowledged after restart even
+if its transient encryption changed.
 
 Uploads copy the encoded batch and send it as a proof-tracked Resource. The
 application must already have encrypted each message for its recipient and
@@ -34,11 +38,11 @@ received the transfer, **not** that a final recipient received the message.
 
 The codec bounds are 128 items and 8 MiB. Actual transfer capacity remains
 limited by the runtime's current single-segment Resource implementation.
-Multi-segment transfer, resume, automatic retry, node reselection, router
-integration, durable session state and propagation-node hosting remain future
-work. Failed/complete sessions release links and transfers on the next session
-poll; cancel and destroy release them immediately. Previously accepted messages
-are not rolled back on network failure.
+Multi-segment transfer, resume, automatic sync/retry, node reselection during
+an active operation, durable session state and propagation-node hosting remain
+future work. Failed/complete sessions release links and transfers on the next
+session poll; cancel and destroy release them immediately. Previously accepted
+messages are not rolled back on network failure.
 
 Evidence: `test_lxmf_propagation_session` performs C-to-C UDP exchanges with an
 identified `/get` handler and resource receiver: multi-batch download,

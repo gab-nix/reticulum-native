@@ -1,5 +1,6 @@
 #include "reticulum/lxmf_router.h"
 #include "reticulum/destination.h"
+#include "reticulum/crypto.h"
 #include "reticulum/lxmf_delivery.h"
 #include "reticulum/packet.h"
 #include "reticulum/hal.h"
@@ -38,6 +39,9 @@ static void report_event(lxmf_router_t *router,
 static lxmf_status_t receive_representation(
     lxmf_router_t *router, const uint8_t *packed, size_t packed_length,
     lxmf_delivery_method_t method, bool exempt_stamp, bool *inserted_out);
+static lxmf_status_t router_private_ratchets(
+    const lxmf_router_t *router, const uint8_t *supplied, size_t supplied_count,
+    const uint8_t **effective, size_t *effective_count, uint8_t **owned);
 static void direct_link_state_changed(rns_runtime_link_t *link,
                                       rns_link_state state,
                                       rns_status_t reason, void *context);
@@ -121,6 +125,97 @@ static void propagation_clear(lxmf_router_t *router, bool cancel) {
         free(slot->encrypted);
     }
     memset(slot, 0, sizeof *slot);
+}
+
+static void propagation_sync_clear(lxmf_router_t *router, bool cancel) {
+    lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
+    if (slot->session != NULL) {
+        if (cancel) lxmf_pn_session_cancel(slot->session);
+        lxmf_pn_session_destroy(slot->session);
+        slot->session = NULL;
+    }
+    slot->status.active = false;
+}
+
+static void propagation_sync_reject(
+    lxmf_router_propagation_sync_slot_t *slot, lxmf_status_t result) {
+    slot->status.rejected++;
+    if (slot->first_rejection == LXMF_OK) slot->first_rejection = result;
+}
+
+static bool propagation_sync_receive(
+    const uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH],
+    const uint8_t *message, size_t message_length, void *context) {
+    lxmf_router_propagation_sync_slot_t *slot = context;
+    lxmf_router_t *router = slot != NULL ? slot->router : NULL;
+    uint8_t digest[LXMF_MESSAGE_ID_LENGTH];
+    uint8_t local_destination[LXMF_DESTINATION_LENGTH];
+    static const char *const aspects[] = {"delivery"};
+    if (router == NULL || message == NULL ||
+        message_length <= LXMF_DESTINATION_LENGTH +
+                              RNS_X25519_KEY_SIZE + RNS_TOKEN_OVERHEAD ||
+        message_length > LXMF_PN_MAX_WIRE ||
+        !rns_sha256(message, message_length, digest) ||
+        memcmp(digest, transient_id, sizeof digest) != 0 ||
+        !rns_destination_hash(router->config.identity, "lxmf", aspects, 1u,
+                              local_destination) ||
+        memcmp(message, local_destination, sizeof local_destination) != 0) {
+        if (slot != NULL) propagation_sync_reject(slot, LXMF_ERR_FORMAT);
+        return false;
+    }
+
+    const uint8_t *ratchets = NULL;
+    size_t ratchet_count = 0u;
+    uint8_t *owned_ratchets = NULL;
+    lxmf_status_t status = router_private_ratchets(
+        router, NULL, 0u, &ratchets, &ratchet_count, &owned_ratchets);
+    if (status != LXMF_OK) {
+        propagation_sync_reject(slot, status);
+        return false;
+    }
+    uint8_t *packed = malloc(message_length);
+    if (packed == NULL) {
+        if (owned_ratchets != NULL) {
+            rns_hal_secure_zero(owned_ratchets,
+                ratchet_count * RNS_RATCHET_PRIVATE_SIZE);
+            free(owned_ratchets);
+        }
+        propagation_sync_reject(slot, LXMF_ERR_BOUNDS);
+        return false;
+    }
+    memcpy(packed, message, LXMF_DESTINATION_LENGTH);
+    size_t plaintext_length = 0u;
+    int decrypted = rns_identity_decrypt_with_ratchets(
+        router->config.identity, ratchets, ratchet_count, 0,
+        message + LXMF_DESTINATION_LENGTH,
+        message_length - LXMF_DESTINATION_LENGTH,
+        packed + LXMF_DESTINATION_LENGTH,
+        message_length - LXMF_DESTINATION_LENGTH, &plaintext_length,
+        NULL, NULL);
+    if (owned_ratchets != NULL) {
+        rns_hal_secure_zero(owned_ratchets,
+            ratchet_count * RNS_RATCHET_PRIVATE_SIZE);
+        free(owned_ratchets);
+    }
+    if (!decrypted) {
+        rns_hal_secure_zero(packed, message_length);
+        free(packed);
+        propagation_sync_reject(slot, LXMF_ERR_CRYPTO);
+        return false;
+    }
+    bool inserted = false;
+    status = receive_representation(
+        router, packed, LXMF_DESTINATION_LENGTH + plaintext_length,
+        LXMF_DELIVERY_METHOD_PROPAGATED, false, &inserted);
+    rns_hal_secure_zero(packed, message_length);
+    free(packed);
+    if (status != LXMF_OK) {
+        propagation_sync_reject(slot, status);
+        return false;
+    }
+    if (inserted) slot->status.accepted++;
+    else slot->status.duplicates++;
+    return true;
 }
 
 static lxmf_status_t propagation_begin(
@@ -338,6 +433,53 @@ static void propagation_poll(lxmf_router_t *router) {
     }
 }
 
+static lxmf_status_t propagation_sync_result(
+    rns_status_t transport, uint8_t remote_error) {
+    if (remote_error == LXMF_PN_ERROR_NO_ACCESS) return LXMF_ERR_BLOCKED;
+    if (remote_error == LXMF_PN_ERROR_INVALID_STAMP) return LXMF_ERR_STAMP;
+    if (transport == RNS_ERROR_TIMEOUT) return LXMF_ERR_TIMEOUT;
+    if (transport == RNS_ERROR_CRYPTO) return LXMF_ERR_CRYPTO;
+    if (transport == RNS_ERROR_OVERFLOW || transport == RNS_ERROR_NO_MEMORY)
+        return LXMF_ERR_BOUNDS;
+    return transport == RNS_OK ? LXMF_OK : LXMF_ERR_FORMAT;
+}
+
+static void propagation_sync_poll(lxmf_router_t *router) {
+    lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
+    if (!slot->status.active || slot->session == NULL) return;
+    rns_status_t polled = lxmf_pn_session_poll(
+        slot->session, (double)monotonic_ms() / 1000.0);
+    const lxmf_pn_session_progress_t *progress =
+        lxmf_pn_session_progress(slot->session);
+    if (progress == NULL) {
+        slot->status.state = LXMF_PN_FAILED;
+        slot->status.transport_error = RNS_ERROR_INVALID_STATE;
+        slot->status.result = LXMF_ERR_FORMAT;
+        propagation_sync_clear(router, false);
+        return;
+    }
+    slot->status.state = progress->state;
+    slot->status.transport_error = progress->error;
+    slot->status.remote_error = progress->remote_error;
+    slot->status.available = progress->available;
+    slot->status.received = progress->received;
+    slot->status.acknowledged = progress->acknowledged;
+    if (progress->state == LXMF_PN_COMPLETE) {
+        slot->status.result = slot->first_rejection != LXMF_OK
+            ? slot->first_rejection : LXMF_OK;
+        propagation_sync_clear(router, false);
+    } else if (progress->state == LXMF_PN_CANCELLED) {
+        slot->status.result = LXMF_ERR_CANCELLED;
+        propagation_sync_clear(router, false);
+    } else if (progress->state == LXMF_PN_FAILED || polled != RNS_OK) {
+        rns_status_t failure = polled != RNS_OK ? polled : progress->error;
+        slot->status.transport_error = failure;
+        slot->status.result = propagation_sync_result(
+            failure, progress->remote_error);
+        propagation_sync_clear(router, false);
+    }
+}
+
 static void remember_verified_ticket(lxmf_router_t *router,
                                      const lxmf_message_t *message) {
     if (router->config.ticket_store == NULL) return;
@@ -514,6 +656,7 @@ static void release_resources(lxmf_router_t *router, bool all) {
 void lxmf_router_destroy(lxmf_router_t *router) {
     if (router == NULL) return;
     propagation_clear(router, true);
+    propagation_sync_clear(router, true);
     lxmf_stamp_job_destroy(router->stamp_job);
     release_receipts(router, true);
     release_resources(router, true);
@@ -1202,7 +1345,7 @@ lxmf_status_t lxmf_router_send_message(
         if (stored.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_EXHAUSTED ||
             stored.delivery.queue_reason == LXMF_QUEUE_REASON_CANCELLED)
             return LXMF_ERR_CANCELLED;
-        if (router->propagation.used) {
+        if (router->propagation.used || router->propagation_sync.status.active) {
             stored.delivery.queue_reason = LXMF_QUEUE_REASON_PROPAGATION_NODE;
             (void)lxmf_store_update_delivery(router->config.store, id,
                                              &stored.delivery);
@@ -1483,6 +1626,7 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
     release_receipts(router, false);
     release_resources(router, false);
     propagation_poll(router);
+    propagation_sync_poll(router);
     for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i) {
         lxmf_router_link_slot_t *slot = &router->links[i];
         if (!slot->used || slot->link == NULL ||
@@ -1519,7 +1663,8 @@ lxmf_status_t lxmf_router_set_propagation_node(
     if (router == NULL) return LXMF_ERR_ARGUMENT;
     if (identity == NULL) {
         if (destination != NULL || stamp_cost != 0u) return LXMF_ERR_ARGUMENT;
-        if (router->propagation.used) return LXMF_ERR_PENDING;
+        if (router->propagation.used || router->propagation_sync.status.active)
+            return LXMF_ERR_PENDING;
         memset(&router->propagation_node, 0, sizeof router->propagation_node);
         router->config.propagation_node_identity = NULL;
         memset(router->config.propagation_node_destination, 0,
@@ -1536,7 +1681,7 @@ lxmf_status_t lxmf_router_set_propagation_node(
     if (!rns_destination_hash(identity, "lxmf", aspects, 1u, expected) ||
         memcmp(expected, destination, sizeof expected) != 0)
         return LXMF_ERR_ARGUMENT;
-    if (router->propagation.used) {
+    if (router->propagation.used || router->propagation_sync.status.active) {
         if (router->config.propagation_node_identity != NULL &&
             router->config.propagation_stamp_cost == stamp_cost &&
             memcmp(router->config.propagation_node_destination, destination,
@@ -1554,6 +1699,82 @@ lxmf_status_t lxmf_router_set_propagation_node(
     memcpy(router->config.propagation_node_destination, destination,
            sizeof router->config.propagation_node_destination);
     router->config.propagation_stamp_cost = stamp_cost;
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,
+                                                  bool retain_on_node) {
+    if (router == NULL || router->config.runtime == NULL ||
+        router->config.propagation_node_identity == NULL)
+        return LXMF_ERR_ARGUMENT;
+    lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
+    if (slot->status.active || router->propagation.used)
+        return LXMF_ERR_PENDING;
+    if (slot->session != NULL) propagation_sync_clear(router, false);
+    memset(slot, 0, sizeof *slot);
+    slot->router = router;
+    slot->first_rejection = LXMF_OK;
+    slot->status.state = LXMF_PN_IDLE;
+    slot->status.result = LXMF_ERR_PENDING;
+    slot->status.transport_error = RNS_OK;
+    slot->status.retain_on_node = retain_on_node;
+    lxmf_pn_session_options_t options = {
+        .runtime = router->config.runtime,
+        .local_identity = router->config.identity,
+        .node_identity = router->config.propagation_node_identity,
+        .timeout_seconds = router->config.resource_timeout_seconds,
+        .max_response_size = LXMF_PN_MAX_WIRE,
+        .retain_on_node = retain_on_node,
+        .message_callback = propagation_sync_receive,
+        .callback_context = slot};
+    memcpy(options.node_destination,
+           router->config.propagation_node_destination,
+           sizeof options.node_destination);
+    rns_status_t created = lxmf_pn_session_create(&slot->session, &options);
+    if (created != RNS_OK) {
+        slot->status.result = propagation_sync_result(created, 0u);
+        slot->status.transport_error = created;
+        slot->status.state = LXMF_PN_FAILED;
+        return slot->status.result;
+    }
+    created = lxmf_pn_session_sync(
+        slot->session, (double)monotonic_ms() / 1000.0);
+    if (created != RNS_OK) {
+        lxmf_pn_session_destroy(slot->session);
+        slot->session = NULL;
+        slot->status.result = propagation_sync_result(created, 0u);
+        slot->status.transport_error = created;
+        slot->status.state = LXMF_PN_FAILED;
+        return slot->status.result;
+    }
+    const lxmf_pn_session_progress_t *progress =
+        lxmf_pn_session_progress(slot->session);
+    slot->status.state = progress != NULL ? progress->state : LXMF_PN_PATH;
+    slot->status.active = true;
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_router_propagation_sync_cancel(lxmf_router_t *router) {
+    if (router == NULL) return LXMF_ERR_ARGUMENT;
+    lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
+    if (!slot->status.active || slot->session == NULL) return LXMF_ERR_FORMAT;
+    lxmf_pn_session_cancel(slot->session);
+    const lxmf_pn_session_progress_t *progress =
+        lxmf_pn_session_progress(slot->session);
+    slot->status.state = progress != NULL
+        ? progress->state : LXMF_PN_CANCELLED;
+    slot->status.transport_error = progress != NULL
+        ? progress->error : RNS_OK;
+    slot->status.result = LXMF_ERR_CANCELLED;
+    propagation_sync_clear(router, false);
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_router_propagation_sync_status(
+    const lxmf_router_t *router,
+    lxmf_router_propagation_sync_status_t *status) {
+    if (router == NULL || status == NULL) return LXMF_ERR_ARGUMENT;
+    *status = router->propagation_sync.status;
     return LXMF_OK;
 }
 
@@ -1648,7 +1869,7 @@ static void remember_paper_transient(
            LXMF_MESSAGE_ID_LENGTH);
 }
 
-static lxmf_status_t paper_ratchets(
+static lxmf_status_t router_private_ratchets(
     const lxmf_router_t *router, const uint8_t *supplied, size_t supplied_count,
     const uint8_t **effective, size_t *effective_count, uint8_t **owned) {
     *effective = supplied;
@@ -1703,7 +1924,7 @@ lxmf_status_t lxmf_router_receive_paper(
     const uint8_t *effective_ratchets = NULL;
     size_t effective_count = 0u;
     uint8_t *owned_ratchets = NULL;
-    lxmf_status_t status = paper_ratchets(
+    lxmf_status_t status = router_private_ratchets(
         router, ratchet_private_keys, ratchet_count, &effective_ratchets,
         &effective_count, &owned_ratchets);
     if (status != LXMF_OK) return status;
