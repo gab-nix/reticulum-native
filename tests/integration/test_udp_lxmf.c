@@ -1,9 +1,12 @@
 #include "reticulum/destination.h"
+#include "reticulum/hal.h"
 #include "reticulum/lxmf_delivery.h"
 #include "reticulum/packet.h"
 #include "reticulum/udp.h"
 
 #include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 typedef struct {
@@ -41,6 +44,25 @@ static rns_status_t receive_packet(const uint8_t *packet, size_t packet_length,
     return RNS_OK;
 }
 
+static bool receive_until(rns_udp_endpoint_t *receiver, test_context *state,
+                          uint64_t timeout_ms) {
+    uint64_t started_ms;
+    uint64_t current_ms;
+
+    assert(rns_hal_monotonic_ms(&started_ms) == RNS_OK);
+    do {
+        size_t received = 0U;
+        rns_status_t status = rns_udp_poll(receiver, 1U, receive_packet, state, &received);
+        assert(status == RNS_OK);
+        assert(received <= 1U);
+        if (state->received) {
+            return true;
+        }
+        assert(rns_hal_monotonic_ms(&current_ms) == RNS_OK);
+    } while (current_ms - started_ms < timeout_ms);
+    return false;
+}
+
 int main(void) {
     rns_identity alice, bob, bob_public;
     uint8_t public_bytes[64];
@@ -72,12 +94,7 @@ int main(void) {
     state.source = &alice;
     state.local = &bob;
     delivery_hash(&alice, state.source_hash);
-    for (unsigned attempt = 0; attempt < 100 && !state.received; ++attempt) {
-        size_t received = 0;
-        rns_status_t status = rns_udp_poll(receiver, 1, receive_packet, &state, &received);
-        assert(status == RNS_OK);
-    }
-    assert(state.received);
+    assert(receive_until(receiver, &state, 1000U));
     rns_udp_endpoint_destroy(sender);
     rns_udp_endpoint_destroy(receiver);
     return 0;
