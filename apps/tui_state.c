@@ -1290,6 +1290,38 @@ void tui_state_request_path(tui_state_t *state) {
     else tui_state_set_status(state, "Path refresh could not be sent");
 }
 
+size_t tui_state_interface_count(const tui_state_t *state) {
+    return state != NULL && state->runtime != NULL
+               ? rns_runtime_interface_count(state->runtime) : 0u;
+}
+
+bool tui_state_interface_info(const tui_state_t *state, size_t index,
+                              rns_runtime_interface_info_t *info) {
+    return state != NULL && state->runtime != NULL && info != NULL &&
+           index < rns_runtime_interface_count(state->runtime) &&
+           rns_runtime_interface_info(state->runtime, index, info) == RNS_OK;
+}
+
+void tui_state_interface_move(tui_state_t *state, int delta) {
+    if (state == NULL) return;
+    size_t count = tui_state_interface_count(state);
+    if (count == 0u) {
+        state->interface_selected = 0u;
+        return;
+    }
+    if (state->interface_selected >= count) state->interface_selected = count - 1u;
+    if (delta < 0) {
+        size_t amount = (size_t)(-(int64_t)delta);
+        state->interface_selected = amount > state->interface_selected
+                                        ? 0u : state->interface_selected - amount;
+    } else if (delta > 0) {
+        size_t amount = (size_t)delta;
+        state->interface_selected = amount >= count - state->interface_selected
+                                        ? count - 1u
+                                        : state->interface_selected + amount;
+    }
+}
+
 /* ------------------------------------------------------------------ browser */
 
 size_t tui_state_link_count(const tui_state_t *state) {

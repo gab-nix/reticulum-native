@@ -230,6 +230,14 @@ static void test_shortcuts_drafts_and_node_action(void) {
     assert(state->screen == TUI_SCREEN_GUIDE && state->field == TUI_FIELD_NONE);
     assert(tui_dispatch_key(state, 27));
     assert(state->screen == TUI_SCREEN_CONVERSATIONS);
+    assert(tui_dispatch_key(state, 'I'));
+    assert(state->screen == TUI_SCREEN_INTERFACES);
+    assert(tui_dispatch_key(state, 'j'));
+    assert(state->interface_selected == 0u);
+    assert(tui_dispatch_key(state, '?'));
+    assert(strstr(state->status, "Interfaces") != NULL);
+    assert(tui_dispatch_key(state, 27));
+    assert(state->screen == TUI_SCREEN_CONVERSATIONS);
     assert(!tui_dispatch_key(state, 'Q'));
     free(state);
 }

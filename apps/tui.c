@@ -167,6 +167,8 @@ static void select_previous(tui_state_t *state) {
         tui_state_setting_move(state, -1);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
         tui_state_node_move(state, -1);
+    } else if (state->screen == TUI_SCREEN_INTERFACES) {
+        tui_state_interface_move(state, -1);
     } else if (state->screen == TUI_SCREEN_CONVERSATIONS)
         tui_state_select_offset(state, -1);
 }
@@ -179,6 +181,8 @@ static void select_next(tui_state_t *state) {
         tui_state_setting_move(state, 1);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
         tui_state_node_move(state, 1);
+    } else if (state->screen == TUI_SCREEN_INTERFACES) {
+        tui_state_interface_move(state, 1);
     } else if (state->screen == TUI_SCREEN_CONVERSATIONS)
         tui_state_select_offset(state, 1);
 }
@@ -234,6 +238,8 @@ static bool handle_command_key(tui_state_t *state, int key) {
                 tui_state_set_status(state, "Browser: j/k links, Enter open, PgUp/PgDn scroll, R reload, Esc cancel/back");
             else if (state->screen == TUI_SCREEN_SETTINGS)
                 tui_state_set_status(state, "Settings: j/k select, Enter edit/apply, Esc cancel/back");
+            else if (state->screen == TUI_SCREEN_INTERFACES)
+                tui_state_set_status(state, "Interfaces: j/k inspect live counters, Esc Chats");
             else tui_state_set_status(state, "Screen unavailable: C or Esc returns to Conversations");
             break;
         case '1':
@@ -304,6 +310,7 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'o': case 'O': unavailable_screen(state, "Node"); break;
         case 's': case 'S': state->screen = TUI_SCREEN_SETTINGS; break;
         case 'g': case 'G': state->screen = TUI_SCREEN_GUIDE; break;
+        case 'I': state->screen = TUI_SCREEN_INTERFACES; break;
         case 'l': case 'L': unavailable_screen(state, "Logs"); break;
         case 'r': case 'R': reload(state); break;
         case '\n': case KEY_ENTER: activate(state); break;

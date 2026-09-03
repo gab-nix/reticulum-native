@@ -130,7 +130,67 @@ static void draw_chrome(const tui_state_t *state, const tui_layout_t *layout) {
     for (int x = (int)strlen(header); x < layout->columns; ++x) (void)addch(' ');
     (void)attroff(A_REVERSE | A_BOLD);
     clipped(stdscr, 1, 0, layout->columns,
-            "[C]hats [N]etwork [B]rowser N[o]de [S]ettings [G]uide [L]ogs [R]RC");
+            "[C]hats [N]etwork [B]rowser [S]ettings [I]faces [G]uide [L]ogs [R]RC");
+}
+
+static const char *interface_state_name(rns_runtime_interface_state_t state) {
+    switch (state) {
+        case RNS_RUNTIME_INTERFACE_DISABLED: return "disabled";
+        case RNS_RUNTIME_INTERFACE_STARTING: return "starting";
+        case RNS_RUNTIME_INTERFACE_UP: return "up";
+        case RNS_RUNTIME_INTERFACE_DOWN: return "down";
+        case RNS_RUNTIME_INTERFACE_UNSUPPORTED: return "unsupported";
+    }
+    return "invalid";
+}
+
+static void draw_interfaces(const tui_state_t *state,
+                            const tui_layout_t *layout) {
+    size_t count = tui_state_interface_count(state);
+    size_t selected = state->interface_selected < count
+                          ? state->interface_selected : 0u;
+    (void)attron(A_BOLD);
+    clipped(stdscr, 3, 1, layout->columns - 2, "Interfaces");
+    (void)attroff(A_BOLD);
+    if (count == 0u) {
+        clipped(stdscr, 5, 2, layout->columns - 4,
+                state->runtime == NULL
+                    ? "Offline: start with --config to load Reticulum interfaces."
+                    : "The loaded configuration defines no interfaces.");
+    } else {
+        int rows = layout->hint_row - 5;
+        size_t first = selected >= (size_t)rows && rows > 0
+                           ? selected - (size_t)rows + 1u : 0u;
+        for (size_t i = first; i < count && (int)(i - first) < rows; ++i) {
+            rns_runtime_interface_info_t info;
+            if (!tui_state_interface_info(state, i, &info)) continue;
+            char line[256];
+            (void)snprintf(line, sizeof line,
+                           "%s  %s  %s  rx:%llu/%lluB tx:%llu/%lluB drop:%llu",
+                           info.name, rns_config_interface_type_name(info.type),
+                           interface_state_name(info.state),
+                           (unsigned long long)info.packets_received,
+                           (unsigned long long)info.bytes_received,
+                           (unsigned long long)info.packets_sent,
+                           (unsigned long long)info.bytes_sent,
+                           (unsigned long long)info.packets_dropped);
+            if (i == selected) (void)attron(A_REVERSE);
+            clipped(stdscr, 5 + (int)(i - first), 2,
+                    layout->columns - 4, line);
+            if (i == selected) (void)attroff(A_REVERSE);
+        }
+        rns_runtime_interface_info_t info;
+        if (tui_state_interface_info(state, selected, &info) &&
+            info.last_error != RNS_OK) {
+            char error[TUI_STATUS_MAX];
+            (void)snprintf(error, sizeof error, "Selected interface error: %s",
+                           rns_status_string(info.last_error));
+            clipped(stdscr, layout->hint_row - 1, 2,
+                    layout->columns - 4, error);
+        }
+    }
+    clipped(stdscr, layout->hint_row, 0, layout->columns,
+            "j/k inspect  C or Esc conversations  S settings  q quit");
 }
 
 static void draw_sidebar(const tui_state_t *state, const tui_layout_t *layout) {
@@ -714,7 +774,7 @@ static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
 static void draw_guide(const tui_layout_t *layout) {
     static const char *const lines[] = {
         "Nomad Chat Guide",
-        "C Conversations   N Network   B Browser   S Settings",
+        "C Conversations   N Network   B Browser   S Settings   I Interfaces",
         "j/k or arrows select; Enter activates; Esc returns to Conversations",
         "",
         "Conversations: 1/2/3 trust tabs, / search, a address, Enter compose",
@@ -768,6 +828,11 @@ void tui_render_draw(tui_state_t *state) {
         (void)refresh();
         return;
     }
+    if (state->screen == TUI_SCREEN_INTERFACES) {
+        draw_interfaces(state, &layout);
+        (void)refresh();
+        return;
+    }
     if (!layout.narrow) draw_sidebar(state, &layout);
     draw_thread(state, &layout);
     draw_input(state, &layout);
@@ -815,6 +880,27 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             "Settings: S, j/k select, Enter edit/activate\n"
             "Escape: close active layer or return to Conversations\n"
             "Status: %s\n", state->status);
+        return ferror(output) ? -1 : 0;
+    }
+    if (state->screen == TUI_SCREEN_INTERFACES) {
+        size_t count = tui_state_interface_count(state);
+        (void)fprintf(output, "Screen: Interfaces\nInterfaces: %zu\n", count);
+        for (size_t i = 0u; i < count; ++i) {
+            rns_runtime_interface_info_t info;
+            if (!tui_state_interface_info(state, i, &info)) continue;
+            (void)fprintf(output,
+                          "%c %s type=%s state=%s rx=%llu/%llu tx=%llu/%llu dropped=%llu error=%s\n",
+                          i == state->interface_selected ? '>' : ' ', info.name,
+                          rns_config_interface_type_name(info.type),
+                          interface_state_name(info.state),
+                          (unsigned long long)info.packets_received,
+                          (unsigned long long)info.bytes_received,
+                          (unsigned long long)info.packets_sent,
+                          (unsigned long long)info.bytes_sent,
+                          (unsigned long long)info.packets_dropped,
+                          rns_status_string(info.last_error));
+        }
+        (void)fprintf(output, "Status: %s\n", state->status);
         return ferror(output) ? -1 : 0;
     }
     const tui_contact_t *contact = tui_state_selected_contact(state);

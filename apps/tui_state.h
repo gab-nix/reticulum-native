@@ -38,6 +38,7 @@ typedef enum {
     TUI_SCREEN_GUIDE,
     TUI_SCREEN_LOGS,
     TUI_SCREEN_RRC,
+    TUI_SCREEN_INTERFACES,
     TUI_SCREEN_COUNT
 } tui_screen_t;
 
@@ -136,6 +137,7 @@ typedef struct tui_state {
      */
     uint8_t node_selection[LXMF_DESTINATION_LENGTH];
     bool has_node_selection;
+    size_t interface_selected;
 
     rns_runtime_t *runtime;
     lxmf_router_t router;
@@ -214,6 +216,11 @@ void tui_state_node_move(tui_state_t *state, int delta);
 /* Only Nomad Network nodes serve pages. */
 bool tui_state_node_serves_pages(const rns_node_record *node);
 void tui_state_request_path(tui_state_t *state);
+
+size_t tui_state_interface_count(const tui_state_t *state);
+bool tui_state_interface_info(const tui_state_t *state, size_t index,
+                              rns_runtime_interface_info_t *info);
+void tui_state_interface_move(tui_state_t *state, int delta);
 
 size_t tui_state_link_count(const tui_state_t *state);
 const rns_micron_span *tui_state_link(const tui_state_t *state, size_t index);
