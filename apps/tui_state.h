@@ -23,6 +23,8 @@
 #define TUI_ADDRESS_DIGITS 32u
 #define TUI_COMPOSER_CAPACITY 1024u
 #define TUI_SEARCH_CAPACITY 80u
+#define TUI_LOG_CAPACITY 128u
+#define TUI_LOG_TEXT_MAX TUI_STATUS_MAX
 
 typedef enum {
     TUI_TRUST_TRUSTED,
@@ -99,6 +101,11 @@ typedef struct {
     lxmf_store_message_t value;
     uint8_t content[LXMF_STORE_MAX_CONTENT];
 } tui_message_t;
+
+typedef struct {
+    uint64_t sequence;
+    char text[TUI_LOG_TEXT_MAX];
+} tui_log_entry_t;
 
 /*
  * The whole client state. Filtering results are cached in visible/thread and
@@ -189,6 +196,12 @@ typedef struct tui_state {
 
     tui_rrc_model_t rrc;
 
+    tui_log_entry_t logs[TUI_LOG_CAPACITY];
+    size_t log_head;
+    size_t log_count;
+    uint64_t log_next_sequence;
+    uint64_t log_selected_sequence;
+
     char status[TUI_STATUS_MAX];
 } tui_state_t;
 
@@ -204,6 +217,12 @@ void tui_state_poll(tui_state_t *state);
 /* Rebuilds the cached filter results when they are stale. */
 void tui_state_refresh(tui_state_t *state);
 void tui_state_set_status(tui_state_t *state, const char *format, ...);
+size_t tui_state_log_count(const tui_state_t *state);
+const tui_log_entry_t *tui_state_log_entry(const tui_state_t *state,
+                                            size_t index);
+size_t tui_state_log_position(const tui_state_t *state);
+void tui_state_log_move(tui_state_t *state, int delta);
+void tui_state_log_clear(tui_state_t *state);
 
 const tui_contact_t *tui_state_contact(const tui_state_t *state, size_t index);
 const tui_contact_t *tui_state_selected_contact(const tui_state_t *state);

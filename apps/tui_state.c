@@ -87,9 +87,79 @@ static bool ingest_message(tui_state_t *state, const lxmf_store_message_t *messa
 void tui_state_set_status(tui_state_t *state, const char *format, ...) {
     va_list arguments;
     if (state == NULL || format == NULL) return;
+    char next[TUI_STATUS_MAX];
     va_start(arguments, format);
-    (void)vsnprintf(state->status, sizeof state->status, format, arguments);
+    (void)vsnprintf(next, sizeof next, format, arguments);
     va_end(arguments);
+    if (strcmp(state->status, next) == 0) return;
+    (void)snprintf(state->status, sizeof state->status, "%s", next);
+
+    bool follow_newest = state->log_count == 0u;
+    if (state->log_count != 0u) {
+        size_t newest = (state->log_head + state->log_count - 1u) %
+                        TUI_LOG_CAPACITY;
+        follow_newest = state->log_selected_sequence ==
+                        state->logs[newest].sequence;
+    }
+    size_t slot;
+    if (state->log_count < TUI_LOG_CAPACITY) {
+        slot = (state->log_head + state->log_count) % TUI_LOG_CAPACITY;
+        state->log_count++;
+    } else {
+        slot = state->log_head;
+        state->log_head = (state->log_head + 1u) % TUI_LOG_CAPACITY;
+    }
+    state->logs[slot].sequence = ++state->log_next_sequence;
+    (void)snprintf(state->logs[slot].text, sizeof state->logs[slot].text,
+                   "%s", next);
+    if (follow_newest || state->log_selected_sequence == 0u)
+        state->log_selected_sequence = state->logs[slot].sequence;
+    else if (state->log_count == TUI_LOG_CAPACITY &&
+             state->log_selected_sequence < state->logs[state->log_head].sequence)
+        state->log_selected_sequence = state->logs[state->log_head].sequence;
+}
+
+size_t tui_state_log_count(const tui_state_t *state) {
+    return state != NULL ? state->log_count : 0u;
+}
+
+const tui_log_entry_t *tui_state_log_entry(const tui_state_t *state,
+                                            size_t index) {
+    if (state == NULL || index >= state->log_count) return NULL;
+    return &state->logs[(state->log_head + index) % TUI_LOG_CAPACITY];
+}
+
+size_t tui_state_log_position(const tui_state_t *state) {
+    if (state == NULL || state->log_count == 0u) return 0u;
+    for (size_t i = 0u; i < state->log_count; ++i) {
+        const tui_log_entry_t *entry = tui_state_log_entry(state, i);
+        if (entry != NULL && entry->sequence == state->log_selected_sequence)
+            return i;
+    }
+    return state->log_count - 1u;
+}
+
+void tui_state_log_move(tui_state_t *state, int delta) {
+    if (state == NULL || state->log_count == 0u) return;
+    size_t position = tui_state_log_position(state);
+    if (delta < 0) {
+        size_t amount = (size_t)(-(delta + 1)) + 1u;
+        position = amount > position ? 0u : position - amount;
+    } else if (delta > 0) {
+        size_t amount = (size_t)delta;
+        position = amount >= state->log_count - position
+                       ? state->log_count - 1u
+                       : position + amount;
+    }
+    const tui_log_entry_t *entry = tui_state_log_entry(state, position);
+    if (entry != NULL) state->log_selected_sequence = entry->sequence;
+}
+
+void tui_state_log_clear(tui_state_t *state) {
+    if (state == NULL) return;
+    state->log_head = 0u;
+    state->log_count = 0u;
+    state->log_selected_sequence = 0u;
 }
 
 /* ---------------------------------------------------------------- filtering */

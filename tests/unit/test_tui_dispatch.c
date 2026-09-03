@@ -156,6 +156,26 @@ static void test_propagation_sync_actions_are_screen_scoped(void) {
     free(state);
 }
 
+static void test_event_log_screen(void) {
+    tui_state_t *state = state_create();
+    tui_state_set_status(state, "one");
+    tui_state_set_status(state, "two");
+    assert(tui_dispatch_key(state, 'L'));
+    assert(state->screen == TUI_SCREEN_LOGS);
+    assert(tui_state_log_position(state) == 1u);
+    assert(tui_dispatch_key(state, 'k'));
+    assert(tui_state_log_position(state) == 0u);
+    assert(tui_dispatch_key(state, 'j'));
+    assert(tui_state_log_position(state) == 1u);
+    assert(tui_dispatch_key(state, 'x'));
+    assert(tui_state_log_count(state) == 0u);
+    assert(strcmp(state->status, "Event log cleared") == 0);
+    assert(!state->contacts[0].blocked);
+    assert(tui_dispatch_key(state, 27));
+    assert(state->screen == TUI_SCREEN_CONVERSATIONS);
+    free(state);
+}
+
 static void test_hidden_editors(void) {
     for (int screen = 0; screen < TUI_SCREEN_COUNT; ++screen) {
         for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_RRC; ++field) {
@@ -368,6 +388,7 @@ int main(void) {
     test_empty_network_and_filtered_contact();
     test_delivery_shortcut_is_screen_scoped();
     test_propagation_sync_actions_are_screen_scoped();
+    test_event_log_screen();
     test_hidden_editors();
     test_modal_isolation();
     test_shortcuts_drafts_and_node_action();

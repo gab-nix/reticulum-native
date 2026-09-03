@@ -198,6 +198,8 @@ static void select_previous(tui_state_t *state) {
         tui_state_interface_move(state, -1);
     } else if (state->screen == TUI_SCREEN_RRC) {
         tui_state_rrc_move(state, -1);
+    } else if (state->screen == TUI_SCREEN_LOGS) {
+        tui_state_log_move(state, -1);
     } else if (state->screen == TUI_SCREEN_CONVERSATIONS)
         tui_state_select_offset(state, -1);
 }
@@ -214,6 +216,8 @@ static void select_next(tui_state_t *state) {
         tui_state_interface_move(state, 1);
     } else if (state->screen == TUI_SCREEN_RRC) {
         tui_state_rrc_move(state, 1);
+    } else if (state->screen == TUI_SCREEN_LOGS) {
+        tui_state_log_move(state, 1);
     } else if (state->screen == TUI_SCREEN_CONVERSATIONS)
         tui_state_select_offset(state, 1);
 }
@@ -290,6 +294,8 @@ static bool handle_command_key(tui_state_t *state, int key) {
                                "%s", text);
                 tui_state_set_status(state, "%s", text);
             }
+            else if (state->screen == TUI_SCREEN_LOGS)
+                tui_state_set_status(state, "Logs: j/k select, x clear, Esc Chats");
             else tui_state_set_status(state, "Screen unavailable: C or Esc returns to Conversations");
             break;
         case '1':
@@ -341,7 +347,11 @@ static bool handle_command_key(tui_state_t *state, int key) {
             if (conversation_selected(state)) tui_state_toggle_pin(state);
             break;
         case 'x':
-            if (conversation_selected(state)) tui_state_toggle_block(state);
+            if (state->screen == TUI_SCREEN_LOGS) {
+                tui_state_log_clear(state);
+                (void)snprintf(state->status, sizeof state->status, "%s",
+                               "Event log cleared");
+            } else if (conversation_selected(state)) tui_state_toggle_block(state);
             break;
         case 't':
             if (conversation_selected(state))
@@ -366,7 +376,7 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'g': case 'G': state->screen = TUI_SCREEN_GUIDE; break;
         case 'I': state->screen = TUI_SCREEN_INTERFACES; break;
         case 'F': state->screen = TUI_SCREEN_CONFIG; break;
-        case 'l': case 'L': unavailable_screen(state, "Logs"); break;
+        case 'l': case 'L': state->screen = TUI_SCREEN_LOGS; break;
         case 'R': state->screen = TUI_SCREEN_RRC; break;
         case 'r': reload(state); break;
         case '\n': case KEY_ENTER: activate(state); break;

@@ -1044,6 +1044,34 @@ static void draw_guide(const tui_layout_t *layout) {
             "C or Esc conversations  N network  B browser  S settings  q quit");
 }
 
+static void draw_logs(const tui_state_t *state, const tui_layout_t *layout) {
+    (void)attron(A_BOLD);
+    clipped(stdscr, 3, 1, layout->columns - 2, "Event Log");
+    (void)attroff(A_BOLD);
+    size_t count = tui_state_log_count(state);
+    if (count == 0u) {
+        clipped(stdscr, 5, 2, layout->columns - 4, "No events recorded.");
+    } else {
+        size_t selected = tui_state_log_position(state);
+        size_t rows = layout->hint_row > 5 ? (size_t)(layout->hint_row - 5) : 1u;
+        size_t first = selected >= rows ? selected - rows + 1u : 0u;
+        for (size_t i = first; i < count && i - first < rows; ++i) {
+            const tui_log_entry_t *entry = tui_state_log_entry(state, i);
+            if (entry == NULL) continue;
+            bool active = i == selected;
+            if (active) (void)attron(A_REVERSE);
+            char line[TUI_LOG_TEXT_MAX + 32u];
+            (void)snprintf(line, sizeof line, "%6llu  %s",
+                           (unsigned long long)entry->sequence, entry->text);
+            clipped(stdscr, 5 + (int)(i - first), 2,
+                    layout->columns - 4, line);
+            if (active) (void)attroff(A_REVERSE);
+        }
+    }
+    clipped(stdscr, layout->hint_row, 0, layout->columns,
+            "j/k select  x clear  C or Esc conversations  q quit");
+}
+
 void tui_render_draw(tui_state_t *state) {
     int rows, columns;
     if (state == NULL) return;
@@ -1089,6 +1117,11 @@ void tui_render_draw(tui_state_t *state) {
     }
     if (state->screen == TUI_SCREEN_RRC) {
         draw_rrc(state, &layout);
+        (void)refresh();
+        return;
+    }
+    if (state->screen == TUI_SCREEN_LOGS) {
+        draw_logs(state, &layout);
         (void)refresh();
         return;
     }
@@ -1247,6 +1280,18 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
         (void)fprintf(output,
             "Missing: persistent room/member history and Resource envelopes\nStatus: %s\n",
             state->rrc.status);
+        return ferror(output) ? -1 : 0;
+    }
+    if (state->screen == TUI_SCREEN_LOGS) {
+        (void)fprintf(output, "Screen: Logs\nEvents: %zu\n",
+                      tui_state_log_count(state));
+        size_t selected = tui_state_log_position(state);
+        for (size_t i = 0u; i < tui_state_log_count(state); ++i) {
+            const tui_log_entry_t *entry = tui_state_log_entry(state, i);
+            if (entry != NULL)
+                (void)fprintf(output, "%c %llu %s\n", i == selected ? '>' : ' ',
+                              (unsigned long long)entry->sequence, entry->text);
+        }
         return ferror(output) ? -1 : 0;
     }
     const tui_contact_t *contact = tui_state_selected_contact(state);

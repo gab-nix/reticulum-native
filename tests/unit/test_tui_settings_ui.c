@@ -96,6 +96,21 @@ static void test_keys_dump_and_persistence(void) {
     assert(strstr(output, "Interfaces: 0") != NULL);
     assert(fclose(dump) == 0);
 
+    tui_state_set_status(state, "first diagnostic");
+    tui_state_set_status(state, "second diagnostic");
+    state->screen = TUI_SCREEN_LOGS;
+    dump = tmpfile();
+    assert(dump != NULL);
+    assert(tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0, SEEK_SET) == 0);
+    length = fread(output, 1u, sizeof output - 1u, dump);
+    assert(!ferror(dump));
+    output[length] = '\0';
+    assert(strstr(output, "Screen: Logs") != NULL);
+    assert(strstr(output, "first diagnostic") != NULL);
+    assert(strstr(output, "second diagnostic") != NULL);
+    assert(fclose(dump) == 0);
+
     state->screen = TUI_SCREEN_CONFIG;
     dump = tmpfile();
     assert(dump != NULL && tui_render_dump(state, dump) == 0);

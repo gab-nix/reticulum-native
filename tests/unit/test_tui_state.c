@@ -439,6 +439,37 @@ static void test_propagation_sync_ui_projection(void) {
     destroy_state(state);
 }
 
+static void test_bounded_event_log(void) {
+    tui_state_t *state = make_state();
+    tui_state_set_status(state, "first event");
+    tui_state_set_status(state, "first event");
+    tui_state_set_status(state, "second event");
+    assert(tui_state_log_count(state) == 2u);
+    assert(strcmp(tui_state_log_entry(state, 0u)->text, "first event") == 0);
+    assert(tui_state_log_position(state) == 1u);
+
+    tui_state_log_move(state, -1);
+    uint64_t selected = tui_state_log_entry(state, 0u)->sequence;
+    tui_state_set_status(state, "third event");
+    assert(tui_state_log_position(state) == 0u);
+    assert(tui_state_log_entry(state, 0u)->sequence == selected);
+
+    char text[32];
+    for (size_t i = 0u; i < TUI_LOG_CAPACITY + 4u; ++i) {
+        (void)snprintf(text, sizeof text, "event %zu", i);
+        tui_state_set_status(state, "%s", text);
+    }
+    assert(tui_state_log_count(state) == TUI_LOG_CAPACITY);
+    assert(tui_state_log_position(state) == 0u);
+    assert(strcmp(tui_state_log_entry(state, TUI_LOG_CAPACITY - 1u)->text,
+                  "event 131") == 0);
+    tui_state_log_move(state, 1000);
+    assert(tui_state_log_position(state) == TUI_LOG_CAPACITY - 1u);
+    tui_state_log_clear(state);
+    assert(tui_state_log_count(state) == 0u);
+    destroy_state(state);
+}
+
 static void test_node_move_clamps(void) {
     tui_state_t *state = make_state();
     rns_node_registry_init(&state->nodes, 3600.0);
@@ -743,6 +774,7 @@ int main(void) {
     test_verified_peer_stamp_cost_resolution();
     test_verified_propagation_selection();
     test_propagation_sync_ui_projection();
+    test_bounded_event_log();
     test_node_selection_survives_resort();
     test_node_move_clamps();
     test_only_nomad_nodes_serve_pages();

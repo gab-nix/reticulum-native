@@ -65,7 +65,9 @@ the browser performs real path discovery, link establishment and page requests,
 and reports loading, failure and cancellation states. Settings, Interfaces,
 Config and Guide are also functional. RRC has a basic authenticated live client
 for text messages; room/member history, Resource envelopes and hub management
-remain explicit gaps. Logs remains unavailable.
+remain explicit gaps. Logs provides a bounded in-memory view of user-visible
+status transitions, including delivery, browser and runtime-startup results. It excludes
+message plaintext, key material and packet captures, and is cleared on restart.
 
 In Network, use `j`/`k` or the arrow keys to select a verified announce. The
 list scrolls around the selection, and the selection is held by destination
