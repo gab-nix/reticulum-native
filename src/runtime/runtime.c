@@ -1235,6 +1235,16 @@ rns_status_t rns_runtime_announce(rns_runtime_t *runtime, const rns_identity *id
                                   const char *app_name, const char *const *aspects,
                                   size_t aspect_count, const uint8_t *app_data,
                                   size_t app_data_length) {
+    return rns_runtime_announce_with_ratchet(
+        runtime, identity, app_name, aspects, aspect_count, NULL, app_data,
+        app_data_length);
+}
+
+rns_status_t rns_runtime_announce_with_ratchet(
+    rns_runtime_t *runtime, const rns_identity *identity,
+    const char *app_name, const char *const *aspects, size_t aspect_count,
+    const uint8_t ratchet_public[RNS_RATCHET_PUBLIC_SIZE],
+    const uint8_t *app_data, size_t app_data_length) {
     uint8_t destination[16], name_hash[10], prefix[5];
     uint8_t body[RNS_MTU], raw[RNS_MTU];
     size_t body_length = 0U, raw_length = 0U;
@@ -1248,7 +1258,8 @@ rns_status_t rns_runtime_announce(rns_runtime_t *runtime, const rns_identity *id
     if (rns_hal_random_bytes(prefix, sizeof prefix) != RNS_OK ||
         rns_hal_wallclock_ms(&wallclock_ms) != RNS_OK) return RNS_ERROR_INVALID_STATE;
     if (!rns_announce_build(identity, destination, name_hash, prefix,
-                            wallclock_ms / 1000U, NULL, app_data, app_data_length,
+                            wallclock_ms / 1000U, ratchet_public, app_data,
+                            app_data_length,
                             body, sizeof body, &body_length, &context_flag))
         return RNS_ERROR_INVALID_STATE;
     rns_packet packet = {0};

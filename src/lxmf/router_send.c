@@ -2,7 +2,9 @@
 #include "reticulum/destination.h"
 #include "reticulum/lxmf_delivery.h"
 #include "reticulum/packet.h"
+#include "reticulum/hal.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static void report(lxmf_router_t *router,
@@ -809,10 +811,19 @@ lxmf_status_t lxmf_router_send_message(
         if (status == LXMF_OK)
             status = lxmf_unpack(representation, representation_length,
                                  NULL, NULL, &message);
-        if (status == LXMF_OK)
-            status = lxmf_opportunistic_packet_pack(
-                &message, router->config.identity, destination, packet,
-                sizeof packet, &packet_length);
+        if (status == LXMF_OK) {
+            uint8_t ratchet[RNS_RATCHET_PUBLIC_SIZE];
+            const uint8_t *selected_ratchet = NULL;
+            if (router->config.resolve_ratchet != NULL &&
+                router->config.resolve_ratchet(
+                    router->config.ratchet_context, stored.destination,
+                    ratchet))
+                selected_ratchet = ratchet;
+            status = lxmf_opportunistic_packet_pack_ratchet(
+                &message, router->config.identity, destination,
+                selected_ratchet, packet, sizeof packet, &packet_length);
+            rns_hal_secure_zero(ratchet, sizeof ratchet);
+        }
         if (status == LXMF_OK) {
             if (router->config.runtime != NULL)
                 status = send_with_receipt(router, id, stored.destination,
@@ -954,6 +965,13 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
     return LXMF_OK;
 }
 
+lxmf_status_t lxmf_router_set_inbound_stamp_cost(lxmf_router_t *router,
+                                                  uint8_t cost) {
+    if (router == NULL || cost == UINT8_MAX) return LXMF_ERR_ARGUMENT;
+    router->config.inbound_stamp_cost = cost;
+    return LXMF_OK;
+}
+
 lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
                                          const uint8_t *packet,
                                          size_t packet_length) {
@@ -966,9 +984,39 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
     lxmf_identity_verifier_context_t verifier = {
         .resolve = router->config.resolve_identity,
         .resolve_context = router->config.resolve_context};
-    lxmf_status_t status = lxmf_opportunistic_packet_unpack(
-        packet, packet_length, router->config.identity, lxmf_identity_verifier,
-        &verifier, plaintext, sizeof plaintext, &plaintext_length, &message);
+    uint8_t *private_ratchets = NULL;
+    size_t ratchet_count = 0u;
+    if (router->config.ratchet_store != NULL) {
+        ratchet_count = rns_ratchet_store_count(router->config.ratchet_store);
+        if (ratchet_count != 0u) {
+            if (ratchet_count > RNS_RATCHET_STORE_MAX_RETAINED ||
+                ratchet_count > SIZE_MAX / RNS_RATCHET_PRIVATE_SIZE)
+                return LXMF_ERR_BOUNDS;
+            private_ratchets = malloc(
+                ratchet_count * RNS_RATCHET_PRIVATE_SIZE);
+            if (private_ratchets == NULL) return LXMF_ERR_BOUNDS;
+            size_t copied = 0u;
+            if (rns_ratchet_store_copy_private(
+                    router->config.ratchet_store, private_ratchets,
+                    ratchet_count, &copied) != RNS_OK ||
+                copied != ratchet_count) {
+                rns_hal_secure_zero(
+                    private_ratchets,
+                    ratchet_count * RNS_RATCHET_PRIVATE_SIZE);
+                free(private_ratchets);
+                return LXMF_ERR_CRYPTO;
+            }
+        }
+    }
+    lxmf_status_t status = lxmf_opportunistic_packet_unpack_ratchets(
+        packet, packet_length, router->config.identity, private_ratchets,
+        ratchet_count, 0, lxmf_identity_verifier, &verifier, plaintext,
+        sizeof plaintext, &plaintext_length, &message, NULL, NULL);
+    if (private_ratchets != NULL) {
+        rns_hal_secure_zero(private_ratchets,
+                            ratchet_count * RNS_RATCHET_PRIVATE_SIZE);
+        free(private_ratchets);
+    }
     /* An identity we do not hold yet cannot condemn the message: retain it
      * flagged so it can be shown and checked again after its announce. A
      * signature that fails against an identity we do hold is forged. */

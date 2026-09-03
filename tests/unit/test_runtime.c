@@ -60,6 +60,10 @@ static void test_routed_and_announce(rns_runtime_t *runtime) {
            RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_runtime_announce(runtime, &identity, NULL, aspects, 1U, NULL, 0U) ==
            RNS_ERROR_INVALID_ARGUMENT);
+    uint8_t ratchet[32] = {0u};
+    assert(rns_runtime_announce_with_ratchet(
+               NULL, &identity, "lxmf", aspects, 1U, ratchet, NULL, 0U) ==
+           RNS_ERROR_INVALID_ARGUMENT);
     /* No interface is up in this fixture, so announcing cannot succeed. */
     assert(rns_runtime_announce(runtime, &identity, "lxmf", aspects, 1U, NULL, 0U) !=
            RNS_OK);

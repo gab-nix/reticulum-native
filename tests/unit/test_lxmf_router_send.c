@@ -15,6 +15,7 @@ typedef struct {
     lxmf_delivery_status_t last_status;
     size_t events;
     lxmf_router_event_t last_event;
+    const uint8_t *ratchet;
 } send_state_t;
 
 static const rns_identity *resolve(void *context, const uint8_t hash[16]) {
@@ -25,6 +26,14 @@ static const rns_identity *resolve(void *context, const uint8_t hash[16]) {
                    memcmp(expected, hash, sizeof expected) == 0
                ? state->peer
                : NULL;
+}
+
+static bool resolve_ratchet(void *context, const uint8_t hash[16],
+                            uint8_t ratchet_public[32]) {
+    send_state_t *state = context;
+    if (state->ratchet == NULL || resolve(context, hash) == NULL) return false;
+    memcpy(ratchet_public, state->ratchet, 32u);
+    return true;
 }
 
 static lxmf_status_t send_packet(void *context, const uint8_t *packet,
@@ -92,11 +101,24 @@ int main(void) {
     bool inserted = false;
     assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
 
-    send_state_t state = {.peer = &bob};
+    char ratchet_path[] = "/tmp/lxmf-router-ratchets-XXXXXX";
+    fd = mkstemp(ratchet_path);
+    assert(fd >= 0);
+    close(fd);
+    unlink(ratchet_path);
+    rns_ratchet_store_t *ratchet_store = NULL;
+    assert(rns_ratchet_store_open(&ratchet_store, ratchet_path, &bob, 4u,
+                                  30u) == RNS_OK);
+    uint8_t ratchet_private[32], ratchet_public[32], ratchet_id[16];
+    assert(rns_ratchet_store_current(ratchet_store, 100u, ratchet_private,
+                                     ratchet_public, ratchet_id, NULL) ==
+           RNS_OK);
+    send_state_t state = {.peer = &bob, .ratchet = ratchet_public};
     lxmf_router_t router;
     lxmf_router_config_t config = {
         .identity = &alice, .store = &store, .resolve_identity = resolve,
-        .resolve_context = &state, .send_packet = send_packet,
+        .resolve_context = &state, .resolve_ratchet = resolve_ratchet,
+        .ratchet_context = &state, .send_packet = send_packet,
         .send_context = &state, .delivery_callback = delivery,
         .delivery_context = &state, .event_callback = event,
         .event_context = &state};
@@ -129,7 +151,8 @@ int main(void) {
     incoming_state_t incoming_state = {0};
     lxmf_router_t receiver;
     lxmf_router_config_t receiver_config = {
-        .identity = &bob, .store = &received_store, .resolve_identity = resolve,
+        .identity = &bob, .store = &received_store,
+        .ratchet_store = ratchet_store, .resolve_identity = resolve,
         .resolve_context = &receiver_state, .send_packet = send_packet,
         .send_context = &receiver_state, .message_callback = incoming,
         .message_context = &incoming_state};
@@ -194,5 +217,7 @@ int main(void) {
     unlink(receive_path);
     lxmf_store_close(&store);
     unlink(path);
+    rns_ratchet_store_close(ratchet_store);
+    unlink(ratchet_path);
     return 0;
 }

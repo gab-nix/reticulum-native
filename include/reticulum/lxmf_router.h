@@ -4,6 +4,7 @@
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_store.h"
 #include "reticulum/lxmf_tickets.h"
+#include "reticulum/ratchet_store.h"
 #include "reticulum/runtime.h"
 
 #ifdef __cplusplus
@@ -65,6 +66,9 @@ typedef struct {
 
 typedef const rns_identity *(*lxmf_router_identity_resolver_fn)(
     void *context, const uint8_t destination[LXMF_DESTINATION_LENGTH]);
+typedef bool (*lxmf_router_ratchet_resolver_fn)(
+    void *context, const uint8_t destination[LXMF_DESTINATION_LENGTH],
+    uint8_t ratchet_public[RNS_RATCHET_PUBLIC_SIZE]);
 typedef lxmf_status_t (*lxmf_router_send_fn)(void *context,
                                              const uint8_t *packet,
                                              size_t packet_length);
@@ -104,6 +108,8 @@ typedef struct {
      * never assumes monotonic time is Unix time. A wall clock is required when
      * a ticket store is supplied. */
     lxmf_ticket_store_t *ticket_store;
+    /* Optional local private-ratchet history for opportunistic receive. */
+    rns_ratchet_store_t *ratchet_store;
     lxmf_clock_fn wall_clock;
     void *wall_clock_context;
     /* Zero disables inbound stamp enforcement. Costs 1..254 accept either a
@@ -115,6 +121,9 @@ typedef struct {
     rns_runtime_t *runtime;
     lxmf_router_identity_resolver_fn resolve_identity;
     void *resolve_context;
+    /* Optional verified peer-ratchet resolver for opportunistic sends. */
+    lxmf_router_ratchet_resolver_fn resolve_ratchet;
+    void *ratchet_context;
     lxmf_router_send_fn send_packet;
     void *send_context;
     lxmf_router_delivery_callback_fn delivery_callback;
@@ -193,6 +202,9 @@ lxmf_status_t lxmf_router_cancel_message(
  * persisted in the store and counted in result; they do not fail the poll. */
 lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
                                lxmf_router_poll_result_t *result);
+/* Updates the enforced inbound policy without rebuilding runtime links. */
+lxmf_status_t lxmf_router_set_inbound_stamp_cost(lxmf_router_t *router,
+                                                  uint8_t cost);
 /* Accepts a single encrypted opportunistic LXMF packet for the local identity.
  * Valid new messages are persisted as DELIVERED before message_callback runs.
  * A message signed by an identity the resolver does not yet hold cannot be

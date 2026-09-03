@@ -12,6 +12,7 @@
 #include "reticulum/micron.h"
 #include "reticulum/node_registry.h"
 #include "reticulum/runtime.h"
+#include "reticulum/ratchet_store.h"
 
 #define TUI_MAX_CONTACTS 64u
 #define TUI_MAX_MESSAGES 256u
@@ -92,8 +93,12 @@ typedef struct tui_state {
 
     lxmf_store_t store;
     lxmf_peer_store_t peer_store;
+    lxmf_ticket_store_t *ticket_store;
+    rns_ratchet_store_t *ratchet_store;
     char peer_store_path[TUI_PATH_MAX];
     char node_store_path[TUI_PATH_MAX];
+    char ticket_store_path[TUI_PATH_MAX];
+    char ratchet_store_path[TUI_PATH_MAX];
 
     tui_contact_t contacts[TUI_MAX_CONTACTS];
     size_t contact_count;

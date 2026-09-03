@@ -80,6 +80,37 @@ int main(void) {
     assert(inbound.content.len == outbound.content.len);
     assert(memcmp(inbound.content.data, outbound.content.data, outbound.content.len) == 0);
 
+    uint8_t ratchet_private[32], ratchet_public[32], ratchet_id[16];
+    uint8_t used_id[16];
+    int used_ratchet = 0;
+    assert(rns_identity_ratchet_generate(ratchet_private, ratchet_public,
+                                         ratchet_id));
+    assert(lxmf_opportunistic_packet_pack_ratchet(
+               &outbound, &alice, &bob_public, ratchet_public, packet,
+               sizeof packet, &packet_length) == LXMF_OK);
+    assert(rns_packet_decode(&outer, packet, packet_length));
+    assert(!rns_identity_decrypt(&bob, outer.data, outer.data_length,
+                                 encrypted_plaintext,
+                                 sizeof encrypted_plaintext,
+                                 &encrypted_plaintext_length));
+    assert(lxmf_opportunistic_packet_unpack_ratchets(
+               packet, packet_length, &bob, ratchet_private, 1u, 1,
+               lxmf_identity_verifier, &verifier, plaintext,
+               sizeof plaintext, &plaintext_length, &inbound, used_id,
+               &used_ratchet) == LXMF_OK);
+    assert(used_ratchet && memcmp(used_id, ratchet_id, sizeof used_id) == 0 &&
+           plaintext_length == packed_length &&
+           memcmp(plaintext, packed, packed_length) == 0);
+
+    assert(lxmf_opportunistic_packet_pack(
+               &outbound, &alice, &bob_public, packet, sizeof packet,
+               &packet_length) == LXMF_OK);
+    assert(lxmf_opportunistic_packet_unpack_ratchets(
+               packet, packet_length, &bob, ratchet_private, 1u, 1,
+               lxmf_identity_verifier, &verifier, plaintext,
+               sizeof plaintext, &plaintext_length, &inbound, used_id,
+               &used_ratchet) == LXMF_ERR_CRYPTO);
+
     packet[packet_length - 1] ^= 1;
     assert(lxmf_opportunistic_packet_unpack(packet, packet_length, &bob,
                                             lxmf_identity_verifier, &verifier,

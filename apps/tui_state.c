@@ -347,6 +347,30 @@ static const rns_identity *resolve_peer(void *context,
     return NULL;
 }
 
+static bool resolve_peer_ratchet(
+    void *context, const uint8_t destination[LXMF_DESTINATION_LENGTH],
+    uint8_t ratchet_public[RNS_RATCHET_PUBLIC_SIZE]) {
+    tui_state_t *state = context;
+    for (size_t i = 0u; i < state->nodes.count; ++i) {
+        const rns_node_record *node = &state->nodes.records[i];
+        if (node->has_message_destination && node->has_ratchet &&
+            memcmp(node->message_destination, destination,
+                   LXMF_DESTINATION_LENGTH) == 0) {
+            memcpy(ratchet_public, node->ratchet, RNS_RATCHET_PUBLIC_SIZE);
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint64_t wall_clock_seconds(void *context) {
+    uint64_t milliseconds = 0u;
+    (void)context;
+    return rns_hal_wallclock_ms(&milliseconds) == RNS_OK
+               ? milliseconds / UINT64_C(1000)
+               : 0u;
+}
+
 static lxmf_status_t send_via_runtime(void *context, const uint8_t *packet,
                                       size_t length) {
     tui_state_t *state = context;
@@ -439,9 +463,18 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
         lxmf_router_config_t router = {
             .identity = &state->identity,
             .store = &state->store,
+            .ticket_store = state->ticket_store,
+            .ratchet_store = state->ratchet_store,
+            .wall_clock = wall_clock_seconds,
+            .wall_clock_context = state,
+            .inbound_stamp_cost = state->settings.has_stamp_cost
+                                      ? state->settings.stamp_cost
+                                      : 0u,
             .runtime = state->runtime,
             .resolve_identity = resolve_peer,
             .resolve_context = state,
+            .resolve_ratchet = resolve_peer_ratchet,
+            .ratchet_context = state,
             .send_packet = send_via_runtime,
             .send_context = state,
             .message_callback = on_message,
@@ -549,6 +582,21 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     if (written <= 0 || (size_t)written >= sizeof state->peer_store_path ||
         lxmf_peer_store_open(&state->peer_store, state->peer_store_path) != LXMF_OK ||
         lxmf_peer_store_list(&state->peer_store, load_peer, state) != LXMF_OK) goto fail;
+    written = snprintf(state->ticket_store_path,
+                       sizeof state->ticket_store_path, "%s.tickets",
+                       store_path);
+    if (written <= 0 || (size_t)written >= sizeof state->ticket_store_path ||
+        lxmf_ticket_store_open(&state->ticket_store,
+                               state->ticket_store_path) != LXMF_OK)
+        goto fail;
+    written = snprintf(state->ratchet_store_path,
+                       sizeof state->ratchet_store_path, "%s.ratchets",
+                       store_path);
+    if (written <= 0 || (size_t)written >= sizeof state->ratchet_store_path ||
+        rns_ratchet_store_open(&state->ratchet_store,
+                               state->ratchet_store_path, &state->identity,
+                               0u, 0u) != RNS_OK)
+        goto fail;
     if (destination_hex != NULL) {
         uint8_t peer[LXMF_DESTINATION_LENGTH];
         if (!tui_hex_parse(destination_hex, peer, sizeof peer)) goto fail;
@@ -598,6 +646,10 @@ void tui_state_close(tui_state_t *state) {
     rns_runtime_destroy(state->runtime);
     state->runtime = NULL;
     tui_state_persist_contacts(state);
+    rns_ratchet_store_close(state->ratchet_store);
+    state->ratchet_store = NULL;
+    lxmf_ticket_store_close(state->ticket_store);
+    state->ticket_store = NULL;
     lxmf_peer_store_close(&state->peer_store);
     lxmf_store_close(&state->store);
     free(state->messages);
@@ -642,9 +694,20 @@ static bool announce_at(tui_state_t *state, uint64_t now) {
         tui_state_set_status(state, "Cannot announce while the messaging runtime is offline");
         return false;
     }
-    rns_status_t result = rns_runtime_announce(state->runtime, &state->identity,
-                                               "lxmf", delivery, 1u, app_data,
-                                               app_data_length);
+    uint64_t wall_seconds = wall_clock_seconds(state);
+    uint8_t ratchet_private[RNS_RATCHET_PRIVATE_SIZE];
+    uint8_t ratchet_public[RNS_RATCHET_PUBLIC_SIZE];
+    uint8_t ratchet_id[RNS_RATCHET_ID_SIZE];
+    rns_status_t result = rns_ratchet_store_current(
+        state->ratchet_store, wall_seconds, ratchet_private, ratchet_public,
+        ratchet_id, NULL);
+    if (result == RNS_OK)
+        result = rns_runtime_announce_with_ratchet(
+            state->runtime, &state->identity, "lxmf", delivery, 1u,
+            ratchet_public, app_data, app_data_length);
+    rns_hal_secure_zero(ratchet_private, sizeof ratchet_private);
+    rns_hal_secure_zero(ratchet_public, sizeof ratchet_public);
+    rns_hal_secure_zero(ratchet_id, sizeof ratchet_id);
     state->has_announce_result = true;
     state->last_announce_result = result;
     if (result != RNS_OK) {
@@ -866,6 +929,11 @@ bool tui_state_save_settings(tui_state_t *state) {
         tui_state_set_status(state, "Could not save settings");
         return false;
     }
+    if (state->router_ready)
+        (void)lxmf_router_set_inbound_stamp_cost(
+            &state->router, state->settings.has_stamp_cost
+                                ? state->settings.stamp_cost
+                                : 0u);
     return true;
 }
 
@@ -1006,6 +1074,9 @@ bool tui_state_setting_apply(tui_state_t *state) {
         return false;
     }
     state->settings = changed;
+    if (state->router_ready)
+        (void)lxmf_router_set_inbound_stamp_cost(
+            &state->router, changed.has_stamp_cost ? changed.stamp_cost : 0u);
     state->next_announce_ms = 0u;
     tui_editor_clear(&state->setting);
     state->field = TUI_FIELD_NONE;

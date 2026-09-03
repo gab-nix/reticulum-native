@@ -240,6 +240,13 @@ rns_status_t rns_runtime_announce(rns_runtime_t *runtime,
                                   size_t aspect_count,
                                   const uint8_t *app_data,
                                   size_t app_data_length);
+/* Ratchet-aware form used by inbound SINGLE destinations. The public ratchet
+ * is signed into the announce and sets the Reticulum context flag. */
+rns_status_t rns_runtime_announce_with_ratchet(
+    rns_runtime_t *runtime, const rns_identity *identity,
+    const char *app_name, const char *const *aspects, size_t aspect_count,
+    const uint8_t ratchet_public[RNS_RATCHET_PUBLIC_SIZE],
+    const uint8_t *app_data, size_t app_data_length);
 
 size_t rns_runtime_interface_count(const rns_runtime_t *runtime);
 rns_status_t rns_runtime_interface_info(const rns_runtime_t *runtime,
