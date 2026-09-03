@@ -3,6 +3,7 @@
 
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_store.h"
+#include "reticulum/runtime.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -11,6 +12,7 @@ extern "C" {
 #define LXMF_DISPLAY_NAME_MAX 127u
 #define LXMF_IDENTITY_PUBLIC_LENGTH 64u
 #define LXMF_FEATURE_COMPRESSION 0x00000001u
+#define LXMF_ROUTER_MAX_RECEIPTS 16u
 
 typedef struct {
     char display_name[LXMF_DISPLAY_NAME_MAX + 1u];
@@ -101,6 +103,10 @@ typedef void (*lxmf_router_event_callback_fn)(
 typedef struct {
     rns_identity *identity;
     lxmf_store_t *store;
+    /* When supplied, opportunistic sends use a Reticulum packet receipt and
+     * only become DELIVERED after a valid proof. `send_packet` remains the
+     * compatibility transport for callers that do not own a runtime. */
+    rns_runtime_t *runtime;
     lxmf_router_identity_resolver_fn resolve_identity;
     void *resolve_context;
     lxmf_router_send_fn send_packet;
@@ -114,7 +120,19 @@ typedef struct {
     lxmf_router_event_callback_fn event_callback;
     void *event_context;
 } lxmf_router_config_t;
-typedef struct { lxmf_router_config_t config; } lxmf_router_t;
+typedef struct lxmf_router lxmf_router_t;
+typedef struct {
+    bool used;
+    bool terminal;
+    lxmf_router_t *router;
+    rns_packet_receipt_t *receipt;
+    uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
+} lxmf_router_receipt_slot_t;
+
+struct lxmf_router {
+    lxmf_router_config_t config;
+    lxmf_router_receipt_slot_t receipts[LXMF_ROUTER_MAX_RECEIPTS];
+};
 
 typedef struct {
     size_t attempted;
@@ -125,6 +143,7 @@ typedef struct {
 
 lxmf_status_t lxmf_router_init(lxmf_router_t *router,
                                const lxmf_router_config_t *config);
+void lxmf_router_destroy(lxmf_router_t *router);
 lxmf_status_t lxmf_router_send_message(lxmf_router_t *router,
                                        const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]);
 /* Attempts queued or failed messages without blocking. Individual failures are

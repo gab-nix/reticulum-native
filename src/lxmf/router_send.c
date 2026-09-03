@@ -58,9 +58,99 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
                                const lxmf_router_config_t *config) {
     if (router == NULL || config == NULL || config->identity == NULL ||
         !config->identity->has_private || config->store == NULL ||
-        config->resolve_identity == NULL || config->send_packet == NULL)
+        config->resolve_identity == NULL ||
+        (config->runtime == NULL && config->send_packet == NULL))
         return LXMF_ERR_ARGUMENT;
+    memset(router, 0, sizeof *router);
     router->config = *config;
+    return LXMF_OK;
+}
+
+static void release_receipts(lxmf_router_t *router, bool all) {
+    for (size_t i = 0u; i < LXMF_ROUTER_MAX_RECEIPTS; ++i) {
+        lxmf_router_receipt_slot_t *slot = &router->receipts[i];
+        if (!slot->used || (!all && !slot->terminal)) continue;
+        if (all && !slot->terminal) rns_packet_receipt_cancel(slot->receipt);
+        rns_packet_receipt_destroy(slot->receipt);
+        memset(slot, 0, sizeof *slot);
+    }
+}
+
+void lxmf_router_destroy(lxmf_router_t *router) {
+    if (router == NULL) return;
+    release_receipts(router, true);
+    memset(router, 0, sizeof *router);
+}
+
+static lxmf_router_receipt_slot_t *reserve_receipt(lxmf_router_t *router) {
+    release_receipts(router, false);
+    for (size_t i = 0u; i < LXMF_ROUTER_MAX_RECEIPTS; ++i) {
+        if (router->receipts[i].used) continue;
+        router->receipts[i].used = true;
+        router->receipts[i].router = router;
+        return &router->receipts[i];
+    }
+    return NULL;
+}
+
+static void receipt_changed(rns_packet_receipt_t *receipt,
+                            rns_packet_receipt_state_t state,
+                            rns_status_t status, void *context) {
+    lxmf_router_receipt_slot_t *slot = context;
+    lxmf_router_t *router;
+    lxmf_delivery_status_t delivery;
+    lxmf_status_t result;
+    if (slot == NULL || !slot->used || slot->receipt != receipt) return;
+    router = slot->router;
+    if (state == RNS_PACKET_RECEIPT_PENDING) return;
+    slot->terminal = true;
+    if (state == RNS_PACKET_RECEIPT_DELIVERED) {
+        delivery = LXMF_DELIVERY_DELIVERED;
+        result = LXMF_OK;
+    } else if (state == RNS_PACKET_RECEIPT_CANCELLED) {
+        delivery = LXMF_DELIVERY_FAILED;
+        result = LXMF_ERR_CANCELLED;
+    } else {
+        delivery = LXMF_DELIVERY_FAILED;
+        result = status == RNS_ERROR_TIMEOUT ? LXMF_ERR_TIMEOUT : LXMF_ERR_CRYPTO;
+    }
+    (void)lxmf_store_update_status(router->config.store, slot->message_id,
+                                   delivery);
+    report(router, slot->message_id, delivery, result);
+    report_event(router, slot->message_id,
+                 LXMF_DELIVERY_METHOD_OPPORTUNISTIC, delivery,
+                 result == LXMF_ERR_TIMEOUT ? LXMF_QUEUE_REASON_RETRY_BACKOFF
+                                            : LXMF_QUEUE_REASON_NONE,
+                 result);
+}
+
+static lxmf_status_t send_with_receipt(
+    lxmf_router_t *router, const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
+    const uint8_t destination_hash[LXMF_DESTINATION_LENGTH],
+    const rns_identity *destination, const uint8_t *packet,
+    size_t packet_length, lxmf_queue_reason_t *queue_reason) {
+    *queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
+    lxmf_router_receipt_slot_t *slot = reserve_receipt(router);
+    if (slot == NULL) return LXMF_ERR_PENDING;
+    memcpy(slot->message_id, id, sizeof slot->message_id);
+    rns_packet_receipt_options_t options = {
+        .timeout_seconds = 30.0,
+        .callback = receipt_changed,
+        .callback_context = slot
+    };
+    rns_status_t sent = rns_runtime_send_routed_with_receipt(
+        router->config.runtime, packet, packet_length, destination, &options,
+        &slot->receipt);
+    if (sent != RNS_OK) {
+        memset(slot, 0, sizeof *slot);
+        if (sent == RNS_ERROR_NOT_FOUND) {
+            *queue_reason = LXMF_QUEUE_REASON_PATH;
+            (void)rns_runtime_request_path(router->config.runtime,
+                                           destination_hash);
+            return LXMF_ERR_PENDING;
+        }
+        return LXMF_ERR_CRYPTO;
+    }
     return LXMF_OK;
 }
 
@@ -97,12 +187,28 @@ lxmf_status_t lxmf_router_send_message(
     report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
                  LXMF_DELIVERY_SENDING, LXMF_QUEUE_REASON_NONE, LXMF_OK);
     size_t packet_length = 0;
+    lxmf_queue_reason_t pending_reason = LXMF_QUEUE_REASON_NONE;
     lxmf_status_t status = lxmf_opportunistic_packet_pack(
         &message, router->config.identity, destination, packet, sizeof packet,
         &packet_length);
-    if (status == LXMF_OK)
-        status = router->config.send_packet(router->config.send_context, packet,
-                                            packet_length);
+    if (status == LXMF_OK) {
+        if (router->config.runtime != NULL)
+            status = send_with_receipt(router, id, stored.destination,
+                                       destination, packet, packet_length,
+                                       &pending_reason);
+        else
+            status = router->config.send_packet(router->config.send_context,
+                                                packet, packet_length);
+    }
+    if (status == LXMF_ERR_PENDING) {
+        (void)lxmf_store_update_status(router->config.store, id,
+                                       LXMF_DELIVERY_QUEUED);
+        report(router, id, LXMF_DELIVERY_QUEUED, status);
+        report_event(router, id, LXMF_DELIVERY_METHOD_OPPORTUNISTIC,
+                     LXMF_DELIVERY_QUEUED,
+                     pending_reason, status);
+        return status;
+    }
     if (status == LXMF_OK && lxmf_store_update_status(router->config.store, id,
                                                        LXMF_DELIVERY_SENT) != LXMF_OK)
         status = LXMF_ERR_CRYPTO;
@@ -140,6 +246,7 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
     if (router == NULL || result == NULL || max_messages > LXMF_STORE_MAX_MESSAGES)
         return LXMF_ERR_ARGUMENT;
     memset(result, 0, sizeof *result);
+    release_receipts(router, false);
     if (max_messages == 0u) return LXMF_OK;
     pending_messages_t pending = {.limit = max_messages};
     lxmf_status_t status = lxmf_store_list(router->config.store, collect_pending,

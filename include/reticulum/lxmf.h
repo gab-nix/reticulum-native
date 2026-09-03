@@ -27,6 +27,7 @@ typedef enum {
     LXMF_ERR_CRYPTO,
     LXMF_ERR_SIGNATURE,
     LXMF_ERR_CANCELLED,
+    LXMF_ERR_TIMEOUT,
     /* The operation is valid but cannot progress until an external condition,
      * such as learning a peer identity or path, becomes available. */
     LXMF_ERR_PENDING,
