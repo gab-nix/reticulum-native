@@ -16,6 +16,7 @@ extern "C" {
 #define LXMF_ANNOUNCE_EXTENSIONS_MAX 256u
 #define LXMF_ROUTER_MAX_RECEIPTS 16u
 #define LXMF_ROUTER_MAX_LINKS 16u
+#define LXMF_ROUTER_MAX_RESOURCES 8u
 
 typedef struct {
     char display_name[LXMF_DISPLAY_NAME_MAX + 1u];
@@ -120,6 +121,10 @@ typedef struct {
     /* Register the local lxmf.delivery destination for authenticated inbound
      * links. The router owns this registration until destroy. */
     bool accept_inbound_links;
+    /* Zero selects the current durable packed-message bound. */
+    size_t max_incoming_resource_size;
+    /* Zero selects the runtime Resource default. */
+    double resource_timeout_seconds;
 } lxmf_router_config_t;
 typedef struct {
     bool used;
@@ -140,10 +145,21 @@ typedef struct {
     uint8_t destination[LXMF_DESTINATION_LENGTH];
 } lxmf_router_link_slot_t;
 
+typedef struct {
+    bool used;
+    bool terminal;
+    lxmf_router_t *router;
+    rns_runtime_resource_transfer_t *transfer;
+    rns_runtime_link_t *link;
+    uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
+    uint32_t attempt;
+} lxmf_router_resource_slot_t;
+
 struct lxmf_router {
     lxmf_router_config_t config;
     lxmf_router_receipt_slot_t receipts[LXMF_ROUTER_MAX_RECEIPTS];
     lxmf_router_link_slot_t links[LXMF_ROUTER_MAX_LINKS];
+    lxmf_router_resource_slot_t resources[LXMF_ROUTER_MAX_RESOURCES];
     rns_runtime_destination_t *inbound_destination;
 };
 
@@ -159,6 +175,10 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
 void lxmf_router_destroy(lxmf_router_t *router);
 lxmf_status_t lxmf_router_send_message(lxmf_router_t *router,
                                        const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]);
+/* Cancels an active packet receipt or Resource transfer for this message. */
+lxmf_status_t lxmf_router_cancel_message(
+    lxmf_router_t *router,
+    const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]);
 /* Attempts queued or failed messages without blocking. Individual failures are
  * persisted in the store and counted in result; they do not fail the poll. */
 lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,

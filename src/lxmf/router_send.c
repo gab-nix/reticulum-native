@@ -47,6 +47,13 @@ static void direct_link_accepted(rns_runtime_destination_t *destination,
 static void direct_link_identified(rns_runtime_link_t *link,
                                    const rns_identity *identity,
                                    void *context);
+static bool direct_resource_accept(
+    rns_runtime_link_t *link,
+    const rns_resource_advertisement_t *advertisement, void *context);
+static void direct_resource_received(
+    rns_runtime_link_t *link, const uint8_t resource_hash[32],
+    rns_status_t status, const uint8_t *data, size_t data_length,
+    void *context);
 
 typedef struct {
     lxmf_store_t *store;
@@ -128,6 +135,12 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
             .state_callback = direct_link_state_changed,
             .packet_callback = direct_link_packet_received,
             .identified_callback = direct_link_identified,
+            .resource_accept_callback = direct_resource_accept,
+            .resource_receive_callback = direct_resource_received,
+            .max_incoming_resource_size =
+                config->max_incoming_resource_size != 0U
+                    ? config->max_incoming_resource_size
+                    : LXMF_STORE_MAX_PACKED,
             .callback_context = router};
         if (!rns_destination_hash(config->identity, "lxmf", aspects, 1U,
                                   hash) ||
@@ -152,9 +165,21 @@ static void release_receipts(lxmf_router_t *router, bool all) {
     }
 }
 
+static void release_resources(lxmf_router_t *router, bool all) {
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_RESOURCES; ++i) {
+        lxmf_router_resource_slot_t *slot = &router->resources[i];
+        if (!slot->used || (!all && !slot->terminal)) continue;
+        if (all && !slot->terminal)
+            rns_runtime_resource_transfer_cancel(slot->transfer);
+        rns_runtime_resource_transfer_destroy(slot->transfer);
+        memset(slot, 0, sizeof *slot);
+    }
+}
+
 void lxmf_router_destroy(lxmf_router_t *router) {
     if (router == NULL) return;
     release_receipts(router, true);
+    release_resources(router, true);
     for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i) {
         if (router->links[i].used && router->links[i].link != NULL)
             rns_runtime_link_destroy(router->links[i].link);
@@ -170,6 +195,17 @@ static lxmf_router_receipt_slot_t *reserve_receipt(lxmf_router_t *router) {
         router->receipts[i].used = true;
         router->receipts[i].router = router;
         return &router->receipts[i];
+    }
+    return NULL;
+}
+
+static lxmf_router_resource_slot_t *reserve_resource(lxmf_router_t *router) {
+    release_resources(router, false);
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_RESOURCES; ++i) {
+        if (router->resources[i].used) continue;
+        router->resources[i].used = true;
+        router->resources[i].router = router;
+        return &router->resources[i];
     }
     return NULL;
 }
@@ -220,6 +256,85 @@ static void receipt_changed(rns_packet_receipt_t *receipt,
                      ? LXMF_QUEUE_REASON_NONE
                      : LXMF_QUEUE_REASON_RETRY_BACKOFF,
                  result, slot->attempt);
+}
+
+static lxmf_status_t resource_result(rns_runtime_resource_state_t state,
+                                     rns_status_t status) {
+    if (state == RNS_RUNTIME_RESOURCE_CANCELLED) return LXMF_ERR_CANCELLED;
+    if (status == RNS_ERROR_TIMEOUT) return LXMF_ERR_TIMEOUT;
+    return LXMF_ERR_CRYPTO;
+}
+
+static void resource_changed(rns_runtime_resource_transfer_t *transfer,
+                             rns_runtime_resource_state_t state,
+                             rns_status_t status, size_t sent_parts,
+                             size_t total_parts, void *context) {
+    lxmf_router_resource_slot_t *slot = context;
+    if (slot == NULL || !slot->used || slot->transfer != transfer) return;
+    lxmf_router_t *router = slot->router;
+    bool terminal = state != RNS_RUNTIME_RESOURCE_ADVERTISED &&
+                    state != RNS_RUNTIME_RESOURCE_TRANSFERRING;
+    if (terminal) slot->terminal = true;
+    lxmf_delivery_metadata_t metadata;
+    if (lxmf_store_read_delivery(router->config.store, slot->message_id,
+                                 &metadata) != LXMF_OK)
+        return;
+    if (state == RNS_RUNTIME_RESOURCE_TRANSFERRING) {
+        uint64_t scaled = total_parts != 0U
+                              ? ((uint64_t)sent_parts * 900000U) / total_parts
+                              : 0U;
+        metadata.progress = (uint32_t)(100000U + scaled);
+        if (metadata.progress >= LXMF_DELIVERY_PROGRESS_COMPLETE)
+            metadata.progress = LXMF_DELIVERY_PROGRESS_COMPLETE - 1U;
+        metadata.queue_reason = LXMF_QUEUE_REASON_RESOURCE;
+        (void)lxmf_store_update_delivery(router->config.store,
+                                         slot->message_id, &metadata);
+        report_event(router, slot->message_id, LXMF_DELIVERY_METHOD_DIRECT,
+                     LXMF_DELIVERY_SENDING, LXMF_QUEUE_REASON_RESOURCE,
+                     LXMF_OK, slot->attempt);
+        return;
+    }
+    if (state == RNS_RUNTIME_RESOURCE_ADVERTISED) return;
+    if (state == RNS_RUNTIME_RESOURCE_COMPLETE) {
+        metadata.actual_method = LXMF_DELIVERY_METHOD_DIRECT;
+        metadata.queue_reason = LXMF_QUEUE_REASON_NONE;
+        metadata.progress = LXMF_DELIVERY_PROGRESS_COMPLETE;
+        metadata.has_proof_id = true;
+        memcpy(metadata.proof_id,
+               rns_runtime_resource_transfer_hash(transfer),
+               sizeof metadata.proof_id);
+        (void)lxmf_store_update_delivery(router->config.store,
+                                         slot->message_id, &metadata);
+        /* Pinned LXMF maps a Resource COMPLETE callback (which follows its
+         * completion proof) to DELIVERED. Persist SENT first so it never
+         * denotes a merely advertised or partially transferred resource. */
+        (void)lxmf_store_update_status(router->config.store, slot->message_id,
+                                       LXMF_DELIVERY_SENT);
+        report(router, slot->message_id, LXMF_DELIVERY_SENT, LXMF_OK);
+        report_event(router, slot->message_id, LXMF_DELIVERY_METHOD_DIRECT,
+                     LXMF_DELIVERY_SENT, LXMF_QUEUE_REASON_NONE, LXMF_OK,
+                     slot->attempt);
+        (void)lxmf_store_update_status(router->config.store, slot->message_id,
+                                       LXMF_DELIVERY_DELIVERED);
+        report(router, slot->message_id, LXMF_DELIVERY_DELIVERED, LXMF_OK);
+        report_event(router, slot->message_id, LXMF_DELIVERY_METHOD_DIRECT,
+                     LXMF_DELIVERY_DELIVERED, LXMF_QUEUE_REASON_NONE, LXMF_OK,
+                     slot->attempt);
+        if (slot->link != NULL)
+            (void)rns_runtime_link_identify(slot->link,
+                                            router->config.identity);
+    } else {
+        lxmf_status_t result = resource_result(state, status);
+        metadata.queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
+        (void)lxmf_store_update_delivery(router->config.store,
+                                         slot->message_id, &metadata);
+        (void)lxmf_store_update_status(router->config.store, slot->message_id,
+                                       LXMF_DELIVERY_FAILED);
+        report(router, slot->message_id, LXMF_DELIVERY_FAILED, result);
+        report_event(router, slot->message_id, LXMF_DELIVERY_METHOD_DIRECT,
+                     LXMF_DELIVERY_FAILED,
+                     LXMF_QUEUE_REASON_RETRY_BACKOFF, result, slot->attempt);
+    }
 }
 
 static lxmf_status_t send_with_receipt(
@@ -301,6 +416,35 @@ static void direct_link_packet_received(rns_runtime_link_t *link,
                                  LXMF_DELIVERY_METHOD_DIRECT);
 }
 
+static bool direct_resource_accept(
+    rns_runtime_link_t *link,
+    const rns_resource_advertisement_t *advertisement, void *context) {
+    lxmf_router_t *router = context;
+    size_t maximum;
+    (void)link;
+    if (router == NULL || advertisement == NULL) return false;
+    maximum = router->config.max_incoming_resource_size != 0U
+                  ? router->config.max_incoming_resource_size
+                  : LXMF_STORE_MAX_PACKED;
+    return advertisement->data_size > 0U &&
+           advertisement->data_size <= maximum &&
+           advertisement->data_size <= LXMF_STORE_MAX_PACKED;
+}
+
+static void direct_resource_received(
+    rns_runtime_link_t *link, const uint8_t resource_hash[32],
+    rns_status_t status, const uint8_t *data, size_t data_length,
+    void *context) {
+    lxmf_router_t *router = context;
+    (void)link;
+    (void)resource_hash;
+    if (router == NULL || status != RNS_OK || data == NULL ||
+        data_length == 0U)
+        return;
+    (void)receive_representation(router, data, data_length,
+                                 LXMF_DELIVERY_METHOD_DIRECT);
+}
+
 static void direct_link_accepted(rns_runtime_destination_t *destination,
                                  rns_runtime_link_t *link, void *context) {
     lxmf_router_t *router = context;
@@ -360,6 +504,12 @@ static lxmf_status_t ensure_direct_link(
         .state_callback = direct_link_state_changed,
         .packet_callback = direct_link_packet_received,
         .identified_callback = direct_link_identified,
+        .resource_accept_callback = direct_resource_accept,
+        .resource_receive_callback = direct_resource_received,
+        .max_incoming_resource_size =
+            router->config.max_incoming_resource_size != 0U
+                ? router->config.max_incoming_resource_size
+                : LXMF_STORE_MAX_PACKED,
         .callback_context = router};
     rns_status_t status = rns_runtime_link_open(
         router->config.runtime, destination_hash, destination, &options,
@@ -379,7 +529,8 @@ static lxmf_status_t send_direct(
     lxmf_router_t *router, const lxmf_store_message_t *stored,
     const uint8_t id[LXMF_MESSAGE_ID_LENGTH], const rns_identity *destination,
     uint32_t attempt, lxmf_queue_reason_t *queue_reason,
-    uint8_t proof_id[LXMF_MESSAGE_ID_LENGTH]) {
+    uint8_t proof_id[LXMF_MESSAGE_ID_LENGTH], bool *resource_started) {
+    *resource_started = false;
     rns_runtime_link_t *link = NULL;
     lxmf_status_t status = ensure_direct_link(
         router, stored->destination, destination, &link);
@@ -439,6 +590,39 @@ static lxmf_status_t send_direct(
         .callback_context = receipt_slot};
     rns_status_t sent = rns_runtime_link_send_with_receipt(
         link, 0U, packed, packed_length, &options, &receipt_slot->receipt);
+    if (sent == RNS_ERROR_OVERFLOW) {
+        memset(receipt_slot, 0, sizeof *receipt_slot);
+        lxmf_router_resource_slot_t *resource_slot = reserve_resource(router);
+        if (resource_slot == NULL) {
+            *queue_reason = LXMF_QUEUE_REASON_RESOURCE;
+            return LXMF_ERR_PENDING;
+        }
+        memcpy(resource_slot->message_id, id, LXMF_MESSAGE_ID_LENGTH);
+        resource_slot->link = link;
+        resource_slot->attempt = attempt;
+        rns_runtime_resource_options_t resource_options = {
+            .timeout_seconds = router->config.resource_timeout_seconds,
+            .auto_compress = true,
+            .callback = resource_changed,
+            .callback_context = resource_slot};
+        sent = rns_runtime_link_send_resource(
+            link, packed, packed_length, &resource_options,
+            &resource_slot->transfer);
+        if (sent != RNS_OK) {
+            memset(resource_slot, 0, sizeof *resource_slot);
+            *queue_reason = sent == RNS_ERROR_OVERFLOW
+                                ? LXMF_QUEUE_REASON_RESOURCE
+                                : LXMF_QUEUE_REASON_LINK;
+            return sent == RNS_ERROR_OVERFLOW ? LXMF_ERR_PENDING
+                                              : LXMF_ERR_CRYPTO;
+        }
+        memcpy(proof_id,
+               rns_runtime_resource_transfer_hash(resource_slot->transfer),
+               LXMF_MESSAGE_ID_LENGTH);
+        *queue_reason = LXMF_QUEUE_REASON_RESOURCE;
+        *resource_started = true;
+        return LXMF_OK;
+    }
     if (sent != RNS_OK) {
         memset(receipt_slot, 0, sizeof *receipt_slot);
         *queue_reason = sent == RNS_ERROR_OVERFLOW
@@ -524,6 +708,7 @@ lxmf_status_t lxmf_router_send_message(
     size_t packet_length = 0;
     uint8_t proof_id[LXMF_MESSAGE_ID_LENGTH] = {0};
     bool has_proof_id = false;
+    bool resource_started = false;
     lxmf_queue_reason_t pending_reason = LXMF_QUEUE_REASON_NONE;
     lxmf_status_t status;
     if (method == LXMF_DELIVERY_METHOD_DIRECT) {
@@ -531,7 +716,8 @@ lxmf_status_t lxmf_router_send_message(
             status = LXMF_ERR_ARGUMENT;
         else
             status = send_direct(router, &stored, id, destination, attempt,
-                                 &pending_reason, proof_id);
+                                 &pending_reason, proof_id,
+                                 &resource_started);
         if (status == LXMF_OK) has_proof_id = true;
     } else {
         status = lxmf_opportunistic_packet_pack(
@@ -565,8 +751,12 @@ lxmf_status_t lxmf_router_send_message(
     }
     if (status == LXMF_OK) {
         stored.delivery.attempts = attempt;
-        stored.delivery.queue_reason = LXMF_QUEUE_REASON_NONE;
-        stored.delivery.progress = LXMF_DELIVERY_PROGRESS_COMPLETE;
+        stored.delivery.queue_reason = resource_started
+                                           ? LXMF_QUEUE_REASON_RESOURCE
+                                           : LXMF_QUEUE_REASON_NONE;
+        stored.delivery.progress = resource_started
+                                       ? 100000U
+                                       : LXMF_DELIVERY_PROGRESS_COMPLETE;
         stored.delivery.has_proof_id = has_proof_id;
         if (has_proof_id)
             memcpy(stored.delivery.proof_id, proof_id,
@@ -575,14 +765,21 @@ lxmf_status_t lxmf_router_send_message(
                                        &stored.delivery) != LXMF_OK)
             status = LXMF_ERR_CRYPTO;
     }
-    if (status == LXMF_OK && lxmf_store_update_status(router->config.store, id,
-                                                       LXMF_DELIVERY_SENT) != LXMF_OK)
+    if (status == LXMF_OK && !resource_started &&
+        lxmf_store_update_status(router->config.store, id,
+                                 LXMF_DELIVERY_SENT) != LXMF_OK)
         status = LXMF_ERR_CRYPTO;
     if (status == LXMF_OK) {
-        report(router, id, LXMF_DELIVERY_SENT, LXMF_OK);
-        report_event(router, id, method,
-                     LXMF_DELIVERY_SENT, LXMF_QUEUE_REASON_NONE, LXMF_OK,
-                     stored.delivery.attempts);
+        if (!resource_started) {
+            report(router, id, LXMF_DELIVERY_SENT, LXMF_OK);
+            report_event(router, id, method,
+                         LXMF_DELIVERY_SENT, LXMF_QUEUE_REASON_NONE, LXMF_OK,
+                         stored.delivery.attempts);
+        } else {
+            report_event(router, id, method, LXMF_DELIVERY_SENDING,
+                         LXMF_QUEUE_REASON_RESOURCE, LXMF_OK,
+                         stored.delivery.attempts);
+        }
     } else {
         stored.delivery.attempts = attempt;
         stored.delivery.queue_reason = LXMF_QUEUE_REASON_RETRY_BACKOFF;
@@ -597,6 +794,29 @@ lxmf_status_t lxmf_router_send_message(
                      stored.delivery.attempts);
     }
     return status;
+}
+
+lxmf_status_t lxmf_router_cancel_message(
+    lxmf_router_t *router,
+    const uint8_t id[LXMF_MESSAGE_ID_LENGTH]) {
+    if (router == NULL || id == NULL) return LXMF_ERR_ARGUMENT;
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_RESOURCES; ++i) {
+        lxmf_router_resource_slot_t *slot = &router->resources[i];
+        if (!slot->used || slot->terminal ||
+            memcmp(slot->message_id, id, LXMF_MESSAGE_ID_LENGTH) != 0)
+            continue;
+        rns_runtime_resource_transfer_cancel(slot->transfer);
+        return LXMF_OK;
+    }
+    for (size_t i = 0U; i < LXMF_ROUTER_MAX_RECEIPTS; ++i) {
+        lxmf_router_receipt_slot_t *slot = &router->receipts[i];
+        if (!slot->used || slot->terminal ||
+            memcmp(slot->message_id, id, LXMF_MESSAGE_ID_LENGTH) != 0)
+            continue;
+        rns_packet_receipt_cancel(slot->receipt);
+        return LXMF_OK;
+    }
+    return LXMF_ERR_FORMAT;
 }
 
 typedef struct {
@@ -620,6 +840,7 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
         return LXMF_ERR_ARGUMENT;
     memset(result, 0, sizeof *result);
     release_receipts(router, false);
+    release_resources(router, false);
     for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i) {
         lxmf_router_link_slot_t *slot = &router->links[i];
         if (!slot->used || slot->link == NULL ||
