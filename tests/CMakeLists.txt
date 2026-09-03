@@ -120,3 +120,21 @@ if(TARGET nomad-chat)
             -DNOMAD_CHAT=$<TARGET_FILE:nomad-chat>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/test_tui_cli.cmake)
 endif()
+
+if(TARGET nomad-chat)
+    add_executable(test_tui_dispatch
+        unit/test_tui_dispatch.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
+    target_include_directories(test_tui_dispatch PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps ${CURSES_INCLUDE_DIRS})
+    target_link_libraries(test_tui_dispatch PRIVATE
+        reticulum::reticulum ${CURSES_LIBRARIES})
+    target_compile_features(test_tui_dispatch PRIVATE c_std_17)
+    reticulum_set_project_warnings(test_tui_dispatch)
+    add_test(NAME test_tui_dispatch COMMAND test_tui_dispatch)
+endif()

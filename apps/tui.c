@@ -11,6 +11,43 @@
 #define TUI_POLL_INTERVAL_MS 50
 #define TUI_SCROLL_STEP 5
 
+/* A selected index can survive switching trust tabs or filtering to an empty
+ * list. It must not enable actions for a conversation that is not displayed. */
+static bool conversation_selected(tui_state_t *state) {
+    if (state->screen != TUI_SCREEN_CONVERSATIONS ||
+        tui_state_selected_contact(state) == NULL) return false;
+    tui_state_refresh(state);
+    for (size_t i = 0u; i < state->visible_count; ++i)
+        if (state->visible[i] == state->selected) return true;
+    return false;
+}
+
+static bool field_visible(tui_state_t *state) {
+    switch (state->field) {
+        case TUI_FIELD_COMPOSE: return conversation_selected(state);
+        case TUI_FIELD_SEARCH: case TUI_FIELD_ADDRESS:
+            return state->screen == TUI_SCREEN_CONVERSATIONS;
+        case TUI_FIELD_SETTING: return state->screen == TUI_SCREEN_SETTINGS;
+        case TUI_FIELD_NONE: return true;
+    }
+    return false;
+}
+
+static bool overlay_visible(tui_state_t *state) {
+    switch (state->overlay) {
+        case TUI_OVERLAY_HELP:
+            return state->screen == TUI_SCREEN_CONVERSATIONS;
+        case TUI_OVERLAY_PEER: return conversation_selected(state);
+        case TUI_OVERLAY_NODE_ACTIONS: {
+            rns_node_record node;
+            return state->screen == TUI_SCREEN_NETWORK &&
+                   tui_state_selected_node(state, &node);
+        }
+        case TUI_OVERLAY_NONE: return true;
+    }
+    return false;
+}
+
 static tui_editor_t *active_editor(tui_state_t *state) {
     switch (state->field) {
         case TUI_FIELD_COMPOSE: return &state->composer;
@@ -121,7 +158,8 @@ static void select_previous(tui_state_t *state) {
         tui_state_setting_move(state, -1);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
         tui_state_node_move(state, -1);
-    } else tui_state_select_offset(state, -1);
+    } else if (state->screen == TUI_SCREEN_CONVERSATIONS)
+        tui_state_select_offset(state, -1);
 }
 
 static void select_next(tui_state_t *state) {
@@ -132,7 +170,8 @@ static void select_next(tui_state_t *state) {
         tui_state_setting_move(state, 1);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
         tui_state_node_move(state, 1);
-    } else tui_state_select_offset(state, 1);
+    } else if (state->screen == TUI_SCREEN_CONVERSATIONS)
+        tui_state_select_offset(state, 1);
 }
 
 static void activate(tui_state_t *state) {
@@ -140,13 +179,15 @@ static void activate(tui_state_t *state) {
         tui_state_browse_selected(state);
     } else if (state->screen == TUI_SCREEN_SETTINGS) {
         tui_state_setting_activate(state);
-    } else if (state->screen == TUI_SCREEN_NETWORK && tui_state_node_count(state) > 0u) {
-        if (!state->has_node_selection) tui_state_node_move(state, 0);
-        state->overlay = TUI_OVERLAY_NODE_ACTIONS;
-    } else if (state->contact_count > 0u) {
-        state->field = TUI_FIELD_COMPOSE;
-    } else {
-        tui_state_set_status(state, "No conversation: provide a destination address");
+    } else if (state->screen == TUI_SCREEN_NETWORK) {
+        if (tui_state_node_count(state) > 0u) {
+            rns_node_record selected;
+            if (!tui_state_selected_node(state, &selected)) tui_state_node_move(state, 0);
+            state->overlay = TUI_OVERLAY_NODE_ACTIONS;
+        } else tui_state_set_status(state, "No known nodes: wait for a verified announce");
+    } else if (state->screen == TUI_SCREEN_CONVERSATIONS) {
+        if (conversation_selected(state)) state->field = TUI_FIELD_COMPOSE;
+        else tui_state_set_status(state, "No visible conversation: provide a destination address");
     }
 }
 
@@ -165,10 +206,27 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'q': case 'Q':
             return false;
         case 27:
-            if (state->screen == TUI_SCREEN_BROWSER && tui_state_browse_cancel(state))
-                return true;
-            return false;
-        case '?': state->overlay = TUI_OVERLAY_HELP; break;
+            if (state->screen == TUI_SCREEN_BROWSER && state->browser != NULL) {
+                rns_browser_state_t current = rns_browser_state(state->browser);
+                if ((current == RNS_BROWSER_PATH_DISCOVERY ||
+                     current == RNS_BROWSER_LINK_ESTABLISHMENT ||
+                     current == RNS_BROWSER_REQUEST_TRANSMISSION) &&
+                    tui_state_browse_cancel(state)) return true;
+            }
+            if (state->screen == TUI_SCREEN_CONVERSATIONS) return false;
+            state->screen = TUI_SCREEN_CONVERSATIONS;
+            break;
+        case '?':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+                state->overlay = TUI_OVERLAY_HELP;
+            else if (state->screen == TUI_SCREEN_NETWORK)
+                tui_state_set_status(state, "Network: j/k select, Enter node actions, R request path, Esc Chats");
+            else if (state->screen == TUI_SCREEN_BROWSER)
+                tui_state_set_status(state, "Browser: j/k links, Enter open, PgUp/PgDn scroll, R reload, Esc cancel/back");
+            else if (state->screen == TUI_SCREEN_SETTINGS)
+                tui_state_set_status(state, "Settings: j/k select, Enter edit/apply, Esc cancel/back");
+            else tui_state_set_status(state, "Screen unavailable: C or Esc returns to Conversations");
+            break;
         case '1':
             if (state->screen == TUI_SCREEN_CONVERSATIONS)
                 tui_state_set_tab(state, TUI_TRUST_TRUSTED);
@@ -183,8 +241,14 @@ static bool handle_command_key(tui_state_t *state, int key) {
             break;
         case KEY_UP: case 'k': select_previous(state); break;
         case KEY_DOWN: case 'j': case '\t': select_next(state); break;
-        case KEY_PPAGE: tui_state_scroll_by(state, TUI_SCROLL_STEP); break;
-        case KEY_NPAGE: tui_state_scroll_by(state, -TUI_SCROLL_STEP); break;
+        case KEY_PPAGE:
+            if (state->screen == TUI_SCREEN_BROWSER || conversation_selected(state))
+                tui_state_scroll_by(state, TUI_SCROLL_STEP);
+            break;
+        case KEY_NPAGE:
+            if (state->screen == TUI_SCREEN_BROWSER || conversation_selected(state))
+                tui_state_scroll_by(state, -TUI_SCROLL_STEP);
+            break;
         case '/':
             if (state->screen == TUI_SCREEN_CONVERSATIONS) {
                 state->field = TUI_FIELD_SEARCH;
@@ -198,25 +262,25 @@ static bool handle_command_key(tui_state_t *state, int key) {
             }
             break;
         case 'i':
-            if (tui_state_selected_contact(state) != NULL)
+            if (conversation_selected(state))
                 state->overlay = TUI_OVERLAY_PEER;
             break;
         case 'p':
-            if (state->screen == TUI_SCREEN_CONVERSATIONS) tui_state_toggle_pin(state);
+            if (conversation_selected(state)) tui_state_toggle_pin(state);
             break;
         case 'x':
-            if (state->screen == TUI_SCREEN_CONVERSATIONS) tui_state_toggle_block(state);
+            if (conversation_selected(state)) tui_state_toggle_block(state);
             break;
         case 't':
-            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+            if (conversation_selected(state))
                 tui_state_set_trust(state, TUI_TRUST_TRUSTED);
             break;
         case 'u':
-            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+            if (conversation_selected(state))
                 tui_state_set_trust(state, TUI_TRUST_UNTRUSTED);
             break;
         case 'n':
-            if (state->screen == TUI_SCREEN_CONVERSATIONS) tui_state_toggle_note(state);
+            if (conversation_selected(state)) tui_state_toggle_note(state);
             break;
         case 'y':
             tui_state_set_status(state,
@@ -240,12 +304,26 @@ static bool handle_command_key(tui_state_t *state, int key) {
 }
 
 bool tui_dispatch_key(tui_state_t *state, int key) {
+    if (state == NULL) return false;
+    if (key == ERR || key == KEY_RESIZE) return true;
+    /* Asynchronous screen/state changes can leave stale editors or modals.
+     * Discard their focus, never their text, and consume this key so a hidden
+     * Enter cannot become a send or activate an unrelated screen action. */
+    if (!overlay_visible(state)) {
+        state->overlay = TUI_OVERLAY_NONE;
+        if (!field_visible(state)) state->field = TUI_FIELD_NONE;
+        return true;
+    }
     if (state->overlay == TUI_OVERLAY_NODE_ACTIONS) {
         handle_node_actions_key(state, key);
         return true;
     }
     if (state->overlay != TUI_OVERLAY_NONE) {
         if (key == 27 || key == '?' || key == 'i') state->overlay = TUI_OVERLAY_NONE;
+        return true;
+    }
+    if (!field_visible(state)) {
+        state->field = TUI_FIELD_NONE;
         return true;
     }
     if (state->field != TUI_FIELD_NONE) {
