@@ -118,6 +118,7 @@ typedef struct {
     lxmf_router_t router;
     bool router_ready;
     uint64_t router_polled_ms;
+    uint64_t last_announce_ms;
     rns_identity resolved_identity;
     bool send_attempted;
     bool send_ok;

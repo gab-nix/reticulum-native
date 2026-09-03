@@ -1,7 +1,49 @@
 #include "reticulum/runtime.h"
 
+#include "reticulum/packet.h"
+
 #include <assert.h>
 #include <string.h>
+
+/*
+ * Routing and announce argument handling. End-to-end delivery is covered by
+ * the two-instance loopback harness, which needs live sockets.
+ */
+static void test_routed_and_announce(rns_runtime_t *runtime) {
+    static const char *const aspects[] = {"delivery"};
+    uint8_t unreachable[16] = {0xabU};
+    uint8_t packet[64];
+    size_t packet_length = 0U;
+    rns_packet outer = {0};
+    rns_identity identity;
+    uint8_t payload[8] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
+
+    memcpy(outer.destination_hash, unreachable, sizeof outer.destination_hash);
+    outer.data = payload;
+    outer.data_length = sizeof payload;
+    assert(rns_packet_encode(&outer, packet, sizeof packet, &packet_length));
+
+    assert(rns_runtime_send_routed(NULL, packet, packet_length) ==
+           RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_runtime_send_routed(runtime, NULL, packet_length) ==
+           RNS_ERROR_INVALID_ARGUMENT);
+    /* Undecodable input is rejected before any path lookup. */
+    assert(rns_runtime_send_routed(runtime, packet, 1U) == RNS_ERROR_INVALID_ARGUMENT);
+    /* A destination with no learned path is reported, not silently dropped. */
+    assert(rns_runtime_send_routed(runtime, packet, packet_length) ==
+           RNS_ERROR_NOT_FOUND);
+
+    assert(rns_identity_generate(&identity));
+    assert(rns_runtime_announce(NULL, &identity, "lxmf", aspects, 1U, NULL, 0U) ==
+           RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_runtime_announce(runtime, NULL, "lxmf", aspects, 1U, NULL, 0U) ==
+           RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_runtime_announce(runtime, &identity, NULL, aspects, 1U, NULL, 0U) ==
+           RNS_ERROR_INVALID_ARGUMENT);
+    /* No interface is up in this fixture, so announcing cannot succeed. */
+    assert(rns_runtime_announce(runtime, &identity, "lxmf", aspects, 1U, NULL, 0U) !=
+           RNS_OK);
+}
 
 int main(void) {
     rns_config_t config;
@@ -58,6 +100,7 @@ int main(void) {
     /* A disabled interface has no startup error, but it cannot send. */
     assert(rns_runtime_send(runtime, 0U, destination, sizeof(destination)) ==
            RNS_ERROR_INVALID_STATE);
+    test_routed_and_announce(runtime);
     rns_runtime_destroy(runtime);
 
     config.panic_on_interface_error = true;

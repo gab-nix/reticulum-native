@@ -1,5 +1,6 @@
 #include "reticulum/runtime.h"
 
+#include "reticulum/announce.h"
 #include "reticulum/destination.h"
 #include "reticulum/hal.h"
 #include "reticulum/packet.h"
@@ -606,6 +607,74 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
 rns_status_t rns_runtime_send(rns_runtime_t *runtime, size_t index,
                               const uint8_t *packet, size_t length) {
     return send_internal(runtime, index, packet, length);
+}
+
+static size_t interface_for_path(const rns_runtime_t *runtime, uint64_t interface_id) {
+    for (size_t i = 0U; i < runtime->interface_count; i++)
+        if (runtime->interfaces[i].info.id == interface_id) return i;
+    return runtime->interface_count;
+}
+
+rns_status_t rns_runtime_send_routed(rns_runtime_t *runtime, const uint8_t *packet,
+                                     size_t packet_length) {
+    rns_packet decoded;
+    if (runtime == NULL || packet == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (!rns_packet_decode(&decoded, packet, packet_length))
+        return RNS_ERROR_INVALID_ARGUMENT;
+    const rns_path_entry *path = rns_transport_lookup(&runtime->node.transport,
+                                                      decoded.destination_hash);
+    if (path == NULL) return RNS_ERROR_NOT_FOUND;
+    size_t index = interface_for_path(runtime, path->interface_id);
+    if (index == runtime->interface_count) return RNS_ERROR_INVALID_STATE;
+    if (path->hops <= 1U) return send_internal(runtime, index, packet, packet_length);
+    uint8_t raw[RNS_MTU];
+    size_t raw_length = 0U;
+    rns_packet routed = decoded;
+    routed.header_type = RNS_PACKET_HEADER_2;
+    routed.transport_type = 1U;
+    memcpy(routed.transport_id, path->next_hop, sizeof routed.transport_id);
+    if (!rns_packet_encode(&routed, raw, sizeof raw, &raw_length))
+        return RNS_ERROR_OVERFLOW;
+    return send_internal(runtime, index, raw, raw_length);
+}
+
+rns_status_t rns_runtime_announce(rns_runtime_t *runtime, const rns_identity *identity,
+                                  const char *app_name, const char *const *aspects,
+                                  size_t aspect_count, const uint8_t *app_data,
+                                  size_t app_data_length) {
+    uint8_t destination[16], name_hash[10], prefix[5];
+    uint8_t body[RNS_MTU], raw[RNS_MTU];
+    size_t body_length = 0U, raw_length = 0U;
+    uint8_t context_flag = 0U;
+    uint64_t wallclock_ms = 0U;
+    if (runtime == NULL || identity == NULL || app_name == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    if (!rns_destination_hash(identity, app_name, aspects, aspect_count, destination) ||
+        !rns_destination_name_hash(app_name, aspects, aspect_count, name_hash))
+        return RNS_ERROR_INVALID_ARGUMENT;
+    if (rns_hal_random_bytes(prefix, sizeof prefix) != RNS_OK ||
+        rns_hal_wallclock_ms(&wallclock_ms) != RNS_OK) return RNS_ERROR_INVALID_STATE;
+    if (!rns_announce_build(identity, destination, name_hash, prefix,
+                            wallclock_ms / 1000U, NULL, app_data, app_data_length,
+                            body, sizeof body, &body_length, &context_flag))
+        return RNS_ERROR_INVALID_STATE;
+    rns_packet packet = {0};
+    packet.context_flag = context_flag;
+    packet.destination_type = 0U;
+    packet.packet_type = 1U;
+    memcpy(packet.destination_hash, destination, sizeof packet.destination_hash);
+    packet.data = body;
+    packet.data_length = body_length;
+    if (!rns_packet_encode(&packet, raw, sizeof raw, &raw_length))
+        return RNS_ERROR_OVERFLOW;
+    rns_status_t result = RNS_ERROR_INVALID_STATE;
+    for (size_t i = 0U; i < runtime->interface_count; i++) {
+        if (runtime->interfaces[i].info.state != RNS_RUNTIME_INTERFACE_UP) continue;
+        rns_status_t status = send_internal(runtime, i, raw, raw_length);
+        if (status == RNS_OK) result = RNS_OK;
+        else if (result != RNS_OK) result = status;
+    }
+    return result;
 }
 
 size_t rns_runtime_interface_count(const rns_runtime_t *runtime) {

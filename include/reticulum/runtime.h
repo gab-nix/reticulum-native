@@ -122,6 +122,26 @@ rns_status_t rns_runtime_send(rns_runtime_t *runtime,
                               size_t interface_index,
                               const uint8_t *packet,
                               size_t packet_length);
+/*
+ * Sends a packet towards its own destination, using the learned path. A
+ * destination more than one hop away is re-addressed to its next hop with a
+ * Header 2 transport header, which is what makes transport nodes forward it.
+ * Returns RNS_ERROR_NOT_FOUND when no path is known.
+ */
+rns_status_t rns_runtime_send_routed(rns_runtime_t *runtime,
+                                     const uint8_t *packet,
+                                     size_t packet_length);
+/*
+ * Broadcasts a signed announce for the destination derived from identity and
+ * the given aspects, so peers can discover and route back to it.
+ */
+rns_status_t rns_runtime_announce(rns_runtime_t *runtime,
+                                  const rns_identity *identity,
+                                  const char *app_name,
+                                  const char *const *aspects,
+                                  size_t aspect_count,
+                                  const uint8_t *app_data,
+                                  size_t app_data_length);
 
 size_t rns_runtime_interface_count(const rns_runtime_t *runtime);
 rns_status_t rns_runtime_interface_info(const rns_runtime_t *runtime,

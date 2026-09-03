@@ -14,6 +14,7 @@
 #include <time.h>
 
 #define TUI_ROUTER_INTERVAL_MS 1000u
+#define TUI_ANNOUNCE_INTERVAL_MS (5u * 60u * 1000u)
 #define TUI_ROUTER_BATCH 2u
 #define TUI_RUNTIME_BATCH 32u
 #define TUI_NODE_LIFETIME 3600.0
@@ -230,9 +231,13 @@ static lxmf_status_t send_via_runtime(void *context, const uint8_t *packet,
                                       size_t length) {
     tui_state_t *state = context;
     if (state->runtime == NULL) return LXMF_ERR_ARGUMENT;
-    for (size_t i = 0u; i < rns_runtime_interface_count(state->runtime); ++i)
-        if (rns_runtime_send(state->runtime, i, packet, length) == RNS_OK) return LXMF_OK;
-    return LXMF_ERR_CRYPTO;
+    /*
+     * Route by the learned path instead of shouting on the first interface:
+     * a peer more than one hop away needs a transport header or no node will
+     * forward the packet.
+     */
+    return rns_runtime_send_routed(state->runtime, packet, length) == RNS_OK
+               ? LXMF_OK : LXMF_ERR_CRYPTO;
 }
 
 static void on_message(void *context, const lxmf_store_message_t *message) {
@@ -473,6 +478,15 @@ void tui_state_poll(tui_state_t *state) {
     poll_browser(state);
     if (rns_hal_monotonic_ms(&now) == RNS_OK) {
         (void)rns_node_registry_expire(&state->nodes, (double)now / 1000.0);
+        /* Announce our inbox so peers can discover us and route replies back. */
+        if (state->router_ready &&
+            (state->last_announce_ms == 0u ||
+             now - state->last_announce_ms >= TUI_ANNOUNCE_INTERVAL_MS)) {
+            static const char *const delivery[] = {"delivery"};
+            if (rns_runtime_announce(state->runtime, &state->identity, "lxmf",
+                                     delivery, 1u, NULL, 0u) == RNS_OK)
+                state->last_announce_ms = now;
+        }
         if (state->router_ready &&
             now - state->router_polled_ms >= TUI_ROUTER_INTERVAL_MS) {
             lxmf_router_poll_result_t delivery = {0};
