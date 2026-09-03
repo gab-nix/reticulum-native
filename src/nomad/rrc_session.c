@@ -291,8 +291,11 @@ static void remove_room(rns_rrc_session_t *session, rrc_room_record_t *room) {
         memmove(&session->rooms[index], &session->rooms[index + 1u],
                 (session->room_count - index - 1u) * sizeof session->rooms[0]);
     session->room_count--;
-    memset(&session->rooms[session->room_count], 0,
-           sizeof session->rooms[0]);
+    /* memmove leaves a duplicate of the last record, including any private
+     * room key, in the now-unused trailing slot. Wipe the entire slot with the
+     * non-optimisable HAL primitive. */
+    rns_hal_secure_zero(&session->rooms[session->room_count],
+                        sizeof session->rooms[0]);
 }
 
 static void clear_transient_room_state(rns_rrc_session_t *session) {
