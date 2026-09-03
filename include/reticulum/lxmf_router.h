@@ -233,6 +233,8 @@ struct lxmf_router {
      * suppression remains keyed by the LXMF message ID in the message store. */
     uint8_t paper_transient_ids[LXMF_ROUTER_MAX_PAPER_TRANSIENTS]
                                [LXMF_MESSAGE_ID_LENGTH];
+    uint8_t paper_message_ids[LXMF_ROUTER_MAX_PAPER_TRANSIENTS]
+                             [LXMF_MESSAGE_ID_LENGTH];
     size_t paper_transient_count;
     size_t next_paper_transient;
 };
@@ -279,6 +281,7 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
 
 typedef struct {
     uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH];
+    uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
     uint8_t ratchet_id[RNS_RATCHET_ID_SIZE];
     bool used_ratchet;
     bool duplicate;

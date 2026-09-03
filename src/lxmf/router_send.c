@@ -1573,17 +1573,22 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
 
 static bool paper_transient_seen(
     const lxmf_router_t *router,
-    const uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH]) {
+    const uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH],
+    uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]) {
     for (size_t i = 0u; i < router->paper_transient_count; ++i)
         if (memcmp(router->paper_transient_ids[i], transient_id,
-                   LXMF_MESSAGE_ID_LENGTH) == 0)
+                   LXMF_MESSAGE_ID_LENGTH) == 0) {
+            memcpy(message_id, router->paper_message_ids[i],
+                   LXMF_MESSAGE_ID_LENGTH);
             return true;
+        }
     return false;
 }
 
 static void remember_paper_transient(
     lxmf_router_t *router,
-    const uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH]) {
+    const uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH],
+    const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]) {
     size_t slot;
     if (router->paper_transient_count < LXMF_ROUTER_MAX_PAPER_TRANSIENTS) {
         slot = router->paper_transient_count++;
@@ -1594,6 +1599,8 @@ static void remember_paper_transient(
             LXMF_ROUTER_MAX_PAPER_TRANSIENTS;
     }
     memcpy(router->paper_transient_ids[slot], transient_id,
+           LXMF_MESSAGE_ID_LENGTH);
+    memcpy(router->paper_message_ids[slot], message_id,
            LXMF_MESSAGE_ID_LENGTH);
 }
 
@@ -1643,7 +1650,8 @@ lxmf_status_t lxmf_router_receive_paper(
         paper_length > LXMF_PAPER_MAX_SIZE)
         return LXMF_ERR_BOUNDS;
     lxmf_sha256(paper, paper_length, result->transient_id);
-    if (paper_transient_seen(router, result->transient_id)) {
+    if (paper_transient_seen(router, result->transient_id,
+                             result->message_id)) {
         result->duplicate = true;
         return LXMF_OK;
     }
@@ -1675,6 +1683,7 @@ lxmf_status_t lxmf_router_receive_paper(
         rns_hal_secure_zero(plaintext, sizeof plaintext);
         return status;
     }
+    memcpy(result->message_id, parsed.message_id, sizeof result->message_id);
     bool inserted = false;
     /* Pinned LXMF feeds paper messages through propagated receive and disables
      * only stamp enforcement. Every other inbound policy remains shared. */
@@ -1684,7 +1693,8 @@ lxmf_status_t lxmf_router_receive_paper(
     rns_hal_secure_zero(plaintext, sizeof plaintext);
     if (status != LXMF_OK) return status;
     result->duplicate = !inserted;
-    remember_paper_transient(router, result->transient_id);
+    remember_paper_transient(router, result->transient_id,
+                             result->message_id);
     return LXMF_OK;
 }
 

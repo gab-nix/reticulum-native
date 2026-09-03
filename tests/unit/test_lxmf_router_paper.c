@@ -146,6 +146,8 @@ int main(void) {
     assert(lxmf_router_receive_uri(&router, uri, uri_length, NULL, 0u, false,
                                    &result) == LXMF_OK);
     assert(!result.duplicate && !result.used_ratchet && fixture.callbacks == 1u &&
+           memcmp(result.message_id, fixture.last.message_id,
+                  LXMF_MESSAGE_ID_LENGTH) == 0 &&
            fixture.last.signature_state == LXMF_SIGNATURE_VERIFIED &&
            fixture.last.delivery.actual_method ==
                LXMF_DELIVERY_METHOD_PROPAGATED);
