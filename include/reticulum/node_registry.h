@@ -7,6 +7,7 @@
 
 #define RNS_NODE_REGISTRY_MAX 256u
 #define RNS_NODE_APP_DATA_MAX 317u
+#define RNS_NODE_PERSISTENCE_EXT_MAX 256u
 typedef enum { RNS_NODE_KIND_OTHER = 0, RNS_NODE_KIND_NOMAD, RNS_NODE_KIND_LXMF } rns_node_kind;
 typedef struct {
     uint8_t destination[16], next_hop[16], public_key[64], message_destination[16];
@@ -26,6 +27,10 @@ typedef struct {
     bool lxmf_has_stamp_cost;
     uint8_t lxmf_stamp_cost;
     uint32_t lxmf_features;
+    /* Opaque trailing bytes from a newer portable persistence record. They
+     * are never interpreted and are written back unchanged. */
+    uint8_t persistence_extensions[RNS_NODE_PERSISTENCE_EXT_MAX];
+    size_t persistence_extensions_length;
 } rns_node_record;
 typedef struct { rns_node_record records[RNS_NODE_REGISTRY_MAX]; size_t count; double lifetime; } rns_node_registry;
 void rns_node_registry_init(rns_node_registry *r, double lifetime);

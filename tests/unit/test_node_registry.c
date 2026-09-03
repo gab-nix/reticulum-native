@@ -1,14 +1,16 @@
 #define _POSIX_C_SOURCE 200809L
-#include "reticulum/node_registry.h"
 #include "reticulum/destination.h"
 #include "reticulum/lxmf_router.h"
+#include "reticulum/node_registry.h"
+
 #include <assert.h>
 #include <stdbool.h>
-#include <stdio.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <stdlib.h>
 
 typedef struct {
     uint8_t destination[16],next_hop[16],public_key[64],message_destination[16];
@@ -16,60 +18,293 @@ typedef struct {
     uint64_t announce_timebase;uint8_t hops;uint64_t interface_id;int32_t gravity;
     double seen_at,expires_at;bool reachable,propagation,has_ratchet,has_message_destination;
     rns_node_kind kind;char name[64];
-} legacy_record;
-int main(void){rns_node_registry r;rns_node_registry_init(&r,10);rns_node_record n={0};n.destination[0]=1;n.seen_at=2;assert(rns_node_registry_upsert(&r,&n));assert(rns_node_registry_get(&r,n.destination));char path[]="/tmp/rns-nodes-XXXXXX";int fd=mkstemp(path);assert(fd>=0);close(fd);assert(rns_node_registry_save(&r,path));rns_node_registry loaded;assert(rns_node_registry_load(&loaded,path,10));assert(loaded.count==1&&loaded.records[0].destination[0]==1);unlink(path);
-    char legacy_path[]="/tmp/rns-nodes-v1-XXXXXX";fd=mkstemp(legacy_path);assert(fd>=0);
-    FILE *legacy_file=fdopen(fd,"wb");assert(legacy_file);legacy_record legacy={0};
-    legacy.destination[0]=2;legacy.has_ratchet=true;memcpy(legacy.name,"Legacy",7);
-    uint32_t legacy_count=1;assert(fwrite("RNSN1\0\0\0",1,8,legacy_file)==8);
-    assert(fwrite(&legacy_count,sizeof legacy_count,1,legacy_file)==1);
-    assert(fwrite(&legacy,sizeof legacy,1,legacy_file)==1&&fclose(legacy_file)==0);
-    assert(rns_node_registry_load(&loaded,legacy_path,10));unlink(legacy_path);
-    assert(loaded.count==1&&loaded.records[0].destination[0]==2&&loaded.records[0].has_ratchet);
-    assert(loaded.records[0].ratchet[0]==0&&strcmp(loaded.records[0].name,"Legacy")==0);
-    assert(rns_node_registry_expire(&r,12)==1);uint8_t private_key[64];for(size_t i=0;i<sizeof private_key;i++)private_key[i]=(uint8_t)(i+1);rns_node_result a={0};assert(rns_identity_from_private(&a.announce_identity,private_key));const char *node_aspects[]={"node"};assert(rns_destination_hash(&a.announce_identity,"nomadnetwork",node_aspects,1,a.destination_hash));a.has_verified_announce=1;a.announce_timebase=9;a.received_at=20;a.announce_app_data=(const uint8_t*)"Rei Node";a.announce_app_data_length=8;assert(rns_node_registry_consider_announce(&r,&a));const rns_node_record *record=rns_node_registry_get(&r,a.destination_hash);assert(record&&record->kind==RNS_NODE_KIND_NOMAD&&record->has_message_destination);assert(strcmp(record->name,"Rei Node")==0);
-    /* Verified LXMF delivery metadata and the public ratchet are retained. */
-    const char *delivery_aspects[]={"delivery"};
-    assert(rns_destination_hash(&a.announce_identity,"lxmf",delivery_aspects,1,a.destination_hash));
-    lxmf_announce_data_t announce={0};memcpy(announce.display_name,"Rei",3);announce.display_name_len=3;
-    announce.has_stamp_cost=true;announce.stamp_cost=8;announce.features=LXMF_FEATURE_COMPRESSION;
-    uint8_t app_data[64],ratchet[32];size_t app_data_len=0;memset(ratchet,0xa5,sizeof ratchet);
-    assert(lxmf_announce_encode(&announce,app_data,sizeof app_data,&app_data_len)==LXMF_OK);
-    a.announce_timebase=10;a.announce_app_data=app_data;a.announce_app_data_length=app_data_len;
-    a.announce_has_ratchet=1;a.announce_ratchet=ratchet;
-    assert(rns_node_registry_consider_announce(&r,&a));
-    record=rns_node_registry_get(&r,a.destination_hash);
-    assert(record&&record->kind==RNS_NODE_KIND_LXMF&&record->lxmf_app_data_valid);
-    assert(record->has_ratchet&&memcmp(record->ratchet,ratchet,sizeof ratchet)==0);
-    assert(record->lxmf_has_stamp_cost&&record->lxmf_stamp_cost==8);
-    assert((record->lxmf_features&LXMF_FEATURE_COMPRESSION)!=0&&strcmp(record->name,"Rei")==0);
-    assert(record->app_data_length==app_data_len&&memcmp(record->app_data,app_data,app_data_len)==0);
-    char metadata_path[]="/tmp/rns-node-metadata-XXXXXX";
-    fd=mkstemp(metadata_path);assert(fd>=0);close(fd);
-    assert(rns_node_registry_save(&r,metadata_path));
-    assert(rns_node_registry_load(&loaded,metadata_path,10));unlink(metadata_path);
-    record=rns_node_registry_get(&loaded,a.destination_hash);
-    assert(record&&record->has_ratchet&&memcmp(record->ratchet,ratchet,sizeof ratchet)==0);
-    assert(record->lxmf_app_data_valid&&record->lxmf_stamp_cost==8&&strcmp(record->name,"Rei")==0);
-    /* Equal/older timebases cannot overwrite verified metadata. */
-    memset(ratchet,0x11,sizeof ratchet);a.announce_timebase=10;
-    assert(!rns_node_registry_consider_announce(&r,&a));
-    record=rns_node_registry_get(&r,a.destination_hash);
-    assert(record&&record->ratchet[0]==0xa5);
-    const char *propagation_aspects[]={"propagation"};
-    assert(rns_destination_hash(&a.announce_identity,"lxmf",propagation_aspects,1,a.destination_hash));
-    a.announce_timebase=11;a.announce_has_ratchet=0;a.announce_ratchet=NULL;
-    assert(rns_node_registry_consider_announce(&r,&a));
-    record=rns_node_registry_get(&r,a.destination_hash);
-    assert(record&&record->kind==RNS_NODE_KIND_LXMF&&record->propagation);
+} legacy_record_v1;
+
+typedef struct {
+    uint8_t destination[16],next_hop[16],public_key[64],message_destination[16];
+    uint8_t app_data[RNS_NODE_APP_DATA_MAX];size_t app_data_length;
+    uint64_t announce_timebase;uint8_t hops;uint64_t interface_id;int32_t gravity;
+    double seen_at,expires_at;bool reachable,propagation,has_ratchet,has_message_destination;
+    rns_node_kind kind;char name[64];uint8_t ratchet[32];bool lxmf_app_data_valid;
+    bool lxmf_has_stamp_cost;uint8_t lxmf_stamp_cost;uint32_t lxmf_features;
+} legacy_record_v2;
+
+static void temporary_path(char path[64], const char *stem) {
+    (void)snprintf(path, 64U, "/tmp/%s-XXXXXX", stem);
+    int descriptor = mkstemp(path);
+    assert(descriptor >= 0 && close(descriptor) == 0);
+}
+
+static uint8_t *read_file(const char *path, size_t *length) {
+    FILE *file = fopen(path, "rb");
+    assert(file != NULL && fseek(file, 0L, SEEK_END) == 0);
+    long end = ftell(file);
+    assert(end >= 0 && fseek(file, 0L, SEEK_SET) == 0);
+    *length = (size_t)end;
+    uint8_t *bytes = malloc(*length == 0U ? 1U : *length);
+    assert(bytes != NULL && fread(bytes, 1U, *length, file) == *length);
+    assert(fgetc(file) == EOF && fclose(file) == 0);
+    return bytes;
+}
+
+static void write_file(const char *path, const uint8_t *bytes, size_t length) {
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL && fwrite(bytes, 1U, length, file) == length);
+    assert(fclose(file) == 0);
+}
+
+static rns_node_record complete_record(uint8_t marker) {
+    rns_node_record record = {0};
+    memset(record.destination, marker, sizeof record.destination);
+    memset(record.next_hop, marker + 1U, sizeof record.next_hop);
+    memset(record.public_key, marker + 2U, sizeof record.public_key);
+    memset(record.message_destination, marker + 3U,
+           sizeof record.message_destination);
+    memcpy(record.app_data, "opaque-app", 10U);
+    record.app_data_length = 10U;
+    record.announce_timebase = UINT64_C(0x0102030405060708);
+    record.hops = 7U;
+    record.interface_id = UINT64_C(0x1112131415161718);
+    record.gravity = -123456;
+    record.seen_at = 12.5;
+    record.expires_at = 42.75;
+    record.reachable = true;
+    record.propagation = true;
+    record.has_ratchet = true;
+    record.has_message_destination = true;
+    record.kind = RNS_NODE_KIND_LXMF;
+    memcpy(record.name, "Rei node", 9U);
+    memset(record.ratchet, marker + 4U, sizeof record.ratchet);
+    record.lxmf_app_data_valid = true;
+    record.lxmf_has_stamp_cost = true;
+    record.lxmf_stamp_cost = 9U;
+    record.lxmf_features = UINT32_C(0x10203040);
+    static const uint8_t extension[] = {0x81, 0xa1, 'x', 0x2a};
+    memcpy(record.persistence_extensions, extension, sizeof extension);
+    record.persistence_extensions_length = sizeof extension;
+    return record;
+}
+
+static void assert_complete_record(const rns_node_record *record,
+                                   uint8_t marker) {
+    assert(record != NULL && record->destination[0] == marker);
+    assert(record->next_hop[0] == (uint8_t)(marker + 1U));
+    assert(record->public_key[0] == (uint8_t)(marker + 2U));
+    assert(record->message_destination[0] == (uint8_t)(marker + 3U));
+    assert(record->app_data_length == 10U &&
+           memcmp(record->app_data, "opaque-app", 10U) == 0);
+    assert(record->announce_timebase == UINT64_C(0x0102030405060708));
+    assert(record->hops == 7U &&
+           record->interface_id == UINT64_C(0x1112131415161718));
+    assert(record->gravity == -123456 && record->seen_at == 12.5 &&
+           record->expires_at == 42.75);
+    assert(record->reachable && record->propagation && record->has_ratchet &&
+           record->has_message_destination);
+    assert(record->kind == RNS_NODE_KIND_LXMF &&
+           strcmp(record->name, "Rei node") == 0);
+    assert(record->ratchet[0] == (uint8_t)(marker + 4U));
+    assert(record->lxmf_app_data_valid && record->lxmf_has_stamp_cost &&
+           record->lxmf_stamp_cost == 9U &&
+           record->lxmf_features == UINT32_C(0x10203040));
+    static const uint8_t extension[] = {0x81, 0xa1, 'x', 0x2a};
+    assert(record->persistence_extensions_length == sizeof extension &&
+           memcmp(record->persistence_extensions, extension,
+                  sizeof extension) == 0);
+}
+
+static void test_portable_roundtrip_corruption_and_atomic_replace(void) {
+    char path[64];
+    temporary_path(path, "rns-node-v3");
+    rns_node_registry registry;
+    rns_node_registry_init(&registry, 10.0);
+    registry.records[0] = complete_record(0x21U);
+    registry.count = 1U;
+    char unterminated_path[5000];
+    memset(unterminated_path, 'x', sizeof unterminated_path);
+    rns_node_registry loaded;
+    assert(!rns_node_registry_save(&registry, unterminated_path));
+    assert(!rns_node_registry_load(&loaded, unterminated_path, 10.0));
+    assert(!rns_node_registry_save(&registry, ""));
+    assert(!rns_node_registry_load(&loaded, "", 10.0));
+    assert(rns_node_registry_save(&registry, path));
+
+    size_t length;
+    uint8_t *valid = read_file(path, &length);
+    assert(length > 24U && memcmp(valid, "RNSN3\0\0\0", 8U) == 0);
+    assert(valid[8] == 0U && valid[9] == 3U && valid[10] == 0U &&
+           valid[11] == 24U && valid[12] == 0U && valid[13] == 0U &&
+           valid[14] == 0U && valid[15] == 1U);
+    assert(memcmp(valid + 146U, "\x01\x02\x03\x04\x05\x06\x07\x08", 8U) == 0);
+    rns_node_registry_init(&loaded, 77.0);
+    assert(rns_node_registry_load(&loaded, path, 10.0));
+    assert(loaded.count == 1U && loaded.lifetime == 10.0);
+    assert_complete_record(&loaded.records[0], 0x21U);
+
+    for (size_t cut = 0U; cut < length; ++cut) {
+        write_file(path, valid, cut);
+        loaded.records[0].destination[0] = 0xeeU;
+        loaded.count = 1U;
+        assert(!rns_node_registry_load(&loaded, path, 10.0));
+        assert(loaded.count == 1U && loaded.records[0].destination[0] == 0xeeU);
+    }
+    uint8_t *corrupt = malloc(length);
+    assert(corrupt != NULL);
+    memcpy(corrupt, valid, length);
+    corrupt[length - 1U] ^= 0x80U;
+    write_file(path, corrupt, length);
+    assert(!rns_node_registry_load(&loaded, path, 10.0));
+    assert(loaded.records[0].destination[0] == 0xeeU);
+    free(corrupt);
+
+    registry.records[0] = complete_record(0x31U);
+    assert(rns_node_registry_save(&registry, path));
+    assert(rns_node_registry_load(&loaded, path, 10.0));
+    assert_complete_record(&loaded.records[0], 0x31U);
+
+    registry.records[0].app_data_length = RNS_NODE_APP_DATA_MAX + 1U;
+    assert(!rns_node_registry_save(&registry, path));
+    assert(rns_node_registry_load(&loaded, path, 10.0));
+    assert_complete_record(&loaded.records[0], 0x31U);
+    free(valid);
+    assert(unlink(path) == 0);
+}
+
+static void test_legacy_migration(void) {
+    char path[64];
+    temporary_path(path, "rns-node-v1");
+    legacy_record_v1 v1 = {0};
+    v1.destination[0] = 2U;
+    v1.has_ratchet = true;
+    memcpy(v1.name, "Legacy", 7U);
+    uint32_t count = 1U;
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL && fwrite("RNSN1\0\0\0", 1U, 8U, file) == 8U);
+    assert(fwrite(&count, sizeof count, 1U, file) == 1U &&
+           fwrite(&v1, sizeof v1, 1U, file) == 1U && fclose(file) == 0);
+    rns_node_registry loaded;
+    assert(rns_node_registry_load(&loaded, path, 10.0));
+    assert(loaded.count == 1U && loaded.records[0].destination[0] == 2U);
+    assert(!loaded.records[0].has_ratchet &&
+           strcmp(loaded.records[0].name, "Legacy") == 0);
+
+    legacy_record_v2 v2 = {0};
+    v2.destination[0] = 3U;
+    v2.ratchet[0] = 0xa5U;
+    v2.has_ratchet = true;
+    v2.lxmf_app_data_valid = true;
+    v2.lxmf_has_stamp_cost = true;
+    v2.lxmf_stamp_cost = 8U;
+    v2.lxmf_features = LXMF_FEATURE_COMPRESSION;
+    memcpy(v2.name, "Version two", 12U);
+    file = fopen(path, "wb");
+    assert(file != NULL && fwrite("RNSN2\0\0\0", 1U, 8U, file) == 8U);
+    assert(fwrite(&count, sizeof count, 1U, file) == 1U &&
+           fwrite(&v2, sizeof v2, 1U, file) == 1U && fclose(file) == 0);
+    assert(rns_node_registry_load(&loaded, path, 10.0));
+    assert(loaded.count == 1U && loaded.records[0].destination[0] == 3U);
+    assert(loaded.records[0].has_ratchet && loaded.records[0].ratchet[0] == 0xa5U);
+    assert(loaded.records[0].lxmf_app_data_valid &&
+           loaded.records[0].lxmf_has_stamp_cost &&
+           loaded.records[0].lxmf_stamp_cost == 8U &&
+           loaded.records[0].lxmf_features == LXMF_FEATURE_COMPRESSION);
+    assert(strcmp(loaded.records[0].name, "Version two") == 0);
+    assert(rns_node_registry_save(&loaded, path));
+    size_t length;
+    uint8_t *migrated = read_file(path, &length);
+    assert(length > 24U && memcmp(migrated, "RNSN3\0\0\0", 8U) == 0);
+    free(migrated);
+
+    uint8_t raw[sizeof v2];
+    memcpy(raw, &v2, sizeof raw);
+    raw[offsetof(legacy_record_v2, reachable)] = 2U;
+    file = fopen(path, "wb");
+    assert(file != NULL && fwrite("RNSN2\0\0\0", 1U, 8U, file) == 8U);
+    assert(fwrite(&count, sizeof count, 1U, file) == 1U &&
+           fwrite(raw, 1U, sizeof raw, file) == sizeof raw && fclose(file) == 0);
+    loaded.records[0].destination[0] = 0xfeU;
+    assert(!rns_node_registry_load(&loaded, path, 10.0));
+    assert(loaded.records[0].destination[0] == 0xfeU);
+    assert(unlink(path) == 0);
+}
+
+static void test_registry_and_verified_announces(void) {
+    rns_node_registry registry;
+    rns_node_registry_init(&registry, 10.0);
+    rns_node_record basic = {0};
+    basic.destination[0] = 1U;
+    basic.seen_at = 2.0;
+    assert(rns_node_registry_upsert(&registry, &basic));
+    assert(rns_node_registry_get(&registry, basic.destination) != NULL);
+    assert(rns_node_registry_expire(&registry, 12.0) == 1U);
+
+    uint8_t private_key[64];
+    for (size_t i = 0U; i < sizeof private_key; ++i)
+        private_key[i] = (uint8_t)(i + 1U);
+    rns_node_result result = {0};
+    assert(rns_identity_from_private(&result.announce_identity, private_key));
+    const char *node_aspects[] = {"node"};
+    assert(rns_destination_hash(&result.announce_identity, "nomadnetwork",
+                                node_aspects, 1U, result.destination_hash));
+    result.has_verified_announce = 1;
+    result.announce_timebase = 9U;
+    result.received_at = 20.0;
+    result.announce_app_data = (const uint8_t *)"Rei Node";
+    result.announce_app_data_length = 8U;
+    assert(rns_node_registry_consider_announce(&registry, &result));
+    const rns_node_record *record = rns_node_registry_get(
+        &registry, result.destination_hash);
+    assert(record != NULL && record->kind == RNS_NODE_KIND_NOMAD &&
+           record->has_message_destination && strcmp(record->name, "Rei Node") == 0);
+
+    const char *delivery_aspects[] = {"delivery"};
+    assert(rns_destination_hash(&result.announce_identity, "lxmf",
+                                delivery_aspects, 1U, result.destination_hash));
+    lxmf_announce_data_t announce = {0};
+    memcpy(announce.display_name, "Rei", 3U);
+    announce.display_name_len = 3U;
+    announce.has_stamp_cost = true;
+    announce.stamp_cost = 8U;
+    announce.features = LXMF_FEATURE_COMPRESSION;
+    uint8_t app_data[64], ratchet[32];
+    size_t app_data_length = 0U;
+    memset(ratchet, 0xa5, sizeof ratchet);
+    assert(lxmf_announce_encode(&announce, app_data, sizeof app_data,
+                                &app_data_length) == LXMF_OK);
+    result.announce_timebase = 10U;
+    result.announce_app_data = app_data;
+    result.announce_app_data_length = app_data_length;
+    result.announce_has_ratchet = 1;
+    result.announce_ratchet = ratchet;
+    assert(rns_node_registry_consider_announce(&registry, &result));
+    record = rns_node_registry_get(&registry, result.destination_hash);
+    assert(record != NULL && record->kind == RNS_NODE_KIND_LXMF &&
+           record->lxmf_app_data_valid && record->has_ratchet &&
+           memcmp(record->ratchet, ratchet, sizeof ratchet) == 0);
+    assert(record->lxmf_has_stamp_cost && record->lxmf_stamp_cost == 8U &&
+           (record->lxmf_features & LXMF_FEATURE_COMPRESSION) != 0U &&
+           strcmp(record->name, "Rei") == 0);
+
+    memset(ratchet, 0x11, sizeof ratchet);
+    assert(!rns_node_registry_consider_announce(&registry, &result));
+    record = rns_node_registry_get(&registry, result.destination_hash);
+    assert(record != NULL && record->ratchet[0] == 0xa5U);
+
     rns_node_record filtered[RNS_NODE_REGISTRY_MAX];
-    size_t matches=rns_node_registry_sorted_filter(&r,filtered,RNS_NODE_REGISTRY_MAX,"rei");
-    assert(matches>=2);
-    assert(rns_node_registry_sorted_filter(&r,filtered,RNS_NODE_REGISTRY_MAX,"REI")==matches);
-    char partial[9];
-    (void)snprintf(partial,sizeof partial,"%02X%02X%02X%02X",r.records[0].destination[0],
-                   r.records[0].destination[1],r.records[0].destination[2],
-                   r.records[0].destination[3]);
-    assert(rns_node_registry_sorted_filter(&r,filtered,RNS_NODE_REGISTRY_MAX,partial)>=1);
-    assert(rns_node_registry_sorted_filter(&r,filtered,RNS_NODE_REGISTRY_MAX,"missing")==0);
-    return 0;}
+    size_t matches = rns_node_registry_sorted_filter(
+        &registry, filtered, RNS_NODE_REGISTRY_MAX, "rei");
+    assert(matches >= 2U);
+    assert(rns_node_registry_sorted_filter(&registry, filtered,
+                                           RNS_NODE_REGISTRY_MAX, "REI") ==
+           matches);
+    assert(rns_node_registry_sorted_filter(&registry, filtered,
+                                           RNS_NODE_REGISTRY_MAX,
+                                           "missing") == 0U);
+}
+
+int main(void) {
+    test_portable_roundtrip_corruption_and_atomic_replace();
+    test_legacy_migration();
+    test_registry_and_verified_announces();
+    puts("node registry tests passed");
+    return 0;
+}
