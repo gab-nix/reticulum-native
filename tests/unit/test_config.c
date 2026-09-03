@@ -34,7 +34,15 @@ static const char valid_config[] =
     "    codingrate = 5\n"
     "  [[Discovery]]\n"
     "    type = AutoInterface\n"
-    "    enabled = Yes\n";
+    "    enabled = Yes\n"
+    "    group_id = nomad-lan\n"
+    "    discovery_scope = ORGANISATION\n"
+    "    multicast_address_type = PERMANENT\n"
+    "    discovery_port = 48555\n"
+    "    data_port = 49555\n"
+    "    devices = en0, eth0\n"
+    "    ignored_devices = tun0\n"
+    "    bitrate = 12000000\n";
 
 static const char kiss_config[] =
     "[reticulum]\nshare_instance = No\n[interfaces]\n[[TNC]]\n"
@@ -66,6 +74,9 @@ int main(void) {
         "port = tcp://127.0.0.1\nfrequency = 915000000\n"
         "bandwidth = 125000\ntxpower = 17\nspreadingfactor = 8\n"
         "codingrate = 5\n";
+    static const char invalid_auto[] =
+        "[interfaces]\n[[LAN]]\ntype = AutoInterface\nenabled = Yes\n"
+        "discovery_scope = universe\n";
     rns_config_t config;
     rns_config_t reparsed;
     rns_config_diagnostic_t diagnostic;
@@ -81,10 +92,21 @@ int main(void) {
     assert(config.interfaces[1].forward_port == 5000U);
     assert(config.interfaces[2].frequency == 868000000U);
     assert(config.interfaces[3].type == RNS_CONFIG_AUTO);
+    assert(strcmp(config.interfaces[3].group_id, "nomad-lan") == 0);
+    assert(strcmp(config.interfaces[3].discovery_scope, "organisation") == 0);
+    assert(strcmp(config.interfaces[3].multicast_address_type, "permanent") == 0);
+    assert(config.interfaces[3].discovery_port == 48555u &&
+           config.interfaces[3].data_port == 49555u &&
+           config.interfaces[3].bitrate == 12000000u);
+    assert(strcmp(config.interfaces[3].devices, "en0, eth0") == 0 &&
+           strcmp(config.interfaces[3].ignored_devices, "tun0") == 0);
     assert(rns_config_emit(&config, emitted, sizeof(emitted), &emitted_length) == RNS_OK);
     assert(rns_config_parse(emitted, emitted_length, &reparsed, &diagnostic) == RNS_OK);
     assert(reparsed.interface_count == config.interface_count);
     assert(reparsed.interfaces[2].tx_power == 17);
+    assert(strcmp(reparsed.interfaces[3].group_id, "nomad-lan") == 0 &&
+           reparsed.interfaces[3].discovery_port == 48555u &&
+           reparsed.interfaces[3].data_port == 49555u);
     assert(reparsed.shared_instance_port == 37428U);
     assert(reparsed.instance_control_port == 37429U);
 
@@ -94,6 +116,9 @@ int main(void) {
     assert(rns_config_parse(invalid, sizeof(invalid) - 1U,
                             &config, &diagnostic) == RNS_ERROR_PROTOCOL);
     assert(strstr(diagnostic.message, "target_host") != NULL);
+    assert(rns_config_parse(invalid_auto, sizeof(invalid_auto) - 1u, &config,
+                            &diagnostic) == RNS_ERROR_PROTOCOL);
+    assert(strstr(diagnostic.message, "discovery_scope") != NULL);
     assert(rns_config_parse(valid_config, sizeof(valid_config) - 1U,
                             &config, &diagnostic) == RNS_OK);
     assert(rns_config_emit(&config, tiny, sizeof(tiny), &emitted_length) == RNS_ERROR_OVERFLOW);

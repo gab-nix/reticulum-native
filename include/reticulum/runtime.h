@@ -204,6 +204,8 @@ typedef struct rns_runtime_interface_info {
     uint64_t connection_attempts;
     uint64_t connections_established;
     uint64_t connections_lost;
+    /* Dynamic peer carriers, currently populated by AutoInterface. */
+    uint64_t peers;
 } rns_runtime_interface_info_t;
 
 typedef void (*rns_runtime_packet_callback_t)(rns_runtime_t *runtime,

@@ -23,6 +23,7 @@ struct rns_udp_endpoint {
     int descriptor;
     int native_family;
     bool connected;
+    size_t datagram_limit;
 };
 
 static int native_family(rns_udp_family_t family) {
@@ -117,6 +118,7 @@ rns_status_t rns_udp_endpoint_create(rns_udp_endpoint_t **endpoint,
         return RNS_ERROR_IO;
     }
     created->native_family = family_value;
+    created->datagram_limit = RNS_MTU;
     *endpoint = created;
     return RNS_OK;
 }
@@ -209,6 +211,14 @@ rns_status_t rns_udp_local_address(const rns_udp_endpoint_t *endpoint,
     return address_from_native((const struct sockaddr *)&native, length, address);
 }
 
+rns_status_t rns_udp_set_datagram_limit(rns_udp_endpoint_t *endpoint,
+                                        size_t maximum) {
+    if (endpoint == NULL || maximum == 0u || maximum > RNS_UDP_DATAGRAM_MAX)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    endpoint->datagram_limit = maximum;
+    return RNS_OK;
+}
+
 rns_status_t rns_udp_resolve(const char *host, uint16_t port,
                              rns_udp_family_t family, rns_udp_address_t *address) {
     struct sockaddr_storage native;
@@ -225,11 +235,14 @@ rns_status_t rns_udp_resolve(const char *host, uint16_t port,
     return address_from_native((const struct sockaddr *)&native, length, address);
 }
 
-static rns_status_t validate_packet(const uint8_t *packet, size_t packet_length) {
+static rns_status_t validate_packet(const rns_udp_endpoint_t *endpoint,
+                                    const uint8_t *packet,
+                                    size_t packet_length) {
     if (packet == NULL || packet_length == 0U) {
         return RNS_ERROR_INVALID_ARGUMENT;
     }
-    return packet_length <= RNS_MTU ? RNS_OK : RNS_ERROR_OVERFLOW;
+    return packet_length <= endpoint->datagram_limit ? RNS_OK
+                                                      : RNS_ERROR_OVERFLOW;
 }
 
 rns_status_t rns_udp_send(rns_udp_endpoint_t *endpoint,
@@ -240,7 +253,7 @@ rns_status_t rns_udp_send(rns_udp_endpoint_t *endpoint,
     if (endpoint == NULL) {
         return RNS_ERROR_INVALID_ARGUMENT;
     }
-    status = validate_packet(packet, packet_length);
+    status = validate_packet(endpoint, packet, packet_length);
     if (status != RNS_OK) {
         return status;
     }
@@ -266,7 +279,7 @@ rns_status_t rns_udp_send_to(rns_udp_endpoint_t *endpoint,
         native_family(destination->family) != endpoint->native_family) {
         return RNS_ERROR_INVALID_ARGUMENT;
     }
-    status = validate_packet(packet, packet_length);
+    status = validate_packet(endpoint, packet, packet_length);
     if (status != RNS_OK) {
         return status;
     }
@@ -294,7 +307,7 @@ rns_status_t rns_udp_poll(rns_udp_endpoint_t *endpoint,
     }
     *received = 0U;
     while (max_datagrams == 0U || count < max_datagrams) {
-        uint8_t packet[RNS_MTU + 1U];
+        uint8_t packet[RNS_UDP_DATAGRAM_MAX + 1U];
         struct sockaddr_storage native_source;
         socklen_t source_length = (socklen_t)sizeof(native_source);
         rns_udp_address_t source;
@@ -308,7 +321,7 @@ rns_status_t rns_udp_poll(rns_udp_endpoint_t *endpoint,
             }
             return RNS_ERROR_IO;
         }
-        if ((size_t)length > RNS_MTU) {
+        if ((size_t)length > endpoint->datagram_limit) {
             return RNS_ERROR_OVERFLOW;
         }
         status = address_from_native((const struct sockaddr *)&native_source,
@@ -333,6 +346,20 @@ rns_status_t rns_udp_set_broadcast(rns_udp_endpoint_t *endpoint, bool enabled) {
     }
     return setsockopt(endpoint->descriptor, SOL_SOCKET, SO_BROADCAST,
                       &value, (socklen_t)sizeof(value)) == 0 ? RNS_OK : RNS_ERROR_IO;
+}
+
+rns_status_t rns_udp_set_reuse(rns_udp_endpoint_t *endpoint, bool enabled) {
+    int value = enabled ? 1 : 0;
+    if (endpoint == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (setsockopt(endpoint->descriptor, SOL_SOCKET, SO_REUSEADDR, &value,
+                   (socklen_t)sizeof(value)) != 0)
+        return RNS_ERROR_IO;
+#ifdef SO_REUSEPORT
+    if (setsockopt(endpoint->descriptor, SOL_SOCKET, SO_REUSEPORT, &value,
+                   (socklen_t)sizeof(value)) != 0)
+        return RNS_ERROR_IO;
+#endif
+    return RNS_OK;
 }
 
 rns_status_t rns_udp_set_multicast_loop(rns_udp_endpoint_t *endpoint, bool enabled) {
@@ -365,6 +392,18 @@ rns_status_t rns_udp_set_multicast_hops(rns_udp_endpoint_t *endpoint, uint8_t ho
         return setsockopt(endpoint->descriptor, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
                           &value, (socklen_t)sizeof(value)) == 0 ? RNS_OK : RNS_ERROR_IO;
     }
+}
+
+rns_status_t rns_udp_set_multicast_interface(rns_udp_endpoint_t *endpoint,
+                                             uint32_t interface_index) {
+    if (endpoint == NULL || endpoint->native_family != AF_INET6 ||
+        interface_index == 0u)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    return setsockopt(endpoint->descriptor, IPPROTO_IPV6, IPV6_MULTICAST_IF,
+                      &interface_index,
+                      (socklen_t)sizeof(interface_index)) == 0
+               ? RNS_OK
+               : RNS_ERROR_IO;
 }
 
 static rns_status_t multicast_membership(rns_udp_endpoint_t *endpoint,

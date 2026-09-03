@@ -258,6 +258,45 @@ static rns_status_t parse_interface_value(rns_config_interface_t *interface,
         if (copy_value(interface->listen_ip, sizeof(interface->listen_ip), value)) return RNS_OK;
     } else if (strcmp(key, "forward_ip") == 0) {
         if (copy_value(interface->forward_ip, sizeof(interface->forward_ip), value)) return RNS_OK;
+    } else if (strcmp(key, "group_id") == 0) {
+        if (copy_value(interface->group_id, sizeof(interface->group_id), value)) return RNS_OK;
+    } else if (strcmp(key, "devices") == 0) {
+        if (copy_value(interface->devices, sizeof(interface->devices), value)) return RNS_OK;
+    } else if (strcmp(key, "ignored_devices") == 0) {
+        if (copy_value(interface->ignored_devices, sizeof(interface->ignored_devices), value)) return RNS_OK;
+    } else if (strcmp(key, "discovery_scope") == 0) {
+        const char *canonical = NULL;
+        if (equal_ignore_case(value, "link")) canonical = "link";
+        else if (equal_ignore_case(value, "admin")) canonical = "admin";
+        else if (equal_ignore_case(value, "site")) canonical = "site";
+        else if (equal_ignore_case(value, "organisation")) canonical = "organisation";
+        else if (equal_ignore_case(value, "global")) canonical = "global";
+        if (canonical != NULL &&
+            copy_value(interface->discovery_scope,
+                       sizeof(interface->discovery_scope), canonical))
+            return RNS_OK;
+    } else if (strcmp(key, "multicast_address_type") == 0) {
+        const char *canonical = NULL;
+        if (equal_ignore_case(value, "temporary")) canonical = "temporary";
+        else if (equal_ignore_case(value, "permanent")) canonical = "permanent";
+        if (canonical != NULL &&
+            copy_value(interface->multicast_address_type,
+                       sizeof(interface->multicast_address_type), canonical))
+            return RNS_OK;
+    } else if (strcmp(key, "discovery_port") == 0 ||
+               strcmp(key, "data_port") == 0) {
+        if (parse_unsigned(value, UINT16_MAX, &number) && number != 0u) {
+            if (key[0] == 'd' && key[1] == 'i')
+                interface->discovery_port = (uint16_t)number;
+            else
+                interface->data_port = (uint16_t)number;
+            return RNS_OK;
+        }
+    } else if (strcmp(key, "bitrate") == 0 ||
+               strcmp(key, "configured_bitrate") == 0) {
+        if (parse_unsigned(value, UINT32_MAX, &interface->bitrate) &&
+            interface->bitrate >= 5u)
+            return RNS_OK;
     } else if (strcmp(key, "target_port") == 0 || strcmp(key, "listen_port") == 0 ||
                strcmp(key, "forward_port") == 0) {
         if (parse_unsigned(value, UINT16_MAX, &number) && number != 0U) {
@@ -382,6 +421,15 @@ static rns_status_t validate_interface(const rns_config_interface_t *interface,
                        interface->name);
         return RNS_ERROR_PROTOCOL;
     }
+    if (interface->type == RNS_CONFIG_AUTO &&
+        (interface->discovery_port == 0u ||
+         interface->discovery_port == UINT16_MAX ||
+         interface->data_port == 0u)) {
+        set_diagnostic(diagnostic, 0U, RNS_ERROR_PROTOCOL,
+                       "enabled AutoInterface '%s' has invalid discovery or data ports",
+                       interface->name);
+        return RNS_ERROR_PROTOCOL;
+    }
     if (interface->type == RNS_CONFIG_KISS &&
         (interface->device[0] == '\0' || interface->speed == 0U)) {
         set_diagnostic(diagnostic, 0U, RNS_ERROR_PROTOCOL,
@@ -474,6 +522,9 @@ rns_status_t rns_config_parse(const char *text,
                 current = &config->interfaces[config->interface_count++];
                 memset(current, 0, sizeof(*current));
                 current->speed = 9600U;
+                current->discovery_port = 29716u;
+                current->data_port = 42671u;
+                current->bitrate = 10000000u;
                 current->preamble_ms = 350U;
                 current->tx_tail_ms = 20U;
                 current->slot_time_ms = 20U;
@@ -593,6 +644,39 @@ rns_status_t rns_config_emit(const rns_config_t *config,
                            "    forward_port = %u\n", item->listen_ip,
                   (unsigned int)item->listen_port, item->forward_ip,
                   (unsigned int)item->forward_port)) return RNS_ERROR_OVERFLOW;
+        if (item->type == RNS_CONFIG_AUTO) {
+            const char *group = item->group_id[0] != '\0' ? item->group_id : "reticulum";
+            const char *scope = item->discovery_scope[0] != '\0'
+                                    ? item->discovery_scope
+                                    : "link";
+            const char *address_type = item->multicast_address_type[0] != '\0'
+                                           ? item->multicast_address_type
+                                           : "temporary";
+            uint16_t discovery_port = item->discovery_port != 0u
+                                          ? item->discovery_port
+                                          : 29716u;
+            uint16_t data_port = item->data_port != 0u ? item->data_port
+                                                       : 42671u;
+            uint32_t bitrate = item->bitrate != 0u ? item->bitrate
+                                                   : 10000000u;
+            if (!emit(&emitter,
+                      "    group_id = %s\n    discovery_scope = %s\n"
+                      "    multicast_address_type = %s\n"
+                      "    discovery_port = %u\n    data_port = %u\n"
+                      "    bitrate = %u\n",
+                      group, scope, address_type,
+                      (unsigned int)discovery_port,
+                      (unsigned int)data_port,
+                      (unsigned int)bitrate))
+                return RNS_ERROR_OVERFLOW;
+            if (item->devices[0] != '\0' &&
+                !emit(&emitter, "    devices = %s\n", item->devices))
+                return RNS_ERROR_OVERFLOW;
+            if (item->ignored_devices[0] != '\0' &&
+                !emit(&emitter, "    ignored_devices = %s\n",
+                      item->ignored_devices))
+                return RNS_ERROR_OVERFLOW;
+        }
         if (item->type == RNS_CONFIG_KISS &&
             !emit(&emitter, "    port = %s\n    speed = %u\n", item->device,
                   (unsigned int)item->speed)) return RNS_ERROR_OVERFLOW;

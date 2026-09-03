@@ -41,6 +41,14 @@ typedef struct rns_config_interface {
     uint16_t target_port;
     uint16_t listen_port;
     uint16_t forward_port;
+    char group_id[RNS_CONFIG_VALUE_MAX];
+    char discovery_scope[16];
+    char multicast_address_type[16];
+    char devices[RNS_CONFIG_VALUE_MAX];
+    char ignored_devices[RNS_CONFIG_VALUE_MAX];
+    uint16_t discovery_port;
+    uint16_t data_port;
+    uint32_t bitrate;
     char device[RNS_CONFIG_VALUE_MAX];
     uint32_t speed;
     uint16_t preamble_ms;
