@@ -42,8 +42,27 @@ int main(void) {
     assert(memcmp(response.request_id, digest, 16U) == 0);
     assert(response.response_length == 5U &&
            memcmp(response.response, "hello", 5U) == 0);
+    assert(response.response_msgpack_length == 7U &&
+           response.response_msgpack[0] == 0xc4U);
     response_wire[20] = 60U;
     assert(rns_response_decode(response_wire, 26U, &response) ==
+           RNS_ERROR_PROTOCOL);
+
+    static const uint8_t map_response[] = {0x81U, 0xa2U, 'o', 'k', 0xc3U};
+    size_t response_length = 0U;
+    assert(rns_response_encode(digest, map_response, sizeof map_response,
+                               response_wire, sizeof response_wire,
+                               &response_length) == RNS_OK);
+    assert(response_length == 19U + sizeof map_response);
+    assert(rns_response_decode(response_wire, response_length, &response) ==
+           RNS_OK);
+    assert(response.response_msgpack_length == sizeof map_response &&
+           memcmp(response.response_msgpack, map_response,
+                  sizeof map_response) == 0);
+    assert(response.response == response.response_msgpack);
+    assert(rns_response_encode(digest, map_response,
+                               sizeof map_response - 1U, response_wire,
+                               sizeof response_wire, &response_length) ==
            RNS_ERROR_PROTOCOL);
     return 0;
 }

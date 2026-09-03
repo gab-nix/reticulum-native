@@ -160,14 +160,48 @@ rns_status_t rns_response_decode(const uint8_t *input, size_t length,
                                  rns_response_view_t *response) {
     if (input == NULL || response == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     if (length < 1U || input[0] != 0x92U) return RNS_ERROR_PROTOCOL;
-    const uint8_t *cursor = input + 1U, *id, *body;
-    size_t id_length, body_length;
+    const uint8_t *cursor = input + 1U, *id, *body = NULL;
+    size_t id_length, body_length = 0U;
     if (!read_bytes(&cursor, input + length, &id, &id_length) ||
-        id_length != RNS_REQUEST_ID_LENGTH ||
-        !read_bytes(&cursor, input + length, &body, &body_length) ||
+        id_length != RNS_REQUEST_ID_LENGTH) return RNS_ERROR_PROTOCOL;
+    const uint8_t *object = cursor;
+    if (!skip_object(&cursor, input + length, 0U) ||
         cursor != input + length) return RNS_ERROR_PROTOCOL;
+    const uint8_t *bytes_cursor = object;
+    bool byte_response = read_bytes(&bytes_cursor, input + length, &body,
+                                    &body_length) && bytes_cursor == cursor;
+    if (!byte_response) {
+        body = object;
+        body_length = (size_t)(cursor - object);
+    }
+    memset(response, 0, sizeof *response);
     memcpy(response->request_id, id, RNS_REQUEST_ID_LENGTH);
+    response->response_msgpack = object;
+    response->response_msgpack_length = (size_t)(cursor - object);
     response->response = body;
     response->response_length = body_length;
+    return RNS_OK;
+}
+
+rns_status_t rns_response_encode(
+    const uint8_t request_id[RNS_REQUEST_ID_LENGTH],
+    const uint8_t *response_msgpack, size_t response_msgpack_length,
+    uint8_t *output, size_t output_capacity, size_t *output_length) {
+    if (request_id == NULL || response_msgpack == NULL ||
+        response_msgpack_length == 0U || output == NULL ||
+        output_length == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    const uint8_t *cursor = response_msgpack;
+    if (!skip_object(&cursor, response_msgpack + response_msgpack_length, 0U) ||
+        cursor != response_msgpack + response_msgpack_length)
+        return RNS_ERROR_PROTOCOL;
+    if (response_msgpack_length > SIZE_MAX - 19U ||
+        output_capacity < 19U + response_msgpack_length)
+        return RNS_ERROR_OVERFLOW;
+    output[0] = 0x92U;
+    output[1] = 0xc4U;
+    output[2] = RNS_REQUEST_ID_LENGTH;
+    memcpy(output + 3U, request_id, RNS_REQUEST_ID_LENGTH);
+    memcpy(output + 19U, response_msgpack, response_msgpack_length);
+    *output_length = 19U + response_msgpack_length;
     return RNS_OK;
 }

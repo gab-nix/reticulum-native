@@ -45,6 +45,7 @@ struct rns_runtime_link {
     uint8_t callback_packet_hash[RNS_PROOF_HASH_SIZE];
     bool callback_packet_provable;
     bool remote_identified;
+    rns_runtime_destination_t *inbound_destination;
 };
 
 struct rns_runtime_resource_transfer {
@@ -55,6 +56,15 @@ struct rns_runtime_resource_transfer {
     double deadline;
     size_t sent_parts;
     bool part_sent[RNS_RESOURCE_MAX_PARTS];
+    bool runtime_owned;
+};
+
+struct rns_runtime_request_handler {
+    rns_runtime_destination_t *destination;
+    char path[RNS_REQUEST_PATH_MAX + 1U];
+    uint8_t path_hash[RNS_REQUEST_ID_LENGTH];
+    rns_runtime_request_handler_options_t options;
+    uint8_t allow_identity_hashes[RNS_RUNTIME_MAX_REQUEST_ALLOWLIST][16];
 };
 
 struct rns_runtime_destination {
@@ -64,6 +74,8 @@ struct rns_runtime_destination {
     rns_runtime_link_options_t link_options;
     rns_runtime_inbound_link_callback_t accepted_callback;
     void *callback_context;
+    rns_runtime_request_handler_t *request_handlers[
+        RNS_RUNTIME_MAX_REQUEST_HANDLERS];
 };
 
 struct rns_request_receipt {
@@ -350,6 +362,106 @@ static void outgoing_resource_finish(rns_runtime_resource_transfer_t *transfer,
             transfer, state, status, transfer->sent_parts,
             rns_resource_sender_total_parts(transfer->sender),
             transfer->options.callback_context);
+    if (transfer->runtime_owned) {
+        rns_resource_sender_destroy(transfer->sender);
+        free(transfer);
+    }
+}
+
+static rns_runtime_request_handler_t *find_request_handler(
+    const rns_runtime_destination_t *destination,
+    const uint8_t path_hash[RNS_REQUEST_ID_LENGTH]) {
+    if (destination == NULL) return NULL;
+    for (size_t i = 0U; i < RNS_RUNTIME_MAX_REQUEST_HANDLERS; ++i) {
+        rns_runtime_request_handler_t *handler =
+            destination->request_handlers[i];
+        if (handler != NULL &&
+            memcmp(handler->path_hash, path_hash,
+                   RNS_REQUEST_ID_LENGTH) == 0)
+            return handler;
+    }
+    return NULL;
+}
+
+static bool request_handler_authorized(
+    const rns_runtime_request_handler_t *handler,
+    const rns_runtime_link_t *link) {
+    if (handler->options.access == RNS_REQUEST_ALLOW_ALL) return true;
+    if (handler->options.access == RNS_REQUEST_ALLOW_NONE) return false;
+    if (!link->remote_identified) return false;
+    if (handler->options.access == RNS_REQUEST_ALLOW_IDENTIFIED) return true;
+    if (handler->options.access != RNS_REQUEST_ALLOW_LIST) return false;
+    uint8_t public_key[RNS_IDENTITY_PUBLIC_SIZE], digest[32];
+    memcpy(public_key, link->protocol.remote_identity.encryption_public, 32U);
+    memcpy(public_key + 32U, link->protocol.remote_identity.signing_public,
+           32U);
+    if (!rns_sha256(public_key, sizeof public_key, digest)) return false;
+    for (size_t i = 0U; i < handler->options.allow_identity_count; ++i)
+        if (memcmp(handler->allow_identity_hashes[i], digest, 16U) == 0)
+            return true;
+    return false;
+}
+
+static bool handle_request(rns_runtime_link_t *link, const uint8_t *raw,
+                           size_t raw_length, const uint8_t *plaintext,
+                           size_t plaintext_length) {
+    rns_request_view_t request;
+    if (rns_request_decode(plaintext, plaintext_length, &request) != RNS_OK)
+        return false;
+    rns_runtime_request_handler_t *handler = find_request_handler(
+        link->inbound_destination, request.path_hash);
+    if (handler == NULL || !request_handler_authorized(handler, link))
+        return true;
+    size_t response_capacity = handler->options.max_response_size;
+    uint8_t *response = malloc(response_capacity);
+    if (response == NULL) return true;
+    size_t response_length = 0U;
+    const rns_identity *remote = link->remote_identified
+                                     ? &link->protocol.remote_identity
+                                     : NULL;
+    rns_status_t status = handler->options.callback(
+        handler, link, &request, remote, response, response_capacity,
+        &response_length, handler->options.callback_context);
+    if (status != RNS_OK || response_length == 0U ||
+        response_length > response_capacity) {
+        free(response);
+        return true;
+    }
+    uint8_t request_id[RNS_REQUEST_ID_LENGTH];
+    if (!rns_packet_truncated_hash(raw, raw_length, request_id)) {
+        free(response);
+        return true;
+    }
+    if (response_length > SIZE_MAX - 19U) {
+        free(response);
+        return true;
+    }
+    size_t wire_capacity = response_length + 19U;
+    uint8_t *wire = malloc(wire_capacity);
+    if (wire == NULL) {
+        free(response);
+        return true;
+    }
+    size_t wire_length = 0U;
+    status = rns_response_encode(request_id, response, response_length, wire,
+                                 wire_capacity, &wire_length);
+    free(response);
+    if (status == RNS_OK)
+        status = link_send_plain2(link, RNS_LINK_CONTEXT_RESPONSE, wire,
+                                  wire_length);
+    if (status == RNS_ERROR_OVERFLOW) {
+        rns_runtime_resource_options_t options = {
+            .timeout_seconds = link->options.timeout_seconds,
+            .auto_compress = true,
+            .is_response = true,
+            .request_id = request_id};
+        rns_runtime_resource_transfer_t *transfer = NULL;
+        status = rns_runtime_link_send_resource(link, wire, wire_length,
+                                                 &options, &transfer);
+        if (status == RNS_OK) transfer->runtime_owned = true;
+    }
+    free(wire);
+    return true;
 }
 
 static void incoming_resource_abort(rns_runtime_link_t *link,
@@ -604,6 +716,7 @@ static bool accept_inbound_link(rns_runtime_t *runtime, size_t interface_index,
     link->runtime = runtime;
     link->interface_index = interface_index;
     link->options = destination->link_options;
+    link->inbound_destination = destination;
     double timeout = link->options.timeout_seconds > 0.0
                          ? link->options.timeout_seconds
                          : 360.0 + 6.0 * (double)(received_hops != 0U
@@ -759,6 +872,9 @@ static bool link_ingress(rns_runtime_t *runtime, size_t interface_index,
                         link, &link->protocol.remote_identity,
                         link->options.callback_context);
             }
+        } else if (packet.context == RNS_LINK_CONTEXT_REQUEST) {
+            (void)handle_request(link, raw, raw_length, payload,
+                                 plaintext_length);
         } else if (packet.context == RNS_LINK_CONTEXT_RESPONSE) {
             (void)handle_response(link, payload, plaintext_length);
         } else if (packet.context == RNS_LINK_CONTEXT_RESOURCE_ADV) {
@@ -946,6 +1062,9 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
             rns_runtime_link_destroy(runtime->links[i]);
     }
     for (size_t i = 0U; i < RNS_RUNTIME_MAX_DESTINATIONS; ++i) {
+        if (runtime->destinations[i] != NULL)
+            for (size_t j = 0U; j < RNS_RUNTIME_MAX_REQUEST_HANDLERS; ++j)
+                free(runtime->destinations[i]->request_handlers[j]);
         free(runtime->destinations[i]);
         runtime->destinations[i] = NULL;
     }
@@ -1366,6 +1485,10 @@ void rns_runtime_destination_destroy(rns_runtime_destination_t *destination) {
     if (destination == NULL) return;
     rns_runtime_t *runtime = destination->runtime;
     if (runtime != NULL) {
+        for (size_t i = 0U; i < RNS_RUNTIME_MAX_LINKS; ++i)
+            if (runtime->links[i] != NULL &&
+                runtime->links[i]->inbound_destination == destination)
+                runtime->links[i]->inbound_destination = NULL;
         for (size_t i = 0U; i < RNS_RUNTIME_MAX_DESTINATIONS; ++i)
             if (runtime->destinations[i] == destination) {
                 runtime->destinations[i] = NULL;
@@ -1382,7 +1505,80 @@ void rns_runtime_destination_destroy(rns_runtime_destination_t *destination) {
             (void)rns_node_unregister_destination(&runtime->node,
                                                   destination->hash);
     }
+    for (size_t i = 0U; i < RNS_RUNTIME_MAX_REQUEST_HANDLERS; ++i)
+        free(destination->request_handlers[i]);
     free(destination);
+}
+
+rns_status_t rns_runtime_destination_register_request_handler(
+    rns_runtime_destination_t *destination, const char *path,
+    const rns_runtime_request_handler_options_t *options,
+    rns_runtime_request_handler_t **output) {
+    if (destination == NULL || path == NULL || options == NULL ||
+        options->callback == NULL || output == NULL ||
+        options->access > RNS_REQUEST_ALLOW_LIST ||
+        options->allow_identity_count > RNS_RUNTIME_MAX_REQUEST_ALLOWLIST ||
+        (options->allow_identity_count != 0U &&
+         options->allow_identity_hashes == NULL))
+        return RNS_ERROR_INVALID_ARGUMENT;
+    *output = NULL;
+    size_t path_length = strlen(path);
+    if (path_length == 0U || path_length > RNS_REQUEST_PATH_MAX)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    size_t response_size = options->max_response_size != 0U
+                               ? options->max_response_size
+                               : RNS_REQUEST_HANDLER_DEFAULT_MAX_RESPONSE;
+    if (response_size > RNS_REQUEST_DEFAULT_MAX_RESPONSE ||
+        response_size > RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE - 19U)
+        return RNS_ERROR_OVERFLOW;
+    uint8_t digest[32];
+    if (!rns_sha256((const uint8_t *)path, path_length, digest))
+        return RNS_ERROR_CRYPTO;
+    size_t slot = RNS_RUNTIME_MAX_REQUEST_HANDLERS;
+    for (size_t i = 0U; i < RNS_RUNTIME_MAX_REQUEST_HANDLERS; ++i) {
+        rns_runtime_request_handler_t *existing =
+            destination->request_handlers[i];
+        if (existing == NULL && slot == RNS_RUNTIME_MAX_REQUEST_HANDLERS)
+            slot = i;
+        else if (existing != NULL &&
+                 memcmp(existing->path_hash, digest,
+                        RNS_REQUEST_ID_LENGTH) == 0)
+            return RNS_ERROR_INVALID_STATE;
+    }
+    if (slot == RNS_RUNTIME_MAX_REQUEST_HANDLERS) return RNS_ERROR_OVERFLOW;
+    rns_runtime_request_handler_t *handler = calloc(1U, sizeof *handler);
+    if (handler == NULL) return RNS_ERROR_NO_MEMORY;
+    handler->destination = destination;
+    memcpy(handler->path, path, path_length + 1U);
+    memcpy(handler->path_hash, digest, RNS_REQUEST_ID_LENGTH);
+    handler->options = *options;
+    handler->options.max_response_size = response_size;
+    handler->options.allow_identity_hashes = NULL;
+    if (options->allow_identity_count != 0U)
+        memcpy(handler->allow_identity_hashes,
+               options->allow_identity_hashes,
+               options->allow_identity_count * 16U);
+    destination->request_handlers[slot] = handler;
+    *output = handler;
+    return RNS_OK;
+}
+
+const char *rns_runtime_request_handler_path(
+    const rns_runtime_request_handler_t *handler) {
+    return handler != NULL ? handler->path : NULL;
+}
+
+void rns_runtime_request_handler_destroy(
+    rns_runtime_request_handler_t *handler) {
+    if (handler == NULL) return;
+    rns_runtime_destination_t *destination = handler->destination;
+    if (destination != NULL)
+        for (size_t i = 0U; i < RNS_RUNTIME_MAX_REQUEST_HANDLERS; ++i)
+            if (destination->request_handlers[i] == handler) {
+                destination->request_handlers[i] = NULL;
+                break;
+            }
+    free(handler);
 }
 
 rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,

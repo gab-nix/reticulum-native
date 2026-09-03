@@ -20,6 +20,10 @@ typedef struct link_observation {
     bool receipt_delivered;
     size_t identified_count;
     uint8_t identified_public[RNS_IDENTITY_PUBLIC_SIZE];
+    size_t request_handler_calls;
+    size_t request_completed;
+    uint8_t request_response[4096];
+    size_t request_response_length;
 } link_observation_t;
 
 static uint16_t reserve_udp_port(void) {
@@ -99,6 +103,52 @@ static void link_identified(rns_runtime_link_t *link,
     observation->identified_count++;
 }
 
+static rns_status_t request_handled(
+    rns_runtime_request_handler_t *handler, rns_runtime_link_t *link,
+    const rns_request_view_t *request, const rns_identity *remote_identity,
+    uint8_t *response, size_t response_capacity, size_t *response_length,
+    void *context) {
+    link_observation_t *observation = context;
+    assert(link == observation->accepted);
+    assert(remote_identity == rns_runtime_link_remote_identity(link));
+    assert(request->data_msgpack_length == 1U &&
+           request->data_msgpack[0] == 0xc0U);
+    const char *path = rns_runtime_request_handler_path(handler);
+    size_t body_length = strcmp(path, "/small") == 0 ? 5U : 2048U;
+    size_t header_length = body_length <= UINT8_MAX ? 2U : 3U;
+    assert(response_capacity >= header_length + body_length);
+    if (header_length == 2U) {
+        response[0] = 0xc4U;
+        response[1] = (uint8_t)body_length;
+    } else {
+        response[0] = 0xc5U;
+        response[1] = (uint8_t)(body_length >> 8U);
+        response[2] = (uint8_t)body_length;
+    }
+    memset(response + header_length,
+           strcmp(path, "/small") == 0 ? 's' : 'R', body_length);
+    *response_length = header_length + body_length;
+    observation->request_handler_calls++;
+    return RNS_OK;
+}
+
+static void request_completed(rns_request_receipt_t *receipt,
+                              rns_request_state_t state, rns_status_t status,
+                              const uint8_t *response,
+                              size_t response_length, void *context) {
+    link_observation_t *observation = context;
+    assert(receipt != NULL);
+    if (state == RNS_REQUEST_CANCELLED) {
+        assert(status == RNS_OK && response == NULL && response_length == 0U);
+        return;
+    }
+    assert(state == RNS_REQUEST_COMPLETE && status == RNS_OK);
+    assert(response_length <= sizeof observation->request_response);
+    memcpy(observation->request_response, response, response_length);
+    observation->request_response_length = response_length;
+    observation->request_completed++;
+}
+
 int main(void) {
     uint16_t initiator_port = reserve_udp_port();
     uint16_t responder_port = reserve_udp_port();
@@ -136,6 +186,26 @@ int main(void) {
                responder_runtime, destination_hash, &responder_identity,
                &responder_options, inbound_link_accepted, &responder,
                &registration) == RNS_OK);
+    rns_runtime_request_handler_options_t handler_options = {
+        .access = RNS_REQUEST_ALLOW_IDENTIFIED,
+        .max_response_size = 4096U,
+        .callback = request_handled,
+        .callback_context = &responder};
+    rns_runtime_request_handler_t *small_handler = NULL;
+    rns_runtime_request_handler_t *large_handler = NULL;
+    rns_runtime_request_handler_t *blocked_handler = NULL;
+    assert(rns_runtime_destination_register_request_handler(
+               registration, "/small", &handler_options, &small_handler) ==
+           RNS_OK);
+    assert(rns_runtime_destination_register_request_handler(
+               registration, "/large", &handler_options, &large_handler) ==
+           RNS_OK);
+    handler_options.access = RNS_REQUEST_ALLOW_NONE;
+    assert(rns_runtime_destination_register_request_handler(
+               registration, "/blocked", &handler_options,
+               &blocked_handler) == RNS_OK);
+    assert(strcmp(rns_runtime_request_handler_path(small_handler),
+                  "/small") == 0);
 
     /* A malformed request to a registered destination is consumed without
      * allocating a responder link or reaching application packet delivery. */
@@ -204,6 +274,56 @@ int main(void) {
     assert(memcmp(responder.identified_public, initiator_public,
                   sizeof initiator_public) == 0);
 
+    rns_request_options_t request_options = {
+        .timeout_seconds = 2.0,
+        .max_response_size = sizeof initiator.request_response,
+        .callback = request_completed,
+        .callback_context = &initiator};
+    rns_request_receipt_t *request_receipt = NULL;
+    assert(rns_runtime_link_request(outbound, "/small", NULL, 0U,
+                                    &request_options, &request_receipt) ==
+           RNS_OK);
+    for (size_t attempt = 0U; attempt < 1000U &&
+         initiator.request_completed == 0U; ++attempt) {
+        assert(rns_runtime_poll(responder_runtime, 8U, &processed) == RNS_OK);
+        assert(rns_runtime_poll(initiator_runtime, 8U, &processed) == RNS_OK);
+    }
+    assert(responder.request_handler_calls == 1U);
+    assert(initiator.request_response_length == 5U);
+    assert(memcmp(initiator.request_response, "sssss", 5U) == 0);
+    rns_request_receipt_destroy(request_receipt);
+
+    request_receipt = NULL;
+    assert(rns_runtime_link_request(outbound, "/blocked", NULL, 0U,
+                                    &request_options, &request_receipt) ==
+           RNS_OK);
+    for (size_t attempt = 0U; attempt < 8U; ++attempt) {
+        assert(rns_runtime_poll(responder_runtime, 8U, &processed) == RNS_OK);
+        assert(rns_runtime_poll(initiator_runtime, 8U, &processed) == RNS_OK);
+    }
+    assert(responder.request_handler_calls == 1U);
+    assert(initiator.request_completed == 1U);
+    rns_request_receipt_cancel(request_receipt);
+    assert(rns_request_receipt_state(request_receipt) ==
+           RNS_REQUEST_CANCELLED);
+    rns_request_receipt_destroy(request_receipt);
+
+    request_receipt = NULL;
+    assert(rns_runtime_link_request(outbound, "/large", NULL, 0U,
+                                    &request_options, &request_receipt) ==
+           RNS_OK);
+    for (size_t attempt = 0U; attempt < 4000U &&
+         initiator.request_completed == 1U; ++attempt) {
+        assert(rns_runtime_poll(responder_runtime, 8U, &processed) == RNS_OK);
+        assert(rns_runtime_poll(initiator_runtime, 8U, &processed) == RNS_OK);
+    }
+    assert(responder.request_handler_calls == 2U);
+    assert(initiator.request_completed == 2U);
+    assert(initiator.request_response_length == 2048U);
+    for (size_t i = 0U; i < initiator.request_response_length; ++i)
+        assert(initiator.request_response[i] == 'R');
+    rns_request_receipt_destroy(request_receipt);
+
     static const uint8_t message[] = "authenticated link packet";
     assert(rns_runtime_link_send(outbound, 0U, message,
                                  sizeof message - 1U) == RNS_OK);
@@ -261,6 +381,9 @@ int main(void) {
         assert(rns_runtime_poll(responder_runtime, 8U, &processed) == RNS_OK);
     assert(responder.closed_count == 1U);
     rns_runtime_link_destroy(responder.accepted);
+    rns_runtime_request_handler_destroy(blocked_handler);
+    rns_runtime_request_handler_destroy(large_handler);
+    rns_runtime_request_handler_destroy(small_handler);
     rns_runtime_destination_destroy(registration);
     rns_runtime_destroy(responder_runtime);
     rns_runtime_destroy(initiator_runtime);

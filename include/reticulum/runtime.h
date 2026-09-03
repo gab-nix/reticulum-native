@@ -10,6 +10,7 @@
 #include "reticulum/link.h"
 #include "reticulum/node.h"
 #include "reticulum/resource.h"
+#include "reticulum/request.h"
 #include "reticulum/status.h"
 
 #ifdef __cplusplus
@@ -22,12 +23,16 @@ typedef struct rns_runtime_destination rns_runtime_destination_t;
 typedef struct rns_request_receipt rns_request_receipt_t;
 typedef struct rns_packet_receipt rns_packet_receipt_t;
 typedef struct rns_runtime_resource_transfer rns_runtime_resource_transfer_t;
+typedef struct rns_runtime_request_handler rns_runtime_request_handler_t;
 
 #define RNS_RUNTIME_MAX_LINKS 16u
 #define RNS_RUNTIME_MAX_DESTINATIONS 32u
 #define RNS_RUNTIME_MAX_REQUESTS 8u
+#define RNS_RUNTIME_MAX_REQUEST_HANDLERS 16u
+#define RNS_RUNTIME_MAX_REQUEST_ALLOWLIST 32u
 #define RNS_RUNTIME_MAX_PACKET_RECEIPTS 64u
 #define RNS_REQUEST_DEFAULT_MAX_RESPONSE (8u * 1024u * 1024u)
+#define RNS_REQUEST_HANDLER_DEFAULT_MAX_RESPONSE (32u * 1024u)
 /* Resource transfer contexts, advertised by peers that answer with a Resource. */
 #define RNS_LINK_CONTEXT_RESOURCE 0x01u
 #define RNS_LINK_CONTEXT_RESOURCE_ADV 0x02u
@@ -129,6 +134,33 @@ typedef struct rns_request_options {
     rns_request_callback_t callback;
     void *callback_context;
 } rns_request_options_t;
+
+typedef enum rns_request_access {
+    RNS_REQUEST_ALLOW_NONE = 0,
+    RNS_REQUEST_ALLOW_ALL,
+    RNS_REQUEST_ALLOW_IDENTIFIED,
+    RNS_REQUEST_ALLOW_LIST
+} rns_request_access_t;
+
+/* Called synchronously from rns_runtime_poll() for a validated request on an
+ * authenticated active link. request and remote_identity are callback-scoped;
+ * remote_identity is NULL until the initiator identifies. The callback writes
+ * exactly one MessagePack response object to the bounded caller-owned buffer. */
+typedef rns_status_t (*rns_runtime_request_handler_callback_t)(
+    rns_runtime_request_handler_t *handler, rns_runtime_link_t *link,
+    const rns_request_view_t *request, const rns_identity *remote_identity,
+    uint8_t *response_msgpack, size_t response_capacity,
+    size_t *response_length, void *context);
+
+typedef struct rns_runtime_request_handler_options {
+    rns_request_access_t access;
+    size_t max_response_size;
+    /* Contiguous 16-byte identity hashes, copied on registration. */
+    const uint8_t *allow_identity_hashes;
+    size_t allow_identity_count;
+    rns_runtime_request_handler_callback_t callback;
+    void *callback_context;
+} rns_runtime_request_handler_options_t;
 
 typedef enum rns_packet_receipt_state {
     RNS_PACKET_RECEIPT_PENDING = 0,
@@ -269,6 +301,16 @@ rns_status_t rns_runtime_register_link_destination(
 const uint8_t *rns_runtime_destination_hash(
     const rns_runtime_destination_t *destination);
 void rns_runtime_destination_destroy(rns_runtime_destination_t *destination);
+/* Request paths are registered by their upstream-compatible SHA-256 prefix.
+ * The returned handler is destination-owned until explicitly destroyed. */
+rns_status_t rns_runtime_destination_register_request_handler(
+    rns_runtime_destination_t *destination, const char *path,
+    const rns_runtime_request_handler_options_t *options,
+    rns_runtime_request_handler_t **handler);
+const char *rns_runtime_request_handler_path(
+    const rns_runtime_request_handler_t *handler);
+void rns_runtime_request_handler_destroy(
+    rns_runtime_request_handler_t *handler);
 /* Broadcasts an RNS path request. A responding peer will re-announce the
  * destination, allowing callers to resolve its current route and identity. */
 rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,
