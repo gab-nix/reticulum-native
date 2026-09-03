@@ -61,6 +61,13 @@ int main(void) {
     assert(model.messages[TUI_RRC_MAX_MESSAGES - 1u].timestamp_ms ==
            TUI_RRC_MAX_MESSAGES + 1u);
 
+    (void)strcpy(model.motd, "Welcome to the hub");
+    model.room_count = 1u;
+    (void)strcpy(model.rooms[0].name, "lobby");
+    model.rooms[0].joined = true;
+    model.rooms[0].desired = true;
+    model.rooms[0].member_count = 3u;
+
     model.selected = TUI_RRC_ITEM_HUB_ADDRESS;
     tui_rrc_move(&model, -1);
     assert(model.selected == TUI_RRC_ITEM_SEND);

@@ -35,6 +35,15 @@ typedef struct tui_rrc_message {
     char body[RNS_RRC_DEFAULT_MAX_MESSAGE_BYTES + 1u];
 } tui_rrc_message_t;
 
+typedef struct tui_rrc_room {
+    char name[RNS_RRC_DEFAULT_MAX_ROOM_BYTES + 1u];
+    bool desired;
+    bool joined;
+    bool join_pending;
+    bool part_pending;
+    size_t member_count;
+} tui_rrc_room_t;
+
 typedef struct tui_rrc_model {
     rns_rrc_session_t *session;
     rns_rrc_session_info_t info;
@@ -46,6 +55,9 @@ typedef struct tui_rrc_model {
     bool auto_reconnect;
     tui_rrc_message_t messages[TUI_RRC_MAX_MESSAGES];
     size_t message_count;
+    tui_rrc_room_t rooms[RNS_RRC_MAX_TRACKED_ROOMS];
+    size_t room_count;
+    char motd[RNS_RRC_MAX_MOTD_BYTES + 1u];
     tui_rrc_item_t selected;
     char status[TUI_RRC_STATUS_MAX];
 } tui_rrc_model_t;
@@ -65,6 +77,7 @@ bool tui_rrc_join(tui_rrc_model_t *model);
 bool tui_rrc_part(tui_rrc_model_t *model);
 bool tui_rrc_send(tui_rrc_model_t *model);
 void tui_rrc_poll(tui_rrc_model_t *model, uint64_t now_ms);
+void tui_rrc_sync_session(tui_rrc_model_t *model);
 
 /* Pure callback seam used by deterministic app tests. */
 void tui_rrc_apply_envelope(tui_rrc_model_t *model,

@@ -18,6 +18,17 @@ typedef struct cbor_reader {
     size_t items;
 } cbor_reader_t;
 
+typedef struct rrc_room_record {
+    uint8_t name[RNS_RRC_DEFAULT_MAX_ROOM_BYTES];
+    size_t name_length;
+    bool desired;
+    bool joined;
+    bool join_pending;
+    bool part_pending;
+    uint8_t members[RNS_RRC_MAX_TRACKED_MEMBERS][RNS_RRC_SOURCE_SIZE];
+    size_t member_count;
+} rrc_room_record_t;
+
 struct rns_rrc_session {
     rns_rrc_session_options_t options;
     rns_identity local;
@@ -31,6 +42,9 @@ struct rns_rrc_session {
     bool link_active;
     bool link_closed;
     bool welcome_pending;
+    bool rejoin_pending;
+    rrc_room_record_t rooms[RNS_RRC_MAX_TRACKED_ROOMS];
+    size_t room_count;
 };
 
 static rns_status_t default_wallclock(uint64_t *milliseconds, void *context) {
@@ -242,6 +256,84 @@ static void transition(rns_rrc_session_t *session,
                                         session->options.callback_context);
 }
 
+static rrc_room_record_t *find_room(rns_rrc_session_t *session,
+                                    const uint8_t *name, size_t name_length) {
+    for (size_t i = 0u; i < session->room_count; ++i)
+        if (session->rooms[i].name_length == name_length &&
+            memcmp(session->rooms[i].name, name, name_length) == 0)
+            return &session->rooms[i];
+    return NULL;
+}
+
+static rrc_room_record_t *add_room(rns_rrc_session_t *session,
+                                   const uint8_t *name, size_t name_length) {
+    rrc_room_record_t *room = find_room(session, name, name_length);
+    if (room != NULL) return room;
+    if (session->room_count >= RNS_RRC_MAX_TRACKED_ROOMS ||
+        session->room_count >= session->info.welcome.max_rooms)
+        return NULL;
+    room = &session->rooms[session->room_count++];
+    memset(room, 0, sizeof *room);
+    memcpy(room->name, name, name_length);
+    room->name_length = name_length;
+    return room;
+}
+
+static void remove_room(rns_rrc_session_t *session, rrc_room_record_t *room) {
+    size_t index = (size_t)(room - session->rooms);
+    if (index >= session->room_count) return;
+    if (index + 1u < session->room_count)
+        memmove(&session->rooms[index], &session->rooms[index + 1u],
+                (session->room_count - index - 1u) * sizeof session->rooms[0]);
+    session->room_count--;
+    memset(&session->rooms[session->room_count], 0,
+           sizeof session->rooms[0]);
+}
+
+static void clear_transient_room_state(rns_rrc_session_t *session) {
+    session->info.motd_length = 0u;
+    memset(session->info.motd, 0, sizeof session->info.motd);
+    for (size_t i = 0u; i < session->room_count;) {
+        if (!session->rooms[i].desired) {
+            remove_room(session, &session->rooms[i]);
+            continue;
+        }
+        session->rooms[i].joined = false;
+        session->rooms[i].join_pending = false;
+        session->rooms[i].part_pending = false;
+        session->rooms[i].member_count = 0u;
+        memset(session->rooms[i].members, 0,
+               sizeof session->rooms[i].members);
+        ++i;
+    }
+}
+
+static void room_add_member(rrc_room_record_t *room,
+                            const uint8_t member[RNS_RRC_SOURCE_SIZE]) {
+    for (size_t i = 0u; i < room->member_count; ++i)
+        if (memcmp(room->members[i], member, RNS_RRC_SOURCE_SIZE) == 0)
+            return;
+    if (room->member_count < RNS_RRC_MAX_TRACKED_MEMBERS) {
+        memcpy(room->members[room->member_count], member,
+               RNS_RRC_SOURCE_SIZE);
+        room->member_count++;
+    }
+}
+
+static void room_remove_member(rrc_room_record_t *room,
+                               const uint8_t member[RNS_RRC_SOURCE_SIZE]) {
+    for (size_t i = 0u; i < room->member_count; ++i) {
+        if (memcmp(room->members[i], member, RNS_RRC_SOURCE_SIZE) != 0)
+            continue;
+        if (i + 1u < room->member_count)
+            memmove(&room->members[i], &room->members[i + 1u],
+                    (room->member_count - i - 1u) * RNS_RRC_SOURCE_SIZE);
+        room->member_count--;
+        memset(room->members[room->member_count], 0, RNS_RRC_SOURCE_SIZE);
+        return;
+    }
+}
+
 static void link_state_changed(rns_runtime_link_t *link, rns_link_state state,
                                rns_status_t reason, void *context) {
     rns_rrc_session_t *session = context;
@@ -290,6 +382,75 @@ static rns_status_t send_envelope(rns_rrc_session_t *session,
     return status;
 }
 
+static rns_status_t send_join_record(rns_rrc_session_t *session,
+                                     rrc_room_record_t *room,
+                                     const uint8_t *key, size_t key_length) {
+    uint8_t body[258u];
+    size_t body_length = 0u;
+    rns_status_t status = RNS_OK;
+    if (key_length != 0u)
+        status = rns_rrc_cbor_text(key, key_length, body, sizeof body,
+                                   &body_length);
+    if (status == RNS_OK)
+        status = send_envelope(
+            session, RNS_RRC_JOIN,
+            (rns_rrc_slice_t){room->name, room->name_length},
+            (rns_rrc_slice_t){body_length != 0u ? body : NULL, body_length},
+            true, NULL);
+    if (status == RNS_OK) room->join_pending = true;
+    return status;
+}
+
+static rns_status_t normalized_room(const rns_rrc_session_t *session,
+                                    const uint8_t *input, size_t input_length,
+                                    uint8_t output[RNS_RRC_MAX_ROOM_BYTES],
+                                    size_t *output_length);
+
+static void apply_room_event(rns_rrc_session_t *session,
+                             const rns_rrc_envelope_t *envelope) {
+    uint8_t normalized[RNS_RRC_DEFAULT_MAX_ROOM_BYTES];
+    size_t normalized_length = 0u;
+    if (normalized_room(session, envelope->room.data, envelope->room.length,
+                        normalized, &normalized_length) != RNS_OK)
+        return;
+    rrc_room_record_t *room = find_room(session, normalized,
+                                        normalized_length);
+    if (envelope->type == RNS_RRC_ERROR) {
+        if (room == NULL) return;
+        bool failed_join = room->join_pending;
+        room->join_pending = false;
+        room->part_pending = false;
+        if (failed_join || !room->desired) remove_room(session, room);
+        return;
+    }
+    uint8_t members[RNS_RRC_MAX_TRACKED_MEMBERS][RNS_RRC_SOURCE_SIZE];
+    size_t member_count = 0u;
+    if (envelope->body_cbor.length != 0u &&
+        rns_rrc_member_list_parse(envelope->body_cbor.data,
+                                  envelope->body_cbor.length, members,
+                                  RNS_RRC_MAX_TRACKED_MEMBERS,
+                                  &member_count) != RNS_OK)
+        return;
+    if (envelope->type == RNS_RRC_JOINED) {
+        if (room == NULL)
+            room = add_room(session, normalized, normalized_length);
+        if (room == NULL) return;
+        room->desired = true;
+        room->joined = true;
+        room->join_pending = false;
+        for (size_t i = 0u; i < member_count; ++i)
+            room_add_member(room, members[i]);
+        room_add_member(room, session->local.hash);
+    } else if (envelope->type == RNS_RRC_PARTED && room != NULL) {
+        if (room->part_pending) {
+            remove_room(session, room);
+            return;
+        }
+        for (size_t i = 0u; i < member_count; ++i)
+            room_remove_member(room, members[i]);
+    }
+}
+
 static void packet_received(rns_runtime_link_t *link, uint8_t context,
                             const uint8_t *plaintext, size_t plaintext_length,
                             void *opaque) {
@@ -306,6 +467,21 @@ static void packet_received(rns_runtime_link_t *link, uint8_t context,
             welcome_defaults(&parsed);
         session->info.welcome = parsed;
         session->welcome_pending = true;
+        session->rejoin_pending = true;
+    } else if (envelope.type == RNS_RRC_JOINED ||
+               envelope.type == RNS_RRC_PARTED ||
+               envelope.type == RNS_RRC_ERROR) {
+        apply_room_event(session, &envelope);
+    } else if (envelope.type == RNS_RRC_NOTICE &&
+               envelope.room.length == 0u &&
+               envelope.body_cbor.length != 0u) {
+        rns_rrc_slice_t text = {0};
+        if (rns_rrc_cbor_text_parse(envelope.body_cbor.data,
+                                    envelope.body_cbor.length, &text) == RNS_OK &&
+            text.length <= sizeof session->info.motd) {
+            memcpy(session->info.motd, text.data, text.length);
+            session->info.motd_length = text.length;
+        }
     } else if (envelope.type == RNS_RRC_PING &&
                envelope.body_cbor.length != 0u) {
         (void)send_envelope(session, RNS_RRC_PONG,
@@ -322,6 +498,8 @@ static void cleanup_link(rns_rrc_session_t *session) {
     session->link = NULL;
     session->link_active = false;
     session->link_closed = false;
+    session->rejoin_pending = false;
+    clear_transient_room_state(session);
     if (link != NULL) rns_runtime_link_destroy(link);
 }
 
@@ -504,6 +682,13 @@ rns_status_t rns_rrc_session_poll(rns_rrc_session_t *session,
         session->info.reconnect_attempts = 0u;
         session->info.next_action_ms = 0u;
         transition(session, RNS_RRC_SESSION_CONNECTED, RNS_OK);
+        if (session->rejoin_pending) {
+            session->rejoin_pending = false;
+            for (size_t i = 0u; i < session->room_count; ++i)
+                if (session->rooms[i].desired)
+                    (void)send_join_record(session, &session->rooms[i],
+                                           NULL, 0u);
+        }
     } else if (session->info.state == RNS_RRC_SESSION_HELLO &&
                now_ms >= session->info.next_action_ms) {
         if (session->info.hello_attempts >=
@@ -534,6 +719,39 @@ void rns_rrc_session_disconnect(rns_rrc_session_t *session) {
 void rns_rrc_session_get_info(const rns_rrc_session_t *session,
                               rns_rrc_session_info_t *info) {
     if (session != NULL && info != NULL) *info = session->info;
+}
+
+size_t rns_rrc_session_room_count(const rns_rrc_session_t *session) {
+    return session != NULL ? session->room_count : 0u;
+}
+
+rns_status_t rns_rrc_session_room_snapshot(
+    const rns_rrc_session_t *session, size_t index,
+    rns_rrc_room_info_t *room) {
+    if (session == NULL || room == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (index >= session->room_count) return RNS_ERROR_NOT_FOUND;
+    const rrc_room_record_t *source = &session->rooms[index];
+    memset(room, 0, sizeof *room);
+    memcpy(room->name, source->name, source->name_length);
+    room->name_length = source->name_length;
+    room->desired = source->desired;
+    room->joined = source->joined;
+    room->join_pending = source->join_pending;
+    room->part_pending = source->part_pending;
+    room->member_count = source->member_count;
+    return RNS_OK;
+}
+
+rns_status_t rns_rrc_session_member_snapshot(
+    const rns_rrc_session_t *session, size_t room_index, size_t member_index,
+    uint8_t member[RNS_RRC_SOURCE_SIZE]) {
+    if (session == NULL || member == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (room_index >= session->room_count ||
+        member_index >= session->rooms[room_index].member_count)
+        return RNS_ERROR_NOT_FOUND;
+    memcpy(member, session->rooms[room_index].members[member_index],
+           RNS_RRC_SOURCE_SIZE);
+    return RNS_OK;
 }
 
 static rns_status_t normalized_room(const rns_rrc_session_t *session,
@@ -576,18 +794,18 @@ rns_status_t rns_rrc_session_join(rns_rrc_session_t *session,
         return RNS_ERROR_INVALID_ARGUMENT;
     if (session->info.state != RNS_RRC_SESSION_CONNECTED)
         return RNS_ERROR_INVALID_STATE;
-    uint8_t normalized[RNS_RRC_MAX_ROOM_BYTES], body[258u];
-    size_t normalized_length = 0u, body_length = 0u;
+    uint8_t normalized[RNS_RRC_MAX_ROOM_BYTES];
+    size_t normalized_length = 0u;
     rns_status_t status = normalized_room(session, room, room_length,
                                           normalized, &normalized_length);
-    if (status == RNS_OK && key_length != 0u)
-        status = rns_rrc_cbor_text(key, key_length, body, sizeof body,
-                                   &body_length);
     if (status != RNS_OK) return status;
-    return send_envelope(
-        session, RNS_RRC_JOIN,
-        (rns_rrc_slice_t){normalized, normalized_length},
-        (rns_rrc_slice_t){body_length ? body : NULL, body_length}, true, NULL);
+    rrc_room_record_t *record = add_room(session, normalized,
+                                         normalized_length);
+    if (record == NULL) return RNS_ERROR_OVERFLOW;
+    status = send_join_record(session, record, key, key_length);
+    if (status == RNS_OK) record->desired = true;
+    else if (!record->desired && !record->joined) remove_room(session, record);
+    return status;
 }
 
 rns_status_t rns_rrc_session_part(rns_rrc_session_t *session,
@@ -600,10 +818,17 @@ rns_status_t rns_rrc_session_part(rns_rrc_session_t *session,
     rns_status_t status = normalized_room(session, room, room_length,
                                           normalized, &normalized_length);
     if (status != RNS_OK) return status;
-    return send_envelope(
+    rrc_room_record_t *record = find_room(session, normalized,
+                                          normalized_length);
+    status = send_envelope(
         session, RNS_RRC_PART,
         (rns_rrc_slice_t){normalized, normalized_length},
         (rns_rrc_slice_t){0}, false, NULL);
+    if (status == RNS_OK && record != NULL) {
+        record->desired = false;
+        record->part_pending = true;
+    }
+    return status;
 }
 
 rns_status_t rns_rrc_session_send_message(rns_rrc_session_t *session,

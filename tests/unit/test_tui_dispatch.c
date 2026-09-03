@@ -403,6 +403,12 @@ static void test_rrc_headless_dump(void) {
         .body_cbor = {body, sizeof body},
         .nick = {(const uint8_t *)"Rei", 3u}};
     tui_rrc_apply_envelope(&state->rrc, &envelope);
+    (void)strcpy(state->rrc.motd, "Welcome to the pinned hub");
+    state->rrc.room_count = 1u;
+    (void)strcpy(state->rrc.rooms[0].name, "lobby");
+    state->rrc.rooms[0].desired = true;
+    state->rrc.rooms[0].joined = true;
+    state->rrc.rooms[0].member_count = 2u;
     FILE *dump = tmpfile();
     assert(dump != NULL);
     assert(tui_render_dump(state, dump) == 0);
@@ -414,6 +420,8 @@ static void test_rrc_headless_dump(void) {
     assert(strstr(output, "State: disconnected") != NULL);
     assert(strstr(output, "Auto reconnect: on") != NULL);
     assert(strstr(output, "#lobby <Rei> hello") != NULL);
+    assert(strstr(output, "MOTD: Welcome to the pinned hub") != NULL);
+    assert(strstr(output, "#lobby joined members=2") != NULL);
     assert(strstr(output, "Resource envelopes") != NULL);
     assert(fclose(dump) == 0);
     assert(tui_render_rrc_first_item(TUI_RRC_ITEM_HUB_ADDRESS, 3u) == 0u);

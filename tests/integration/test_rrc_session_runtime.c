@@ -106,12 +106,23 @@ static void hub_packet(rns_runtime_link_t *link, uint8_t context,
             const nomadnet_rrc_fixture *welcome = &nomadnet_rrc_fixtures[1];
             assert(rns_runtime_link_send(link, 0u, welcome->wire,
                                          welcome->wire_len) == RNS_OK);
+            const nomadnet_rrc_fixture *motd = &nomadnet_rrc_fixtures[7];
+            assert(rns_runtime_link_send(link, 0u, motd->wire,
+                                         motd->wire_len) == RNS_OK);
         }
     } else if (envelope.type == RNS_RRC_JOIN) {
         assert(envelope.room.length == 5u);
         assert(memcmp(envelope.room.data, "lobby", 5u) == 0);
         hub->join++;
-    } else if (envelope.type == RNS_RRC_PART) hub->part++;
+        const nomadnet_rrc_fixture *joined = &nomadnet_rrc_fixtures[3];
+        assert(rns_runtime_link_send(link, 0u, joined->wire,
+                                     joined->wire_len) == RNS_OK);
+    } else if (envelope.type == RNS_RRC_PART) {
+        hub->part++;
+        const nomadnet_rrc_fixture *parted = &nomadnet_rrc_fixtures[5];
+        assert(rns_runtime_link_send(link, 0u, parted->wire,
+                                     parted->wire_len) == RNS_OK);
+    }
     else if (envelope.type == RNS_RRC_MESSAGE) hub->message++;
     else if (envelope.type == RNS_RRC_PING) hub->ping++;
     else if (envelope.type == RNS_RRC_PONG) hub->pong++;
@@ -210,26 +221,41 @@ int main(void) {
     rns_rrc_session_get_info(session, &info);
     assert(info.state == RNS_RRC_SESSION_CONNECTED);
     assert(hub.accepted == 1u && hub.identified == 1u && hub.hello == 1u);
-    assert(client.envelopes == 1u);
+    assert(client.envelopes >= 2u);
     assert(info.welcome.resource_envelopes);
     assert(info.welcome.max_message_bytes == 350u);
+    assert(info.motd_length != 0u);
+    assert(memcmp(info.motd, "Registered public rooms", 23u) == 0);
 
     assert(rns_rrc_session_join(session, (const uint8_t *)" LOBBY ", 7u,
                                 (const uint8_t *)"secret", 6u) == RNS_OK);
+    rns_rrc_room_info_t room_info;
+    assert(rns_rrc_session_room_count(session) == 1u);
+    assert(rns_rrc_session_room_snapshot(session, 0u, &room_info) == RNS_OK);
+    assert(room_info.desired && room_info.join_pending && !room_info.joined);
+    for (size_t attempt = 0u; attempt < 1000u; ++attempt) {
+        assert(rns_runtime_poll(hub_runtime, 8u, &processed) == RNS_OK);
+        assert(rns_runtime_poll(client_runtime, 8u, &processed) == RNS_OK);
+        assert(rns_rrc_session_room_snapshot(session, 0u, &room_info) ==
+               RNS_OK);
+        if (room_info.joined) break;
+    }
+    assert(room_info.joined && !room_info.join_pending);
+    assert(room_info.member_count == 3u);
+    uint8_t member[RNS_RRC_SOURCE_SIZE];
+    assert(rns_rrc_session_member_snapshot(session, 0u, 2u, member) ==
+           RNS_OK);
+    assert(memcmp(member, client_identity.hash, sizeof member) == 0);
     uint8_t message_id[8];
     assert(rns_rrc_session_send_message(
                session, (const uint8_t *)"lobby", 5u,
                (const uint8_t *)"hello", 5u, message_id) == RNS_OK);
     uint8_t nonce[8];
     assert(rns_rrc_session_ping(session, nonce) == RNS_OK);
-    assert(rns_rrc_session_part(session, (const uint8_t *)"lobby", 5u) ==
-           RNS_OK);
     for (size_t attempt = 0u; attempt < 1000u &&
-         (hub.join == 0u || hub.message == 0u || hub.ping == 0u ||
-          hub.part == 0u); ++attempt)
+         (hub.join == 0u || hub.message == 0u || hub.ping == 0u); ++attempt)
         assert(rns_runtime_poll(hub_runtime, 8u, &processed) == RNS_OK);
-    assert(hub.join == 1u && hub.message == 1u && hub.ping == 1u &&
-           hub.part == 1u);
+    assert(hub.join == 1u && hub.message == 1u && hub.ping == 1u);
 
     /* A hub PING is answered with an exact PONG body. */
     const nomadnet_rrc_fixture *ping = &nomadnet_rrc_fixtures[8];
@@ -241,7 +267,7 @@ int main(void) {
     }
     assert(hub.pong == 1u);
 
-    /* Clock-provider failures are surfaced without emitting an envelope. */
+    /* Clock-provider failures are surfaced without changing desired rooms. */
     clock.fail = true;
     assert(rns_rrc_session_part(session, (const uint8_t *)"lobby", 5u) ==
            RNS_ERROR_IO);
@@ -258,6 +284,35 @@ int main(void) {
     }
     assert(info.state == RNS_RRC_SESSION_RECONNECT_WAIT);
     assert(info.reconnect_attempts == 1u && info.next_action_ms == 5000u);
+    assert(rns_rrc_session_room_snapshot(session, 0u, &room_info) == RNS_OK);
+    assert(room_info.desired && !room_info.joined &&
+           room_info.member_count == 0u);
+
+    /* A successful reconnect restores every desired room after WELCOME. */
+    assert(rns_rrc_session_poll(session, 5000u) == RNS_OK);
+    for (size_t attempt = 0u; attempt < 2000u; ++attempt) {
+        assert(rns_runtime_poll(client_runtime, 8u, &processed) == RNS_OK);
+        assert(rns_runtime_poll(hub_runtime, 8u, &processed) == RNS_OK);
+        assert(rns_rrc_session_poll(session, 5000u + attempt) == RNS_OK);
+        rns_rrc_session_get_info(session, &info);
+        assert(rns_rrc_session_room_snapshot(session, 0u, &room_info) ==
+               RNS_OK);
+        if (info.state == RNS_RRC_SESSION_CONNECTED && hub.join >= 2u &&
+            room_info.joined)
+            break;
+    }
+    assert(info.state == RNS_RRC_SESSION_CONNECTED && hub.join == 2u);
+    assert(rns_rrc_session_room_snapshot(session, 0u, &room_info) == RNS_OK);
+    assert(room_info.joined && room_info.desired);
+
+    assert(rns_rrc_session_part(session, (const uint8_t *)"lobby", 5u) ==
+           RNS_OK);
+    for (size_t attempt = 0u; attempt < 1000u &&
+         rns_rrc_session_room_count(session) != 0u; ++attempt) {
+        assert(rns_runtime_poll(hub_runtime, 8u, &processed) == RNS_OK);
+        assert(rns_runtime_poll(client_runtime, 8u, &processed) == RNS_OK);
+    }
+    assert(hub.part == 1u && rns_rrc_session_room_count(session) == 0u);
     rns_rrc_session_disconnect(session);
     rns_rrc_session_get_info(session, &info);
     assert(info.state == RNS_RRC_SESSION_DISCONNECTED);

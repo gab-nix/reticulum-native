@@ -316,9 +316,26 @@ static void draw_rrc(const tui_state_t *state, const tui_layout_t *layout) {
             state->rrc.info.welcome.resource_envelopes ? "advertised" : "no");
         clipped(stdscr, row++, 2, layout->columns - 4, caps);
     }
+    if (state->rrc.motd[0] != '\0' && row < layout->hint_row - 1) {
+        char motd[448];
+        (void)snprintf(motd, sizeof motd, "MOTD: %s", state->rrc.motd);
+        clipped(stdscr, row++, 2, layout->columns - 4, motd);
+    }
+    for (size_t i = 0u; i < state->rrc.room_count &&
+         row < layout->hint_row - 1; ++i) {
+        const tui_rrc_room_t *room = &state->rrc.rooms[i];
+        const char *room_state = room->part_pending ? "parting"
+                                 : room->join_pending ? "joining"
+                                 : room->joined ? "joined" : "saved";
+        char line[448];
+        (void)snprintf(line, sizeof line, "#%s  %s  %zu member%s",
+                       room->name, room_state, room->member_count,
+                       room->member_count == 1u ? "" : "s");
+        clipped(stdscr, row++, 2, layout->columns - 4, line);
+    }
     if (row < layout->hint_row - 1)
         clipped(stdscr, row++, 2, layout->columns - 4,
-            "Basic session only: room/member history and Resource envelopes are unavailable.");
+            "Bounded live room state; persistent history and Resource envelopes are unavailable.");
     size_t shown = state->rrc.message_count;
     size_t available = row < layout->hint_row ? (size_t)(layout->hint_row - row) : 0u;
     if (shown > available) shown = available;
@@ -1378,6 +1395,17 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
                 state->rrc.info.welcome.max_rooms,
                 state->rrc.info.welcome.rate_per_minute,
                 state->rrc.info.welcome.resource_envelopes ? "advertised" : "no");
+        if (state->rrc.motd[0] != '\0')
+            (void)fprintf(output, "MOTD: %s\n", state->rrc.motd);
+        (void)fprintf(output, "Rooms: %zu\n", state->rrc.room_count);
+        for (size_t i = 0u; i < state->rrc.room_count; ++i) {
+            const tui_rrc_room_t *room = &state->rrc.rooms[i];
+            const char *room_state = room->part_pending ? "parting"
+                                     : room->join_pending ? "joining"
+                                     : room->joined ? "joined" : "saved";
+            (void)fprintf(output, "#%s %s members=%zu\n", room->name,
+                          room_state, room->member_count);
+        }
         for (size_t i = 0u; i < state->rrc.message_count; ++i)
             (void)fprintf(output, "#%s <%s> %s\n",
                 state->rrc.messages[i].room[0] != '\0'
@@ -1386,7 +1414,7 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
                     ? state->rrc.messages[i].nick : "unknown",
                 state->rrc.messages[i].body);
         (void)fprintf(output,
-            "Missing: persistent room/member history and Resource envelopes\nStatus: %s\n",
+            "Missing: persistent message history and Resource envelopes\nStatus: %s\n",
             state->rrc.status);
         return ferror(output) ? -1 : 0;
     }

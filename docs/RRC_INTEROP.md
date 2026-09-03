@@ -32,6 +32,13 @@ continues to use monotonic time for local deadlines and retry scheduling. Its
 wall-clock provider is injectable for deterministic and embedded runtimes; the
 POSIX HAL clock is only the default when no provider is supplied.
 
+The native session also maintains a bounded room/member view from JOINED and
+PARTED envelopes, retains desired rooms across an unexpected link closure and
+reissues their JOIN only after the next authenticated WELCOME. Roomless NOTICE
+text is retained as the current MOTD. These additions currently have pinned
+fixture and deterministic C-to-C runtime evidence; they were not added to the
+recorded Python interoperability result and are not claimed as verified.
+
 The committed privacy-safe result is
 `tests/fixtures/nomadnet_rrc_udp_live.provenance.json`. It contains source and
 binary fingerprints, public message IDs, boolean assertions, upstream pins,
@@ -66,6 +73,7 @@ identities, configuration, and storage in a temporary directory.
 
 ## Remaining gates
 
-External `rrcd` interoperability, Resource envelopes, reconnect behavior,
-transport relays, TCP, room/member/history workflows, rate enforcement, and
-hosted hub operation remain unverified.
+External `rrcd` interoperability, Resource envelopes, reconnect/rejoin against
+Python, transport relays, TCP, persistent message history, room-list and WHO
+commands, member nick resolution, rate enforcement, and hosted hub operation
+remain unverified.

@@ -30,6 +30,12 @@ rns_status_t rns_rrc_cbor_text(const uint8_t *text,size_t text_length,
  * object. Trailing bytes, indefinite lengths and invalid UTF-8 are rejected. */
 rns_status_t rns_rrc_cbor_text_parse(const uint8_t *input,
  size_t input_length,rns_rrc_slice_t *text);
+/* Parses the canonical JOINED/PARTED body: a definite CBOR array containing
+ * only 16-byte identity hashes. The caller owns the flat output buffer. */
+rns_status_t rns_rrc_member_list_parse(
+    const uint8_t *input, size_t input_length,
+    uint8_t (*members)[RNS_RRC_SOURCE_SIZE], size_t capacity,
+    size_t *member_count);
 #ifdef __cplusplus
 }
 #endif

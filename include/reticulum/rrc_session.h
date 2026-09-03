@@ -20,6 +20,9 @@ extern "C" {
 #define RNS_RRC_DEFAULT_RATE_PER_MINUTE 240u
 #define RNS_RRC_MAX_HUB_NAME_BYTES 255u
 #define RNS_RRC_MAX_VERSION_BYTES 63u
+#define RNS_RRC_MAX_TRACKED_ROOMS 32u
+#define RNS_RRC_MAX_TRACKED_MEMBERS 128u
+#define RNS_RRC_MAX_MOTD_BYTES 350u
 
 typedef struct rns_rrc_session rns_rrc_session_t;
 
@@ -53,7 +56,19 @@ typedef struct rns_rrc_session_info {
     size_t reconnect_attempts;
     uint64_t next_action_ms;
     rns_rrc_welcome_t welcome;
+    uint8_t motd[RNS_RRC_MAX_MOTD_BYTES];
+    size_t motd_length;
 } rns_rrc_session_info_t;
+
+typedef struct rns_rrc_room_info {
+    uint8_t name[RNS_RRC_DEFAULT_MAX_ROOM_BYTES];
+    size_t name_length;
+    bool desired;
+    bool joined;
+    bool join_pending;
+    bool part_pending;
+    size_t member_count;
+} rns_rrc_room_info_t;
 
 typedef void (*rns_rrc_session_state_callback_t)(
     rns_rrc_session_t *session, const rns_rrc_session_info_t *info,
@@ -102,6 +117,15 @@ rns_status_t rns_rrc_session_poll(rns_rrc_session_t *session,
 void rns_rrc_session_disconnect(rns_rrc_session_t *session);
 void rns_rrc_session_get_info(const rns_rrc_session_t *session,
                               rns_rrc_session_info_t *info);
+/* Returns bounded snapshots in stable insertion order. Entries remain owned
+ * by the session; these APIs copy all returned state into caller storage. */
+size_t rns_rrc_session_room_count(const rns_rrc_session_t *session);
+rns_status_t rns_rrc_session_room_snapshot(
+    const rns_rrc_session_t *session, size_t index,
+    rns_rrc_room_info_t *room);
+rns_status_t rns_rrc_session_member_snapshot(
+    const rns_rrc_session_t *session, size_t room_index, size_t member_index,
+    uint8_t member[RNS_RRC_SOURCE_SIZE]);
 
 rns_status_t rns_rrc_session_join(rns_rrc_session_t *session,
                                   const uint8_t *room, size_t room_length,

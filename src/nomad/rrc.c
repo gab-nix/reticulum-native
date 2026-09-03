@@ -73,3 +73,29 @@ rns_status_t rns_rrc_cbor_text_parse(const uint8_t *input,
     *text = parsed;
     return RNS_OK;
 }
+
+rns_status_t rns_rrc_member_list_parse(
+    const uint8_t *input, size_t input_length,
+    uint8_t (*members)[RNS_RRC_SOURCE_SIZE], size_t capacity,
+    size_t *member_count) {
+    if (input == NULL || input_length == 0u || member_count == NULL ||
+        (capacity != 0u && members == NULL) ||
+        input_length > RNS_RRC_MAX_ENVELOPE_SIZE)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    reader_t reader = {input, input + input_length, 0u};
+    uint8_t major = 0u;
+    uint64_t count = 0u;
+    if (!head(&reader, &major, &count) || major != 4u)
+        return RNS_ERROR_PROTOCOL;
+    if (count > capacity) return RNS_ERROR_OVERFLOW;
+    for (uint64_t i = 0u; i < count; ++i) {
+        rns_rrc_slice_t value = {0};
+        if (!stringv(&reader, 2u, &value) ||
+            value.length != RNS_RRC_SOURCE_SIZE)
+            return RNS_ERROR_PROTOCOL;
+        memcpy(members[i], value.data, RNS_RRC_SOURCE_SIZE);
+    }
+    if (reader.p != reader.end) return RNS_ERROR_PROTOCOL;
+    *member_count = (size_t)count;
+    return RNS_OK;
+}

@@ -172,6 +172,32 @@ static void envelope_callback(rns_rrc_session_t *session,
                               void *opaque) {
     (void)session;
     tui_rrc_apply_envelope(opaque, envelope);
+    tui_rrc_sync_session(opaque);
+}
+
+void tui_rrc_sync_session(tui_rrc_model_t *model) {
+    if (model == NULL || model->session == NULL) return;
+    rns_rrc_session_get_info(model->session, &model->info);
+    (void)tui_text_sanitize(model->info.motd, model->info.motd_length,
+                            model->motd, sizeof model->motd);
+    size_t count = rns_rrc_session_room_count(model->session);
+    if (count > RNS_RRC_MAX_TRACKED_ROOMS)
+        count = RNS_RRC_MAX_TRACKED_ROOMS;
+    memset(model->rooms, 0, sizeof model->rooms);
+    model->room_count = 0u;
+    for (size_t i = 0u; i < count; ++i) {
+        rns_rrc_room_info_t room;
+        if (rns_rrc_session_room_snapshot(model->session, i, &room) != RNS_OK)
+            continue;
+        tui_rrc_room_t *target = &model->rooms[model->room_count++];
+        (void)tui_text_sanitize(room.name, room.name_length, target->name,
+                                sizeof target->name);
+        target->desired = room.desired;
+        target->joined = room.joined;
+        target->join_pending = room.join_pending;
+        target->part_pending = room.part_pending;
+        target->member_count = room.member_count;
+    }
 }
 
 bool tui_rrc_connect_toggle(tui_rrc_model_t *model, rns_runtime_t *runtime,
@@ -239,7 +265,8 @@ bool tui_rrc_join(tui_rrc_model_t *model) {
                        "Join failed: %s", rns_status_string(status));
         return false;
     }
-    set_status(model, "Join request sent; room tracking is not implemented yet");
+    tui_rrc_sync_session(model);
+    set_status(model, "Join request sent; waiting for hub acknowledgement");
     return true;
 }
 
@@ -252,7 +279,8 @@ bool tui_rrc_part(tui_rrc_model_t *model) {
                        "Part failed: %s", rns_status_string(status));
         return false;
     }
-    set_status(model, "Part request sent; room tracking is not implemented yet");
+    tui_rrc_sync_session(model);
+    set_status(model, "Part request sent; waiting for hub acknowledgement");
     return true;
 }
 
@@ -275,7 +303,7 @@ bool tui_rrc_send(tui_rrc_model_t *model) {
 void tui_rrc_poll(tui_rrc_model_t *model, uint64_t now_ms) {
     if (model == NULL || model->session == NULL) return;
     rns_status_t status = rns_rrc_session_poll(model->session, now_ms);
-    rns_rrc_session_get_info(model->session, &model->info);
+    tui_rrc_sync_session(model);
     if (status != RNS_OK && model->info.state != RNS_RRC_SESSION_FAILED)
         (void)snprintf(model->status, sizeof model->status,
                        "RRC poll failed: %s", rns_status_string(status));
