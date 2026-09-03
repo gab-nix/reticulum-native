@@ -37,7 +37,7 @@ static void report_event(lxmf_router_t *router,
 
 static lxmf_status_t receive_representation(
     lxmf_router_t *router, const uint8_t *packed, size_t packed_length,
-    lxmf_delivery_method_t method);
+    lxmf_delivery_method_t method, bool exempt_stamp, bool *inserted_out);
 static void direct_link_state_changed(rns_runtime_link_t *link,
                                       rns_link_state state,
                                       rns_status_t reason, void *context);
@@ -749,7 +749,8 @@ static void direct_link_packet_received(rns_runtime_link_t *link,
     lxmf_router_t *router = context;
     if (router == NULL || packet_context != 0U) return;
     lxmf_status_t status = receive_representation(
-        router, plaintext, plaintext_length, LXMF_DELIVERY_METHOD_DIRECT);
+        router, plaintext, plaintext_length, LXMF_DELIVERY_METHOD_DIRECT,
+        false, NULL);
     if (status == LXMF_OK)
         (void)rns_runtime_link_prove_current_packet(link);
 }
@@ -780,7 +781,7 @@ static void direct_resource_received(
         data_length == 0U)
         return;
     (void)receive_representation(router, data, data_length,
-                                 LXMF_DELIVERY_METHOD_DIRECT);
+                                 LXMF_DELIVERY_METHOD_DIRECT, false, NULL);
 }
 
 static void direct_link_accepted(rns_runtime_destination_t *destination,
@@ -1566,12 +1567,151 @@ lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
         return LXMF_ERR_BOUNDS;
 
     return receive_representation(router, plaintext, plaintext_length,
-                                  LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
+                                  LXMF_DELIVERY_METHOD_OPPORTUNISTIC, false,
+                                  NULL);
+}
+
+static bool paper_transient_seen(
+    const lxmf_router_t *router,
+    const uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH]) {
+    for (size_t i = 0u; i < router->paper_transient_count; ++i)
+        if (memcmp(router->paper_transient_ids[i], transient_id,
+                   LXMF_MESSAGE_ID_LENGTH) == 0)
+            return true;
+    return false;
+}
+
+static void remember_paper_transient(
+    lxmf_router_t *router,
+    const uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH]) {
+    size_t slot;
+    if (router->paper_transient_count < LXMF_ROUTER_MAX_PAPER_TRANSIENTS) {
+        slot = router->paper_transient_count++;
+    } else {
+        slot = router->next_paper_transient;
+        router->next_paper_transient =
+            (router->next_paper_transient + 1u) %
+            LXMF_ROUTER_MAX_PAPER_TRANSIENTS;
+    }
+    memcpy(router->paper_transient_ids[slot], transient_id,
+           LXMF_MESSAGE_ID_LENGTH);
+}
+
+static lxmf_status_t paper_ratchets(
+    const lxmf_router_t *router, const uint8_t *supplied, size_t supplied_count,
+    const uint8_t **effective, size_t *effective_count, uint8_t **owned) {
+    *effective = supplied;
+    *effective_count = supplied_count;
+    *owned = NULL;
+    if (supplied_count > RNS_RATCHET_STORE_MAX_RETAINED ||
+        (supplied_count != 0u && supplied == NULL))
+        return LXMF_ERR_ARGUMENT;
+    /* A non-NULL pointer with a zero count explicitly selects an empty
+     * history. NULL selects the configured durable history, when present. */
+    if (supplied != NULL || router->config.ratchet_store == NULL)
+        return LXMF_OK;
+    size_t count = rns_ratchet_store_count(router->config.ratchet_store);
+    if (count == 0u) return LXMF_OK;
+    if (count > RNS_RATCHET_STORE_MAX_RETAINED ||
+        count > SIZE_MAX / RNS_RATCHET_PRIVATE_SIZE)
+        return LXMF_ERR_BOUNDS;
+    uint8_t *copy = malloc(count * RNS_RATCHET_PRIVATE_SIZE);
+    if (copy == NULL) return LXMF_ERR_BOUNDS;
+    size_t copied = 0u;
+    if (rns_ratchet_store_copy_private(router->config.ratchet_store, copy,
+                                       count, &copied) != RNS_OK ||
+        copied != count) {
+        rns_hal_secure_zero(copy, count * RNS_RATCHET_PRIVATE_SIZE);
+        free(copy);
+        return LXMF_ERR_CRYPTO;
+    }
+    *effective = copy;
+    *effective_count = count;
+    *owned = copy;
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_router_receive_paper(
+    lxmf_router_t *router, const uint8_t *paper, size_t paper_length,
+    const uint8_t *ratchet_private_keys, size_t ratchet_count,
+    bool enforce_ratchets, lxmf_router_paper_result_t *result) {
+    if (router == NULL || router->config.identity == NULL ||
+        router->config.store == NULL || paper == NULL || result == NULL)
+        return LXMF_ERR_ARGUMENT;
+    memset(result, 0, sizeof *result);
+    if (paper_length <= LXMF_DESTINATION_LENGTH ||
+        paper_length > LXMF_PAPER_MAX_SIZE)
+        return LXMF_ERR_BOUNDS;
+    lxmf_sha256(paper, paper_length, result->transient_id);
+    if (paper_transient_seen(router, result->transient_id)) {
+        result->duplicate = true;
+        return LXMF_OK;
+    }
+
+    const uint8_t *effective_ratchets = NULL;
+    size_t effective_count = 0u;
+    uint8_t *owned_ratchets = NULL;
+    lxmf_status_t status = paper_ratchets(
+        router, ratchet_private_keys, ratchet_count, &effective_ratchets,
+        &effective_count, &owned_ratchets);
+    if (status != LXMF_OK) return status;
+
+    uint8_t plaintext[LXMF_PAPER_MAX_SIZE];
+    size_t plaintext_length = 0u;
+    lxmf_message_t parsed;
+    int used_ratchet = 0;
+    status = lxmf_paper_unpack(
+        paper, paper_length, router->config.identity, effective_ratchets,
+        effective_count, enforce_ratchets ? 1 : 0, NULL, NULL, plaintext,
+        sizeof plaintext, &plaintext_length, &parsed, result->transient_id,
+        result->ratchet_id, &used_ratchet);
+    if (owned_ratchets != NULL) {
+        rns_hal_secure_zero(
+            owned_ratchets, effective_count * RNS_RATCHET_PRIVATE_SIZE);
+        free(owned_ratchets);
+    }
+    result->used_ratchet = used_ratchet != 0;
+    if (status != LXMF_OK) {
+        rns_hal_secure_zero(plaintext, sizeof plaintext);
+        return status;
+    }
+    bool inserted = false;
+    /* Pinned LXMF feeds paper messages through propagated receive and disables
+     * only stamp enforcement. Every other inbound policy remains shared. */
+    status = receive_representation(
+        router, plaintext, plaintext_length, LXMF_DELIVERY_METHOD_PROPAGATED,
+        true, &inserted);
+    rns_hal_secure_zero(plaintext, sizeof plaintext);
+    if (status != LXMF_OK) return status;
+    result->duplicate = !inserted;
+    remember_paper_transient(router, result->transient_id);
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_router_receive_uri(
+    lxmf_router_t *router, const char *uri, size_t uri_length,
+    const uint8_t *ratchet_private_keys, size_t ratchet_count,
+    bool enforce_ratchets, lxmf_router_paper_result_t *result) {
+    if (router == NULL || uri == NULL || result == NULL)
+        return LXMF_ERR_ARGUMENT;
+    memset(result, 0, sizeof *result);
+    uint8_t paper[LXMF_PAPER_MAX_SIZE];
+    size_t paper_length = 0u;
+    uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH];
+    lxmf_status_t status = lxmf_uri_decode(
+        uri, uri_length, paper, sizeof paper, &paper_length, transient_id);
+    if (status != LXMF_OK) return status;
+    status = lxmf_router_receive_paper(
+        router, paper, paper_length, ratchet_private_keys, ratchet_count,
+        enforce_ratchets, result);
+    rns_hal_secure_zero(paper, sizeof paper);
+    return status;
 }
 
 static lxmf_status_t receive_representation(
     lxmf_router_t *router, const uint8_t *packed, size_t packed_length,
-    lxmf_delivery_method_t method) {
+    lxmf_delivery_method_t method, bool exempt_stamp, bool *inserted_out) {
+    if (inserted_out != NULL) *inserted_out = false;
     if (router == NULL || packed == NULL || packed_length == 0U ||
         packed_length > LXMF_STORE_MAX_PACKED)
         return LXMF_ERR_ARGUMENT;
@@ -1602,11 +1742,14 @@ static lxmf_status_t receive_representation(
         return LXMF_ERR_BLOCKED;
     }
 
-    status = validate_inbound_stamp(router, &message);
-    if (status != LXMF_OK) {
-        report_event(router, message.message_id, method,
-                     LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_STAMP, status, 0u);
-        return status;
+    if (!exempt_stamp) {
+        status = validate_inbound_stamp(router, &message);
+        if (status != LXMF_OK) {
+            report_event(router, message.message_id, method,
+                         LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_STAMP, status,
+                         0u);
+            return status;
+        }
     }
     if (!unverified) remember_verified_ticket(router, &message);
 
@@ -1627,6 +1770,7 @@ static lxmf_status_t receive_representation(
     bool inserted = false;
     status = lxmf_store_put(router->config.store, &stored, &inserted);
     if (status != LXMF_OK) return status;
+    if (inserted_out != NULL) *inserted_out = inserted;
     if (inserted && router->config.message_callback != NULL)
         router->config.message_callback(router->config.message_context, &stored);
     if (inserted)

@@ -2,6 +2,7 @@
 #define RETICULUM_LXMF_ROUTER_H
 
 #include "reticulum/lxmf.h"
+#include "reticulum/lxmf_paper.h"
 #include "reticulum/lxmf_store.h"
 #include "reticulum/lxmf_tickets.h"
 #include "reticulum/lxmf_propagation_session.h"
@@ -22,6 +23,7 @@ extern "C" {
 #define LXMF_ROUTER_MAX_RESOURCES 8u
 #define LXMF_ROUTER_PROPAGATION_MAX_RETRIES 32u
 #define LXMF_ROUTER_PROPAGATION_MAX_RETRY_BASE_MS 86400000u
+#define LXMF_ROUTER_MAX_PAPER_TRANSIENTS 32u
 
 typedef struct {
     char display_name[LXMF_DISPLAY_NAME_MAX + 1u];
@@ -227,6 +229,12 @@ struct lxmf_router {
     uint8_t stamp_cost;
     lxmf_router_propagation_slot_t propagation;
     rns_identity propagation_node;
+    /* A bounded process-local fast path for scanner repeats. Durable replay
+     * suppression remains keyed by the LXMF message ID in the message store. */
+    uint8_t paper_transient_ids[LXMF_ROUTER_MAX_PAPER_TRANSIENTS]
+                               [LXMF_MESSAGE_ID_LENGTH];
+    size_t paper_transient_count;
+    size_t next_paper_transient;
 };
 
 typedef struct {
@@ -268,6 +276,29 @@ lxmf_status_t lxmf_router_set_inbound_stamp_cost(lxmf_router_t *router,
 lxmf_status_t lxmf_router_receive_packet(lxmf_router_t *router,
                                          const uint8_t *packet,
                                          size_t packet_length);
+
+typedef struct {
+    uint8_t transient_id[LXMF_MESSAGE_ID_LENGTH];
+    uint8_t ratchet_id[RNS_RATCHET_ID_SIZE];
+    bool used_ratchet;
+    bool duplicate;
+} lxmf_router_paper_result_t;
+
+/* Imports the encrypted bytes carried by a paper message. Paper delivery is
+ * recorded as propagated delivery, matching pinned LXMF 1.1.0 receive
+ * semantics, but is exempt from inbound stamp cost enforcement. Blocking,
+ * destination, size and signature policy are unchanged. When no private keys
+ * are supplied, the router copies its configured ratchet-store history. */
+lxmf_status_t lxmf_router_receive_paper(
+    lxmf_router_t *router, const uint8_t *paper, size_t paper_length,
+    const uint8_t *ratchet_private_keys, size_t ratchet_count,
+    bool enforce_ratchets, lxmf_router_paper_result_t *result);
+
+/* Decodes a bounded lxm:// URI and imports it through receive_paper. */
+lxmf_status_t lxmf_router_receive_uri(
+    lxmf_router_t *router, const char *uri, size_t uri_length,
+    const uint8_t *ratchet_private_keys, size_t ratchet_count,
+    bool enforce_ratchets, lxmf_router_paper_result_t *result);
 
 typedef struct {
     size_t examined;
