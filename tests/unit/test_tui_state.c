@@ -286,6 +286,28 @@ static void test_node_selection_survives_resort(void) {
     destroy_state(state);
 }
 
+static void test_verified_peer_stamp_cost_resolution(void) {
+    tui_state_t *state = make_state();
+    rns_node_registry_init(&state->nodes, 3600.0);
+    uint8_t destination[LXMF_DESTINATION_LENGTH] = {0x42u};
+    uint8_t cost = 99u;
+    add_node(state, 0xa1u, 1u, RNS_NODE_KIND_LXMF, 100.0);
+    rns_node_record *node = &state->nodes.records[0];
+    memcpy(node->message_destination, destination, sizeof destination);
+    node->has_message_destination = true;
+    node->lxmf_has_stamp_cost = true;
+    node->lxmf_stamp_cost = 8u;
+    assert(!tui_state_peer_stamp_cost(state, destination, &cost));
+    assert(cost == 0u);
+    node->lxmf_app_data_valid = true;
+    assert(tui_state_peer_stamp_cost(state, destination, &cost));
+    assert(cost == 8u);
+    node->kind = RNS_NODE_KIND_NOMAD;
+    assert(!tui_state_peer_stamp_cost(state, destination, &cost));
+    assert(cost == 0u);
+    destroy_state(state);
+}
+
 static void test_node_move_clamps(void) {
     tui_state_t *state = make_state();
     rns_node_registry_init(&state->nodes, 3600.0);
@@ -435,6 +457,7 @@ static void test_router_events_update_visible_state(void) {
 }
 
 int main(void) {
+    test_verified_peer_stamp_cost_resolution();
     test_node_selection_survives_resort();
     test_node_move_clamps();
     test_only_nomad_nodes_serve_pages();

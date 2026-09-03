@@ -68,7 +68,7 @@ static void test_keys_dump_and_persistence(void) {
     output[length] = '\0';
     assert(strstr(output, "Screen: Settings") != NULL);
     assert(strstr(output, "Display name: Rei") != NULL);
-    assert(strstr(output, "advertised; enforcement pending") != NULL);
+    assert(strstr(output, "enforced and advertised") != NULL);
     assert(strstr(output, "stored; sync pending") != NULL);
     assert(fclose(dump) == 0);
 

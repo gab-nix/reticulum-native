@@ -387,11 +387,11 @@ static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) 
                        ? state->settings.display_name : "(empty)");
     if (state->settings.has_stamp_cost)
         (void)snprintf(items[TUI_SETTING_STAMP_COST], sizeof items[0],
-                       "Inbound stamp cost: %u (advertised; enforcement pending)",
+                       "Inbound stamp cost: %u (enforced and advertised)",
                        (unsigned)state->settings.stamp_cost);
     else
         (void)snprintf(items[TUI_SETTING_STAMP_COST], sizeof items[0], "%s",
-                       "Inbound stamp cost: off (enforcement pending)");
+                       "Inbound stamp cost: off");
     (void)snprintf(items[TUI_SETTING_ANNOUNCE_AT_START], sizeof items[0],
                    "Announce at start: %s",
                    state->settings.announce_at_start ? "yes" : "no");
@@ -747,7 +747,7 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
         (void)fprintf(output, "Screen: Settings\nDisplay name: %s\n",
                       state->settings.display_name);
         if (state->settings.has_stamp_cost)
-            (void)fprintf(output, "Stamp cost: %u (advertised; enforcement pending)\n",
+            (void)fprintf(output, "Stamp cost: %u (enforced and advertised)\n",
                           (unsigned)state->settings.stamp_cost);
         else
             (void)fprintf(output, "Stamp cost: off\n");

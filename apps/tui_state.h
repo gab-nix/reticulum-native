@@ -221,6 +221,10 @@ bool tui_state_setting_apply(tui_state_t *state);
 void tui_state_setting_cancel(tui_state_t *state);
 bool tui_state_save_settings(tui_state_t *state);
 bool tui_state_announce(tui_state_t *state);
+/* Resolves only costs retained from a verified LXMF delivery announce. */
+bool tui_state_peer_stamp_cost(
+    const tui_state_t *state,
+    const uint8_t destination[LXMF_DESTINATION_LENGTH], uint8_t *cost);
 
 /* Pure state updates used by router callbacks and unit tests. */
 void tui_state_apply_router_event(tui_state_t *state,

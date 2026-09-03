@@ -248,9 +248,24 @@ void tui_state_apply_router_event(tui_state_t *state,
         state->filter_dirty = true;
     }
     if (event->state == LXMF_DELIVERY_QUEUED) {
-        tui_state_set_status(state, "Queued via %s; waiting for %s",
-                             lxmf_delivery_method_string(event->method),
-                             lxmf_queue_reason_string(event->queue_reason));
+        lxmf_stamp_job_progress_t progress;
+        if (event->queue_reason == LXMF_QUEUE_REASON_STAMP &&
+            state->router_ready &&
+            lxmf_router_stamp_progress(&state->router, event->message_id,
+                                       &progress) == LXMF_OK) {
+            if (progress.prepared_rounds < LXMF_STAMP_WORKBLOCK_ROUNDS)
+                tui_state_set_status(
+                    state, "Preparing delivery stamp: %u%%",
+                    (unsigned)(progress.prepared_rounds * 100u /
+                               LXMF_STAMP_WORKBLOCK_ROUNDS));
+            else
+                tui_state_set_status(
+                    state, "Searching for delivery stamp; %llu attempts",
+                    (unsigned long long)progress.attempts);
+        } else
+            tui_state_set_status(state, "Queued via %s; waiting for %s",
+                                 lxmf_delivery_method_string(event->method),
+                                 lxmf_queue_reason_string(event->queue_reason));
     } else if (event->state == LXMF_DELIVERY_SENDING) {
         tui_state_set_status(state, "Sending via %s",
                              lxmf_delivery_method_string(event->method));
@@ -361,6 +376,32 @@ static bool resolve_peer_ratchet(
         }
     }
     return false;
+}
+
+bool tui_state_peer_stamp_cost(
+    const tui_state_t *state,
+    const uint8_t destination[LXMF_DESTINATION_LENGTH], uint8_t *cost) {
+    if (state == NULL || destination == NULL || cost == NULL) return false;
+    *cost = 0u;
+    for (size_t i = 0u; i < state->nodes.count; ++i) {
+        const rns_node_record *node = &state->nodes.records[i];
+        if (node->kind == RNS_NODE_KIND_LXMF &&
+            node->has_message_destination && node->lxmf_app_data_valid &&
+            node->lxmf_has_stamp_cost && node->lxmf_stamp_cost > 0u &&
+            node->lxmf_stamp_cost < UINT8_MAX &&
+            memcmp(node->message_destination, destination,
+                   LXMF_DESTINATION_LENGTH) == 0) {
+            *cost = node->lxmf_stamp_cost;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool resolve_peer_stamp_cost(
+    void *context, const uint8_t destination[LXMF_DESTINATION_LENGTH],
+    uint8_t *cost) {
+    return tui_state_peer_stamp_cost(context, destination, cost);
 }
 
 static uint64_t wall_clock_seconds(void *context) {
@@ -475,6 +516,9 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
             .resolve_context = state,
             .resolve_ratchet = resolve_peer_ratchet,
             .ratchet_context = state,
+            .resolve_stamp_cost = resolve_peer_stamp_cost,
+            .stamp_cost_context = state,
+            .stamp_work_units = LXMF_STAMP_POLL_MAX_UNITS,
             .send_packet = send_via_runtime,
             .send_context = state,
             .message_callback = on_message,
