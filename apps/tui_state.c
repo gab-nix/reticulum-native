@@ -47,6 +47,15 @@ static size_t ensure_contact(tui_state_t *state,
     return state->contact_count++;
 }
 
+static void restore_selected_draft(tui_state_t *state) {
+    tui_editor_clear(&state->composer);
+    if (state->selected >= state->contact_count) return;
+    const tui_contact_t *contact = &state->contacts[state->selected];
+    size_t length = contact->draft_len;
+    if (length > TUI_COMPOSER_CAPACITY) length = TUI_COMPOSER_CAPACITY;
+    (void)tui_editor_insert(&state->composer, contact->draft, length);
+}
+
 /* Copies one stored message into the in-memory history and its conversation. */
 static bool ingest_message(tui_state_t *state, const lxmf_store_message_t *message) {
     if (state->message_count >= TUI_MAX_MESSAGES ||
@@ -185,6 +194,11 @@ static bool load_peer(void *context, const lxmf_peer_t *peer) {
     contact->pinned = peer->pinned;
     contact->blocked = peer->blocked;
     contact->unread = peer->unread_count;
+    contact->draft_len = peer->draft_len;
+    if (contact->draft_len > LXMF_PEER_DRAFT_MAX)
+        contact->draft_len = LXMF_PEER_DRAFT_MAX;
+    memcpy(contact->draft, peer->draft, contact->draft_len);
+    contact->draft[contact->draft_len] = '\0';
     size_t note_length = peer->note_len;
     if (note_length >= sizeof contact->note) note_length = sizeof contact->note - 1u;
     memcpy(contact->note, peer->note, note_length);
@@ -211,6 +225,11 @@ void tui_state_persist_contacts(tui_state_t *state) {
                                                          : (uint32_t)contact->unread;
         peer.note_len = strlen(contact->note);
         memcpy(peer.note, contact->note, peer.note_len);
+        if (contact->draft_dirty) {
+            peer.draft_len = contact->draft_len;
+            memcpy(peer.draft, contact->draft, peer.draft_len);
+            peer.draft[peer.draft_len] = '\0';
+        }
         if (lxmf_peer_store_put(&state->peer_store, &peer, &inserted) != LXMF_OK) return;
     }
     (void)lxmf_peer_store_save(&state->peer_store);
@@ -714,6 +733,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     (void)snprintf(state->url, sizeof state->url, "nomad://local/home");
     if (!rns_micron_parse(&state->page, tui_home_page, sizeof tui_home_page - 1u) ||
         !rns_micron_history_push(&state->history, state->url)) goto fail;
+    restore_selected_draft(state);
     if (state->settings_load_error)
         tui_state_set_status(state,
                              "Settings file is invalid; safe defaults are active");
@@ -865,6 +885,7 @@ void tui_state_select_offset(tui_state_t *state, int delta) {
         position = position == 0u ? state->visible_count - 1u : position - 1u;
     else position = (position + 1u) % state->visible_count;
     state->selected = state->visible[position];
+    restore_selected_draft(state);
     state->contacts[state->selected].unread = 0u;
     state->scroll = 0u;
     state->filter_dirty = true;
@@ -876,7 +897,10 @@ void tui_state_set_tab(tui_state_t *state, tui_trust_t tab) {
     state->scroll = 0u;
     state->filter_dirty = true;
     tui_state_refresh(state);
-    if (state->visible_count > 0u) state->selected = state->visible[0];
+    if (state->visible_count > 0u) {
+        state->selected = state->visible[0];
+        restore_selected_draft(state);
+    }
     state->filter_dirty = true;
 }
 
@@ -921,6 +945,7 @@ bool tui_state_open_conversation(tui_state_t *state,
     state->screen = TUI_SCREEN_CONVERSATIONS;
     state->overlay = TUI_OVERLAY_NONE;
     state->field = TUI_FIELD_COMPOSE;
+    restore_selected_draft(state);
     state->filter_dirty = true;
     return true;
 }
@@ -973,6 +998,19 @@ lxmf_status_t tui_state_queue_message(tui_state_t *state) {
     }
     (void)ingest_message(state, &stored);
     return LXMF_OK;
+}
+
+void tui_state_save_draft(tui_state_t *state) {
+    if (state == NULL || state->selected >= state->contact_count) return;
+    tui_contact_t *contact = &state->contacts[state->selected];
+    contact->draft_len = tui_editor_length(&state->composer);
+    if (contact->draft_len > TUI_COMPOSER_CAPACITY)
+        contact->draft_len = TUI_COMPOSER_CAPACITY;
+    if (contact->draft_len != 0u)
+        memcpy(contact->draft, tui_editor_text(&state->composer), contact->draft_len);
+    contact->draft[contact->draft_len] = '\0';
+    contact->draft_dirty = true;
+    tui_state_persist_contacts(state);
 }
 
 /* -------------------------------------------------------- contact mutations */

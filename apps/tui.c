@@ -102,6 +102,7 @@ static void submit_message(tui_state_t *state) {
     if (!state->router_ready)
         tui_state_set_status(state, "Queued locally; network delivery is pending");
     tui_editor_clear(&state->composer);
+    tui_state_save_draft(state);
     state->field = TUI_FIELD_NONE;
 }
 
@@ -130,6 +131,7 @@ static void handle_field_key(tui_state_t *state, int key) {
     else if (key >= 0 && key <= 0xff)
         (void)tui_editor_insert_byte(editor, (unsigned char)key);
     if (state->field == TUI_FIELD_SEARCH) state->filter_dirty = true;
+    else if (state->field == TUI_FIELD_COMPOSE) tui_state_save_draft(state);
 }
 
 static void handle_node_actions_key(tui_state_t *state, int key) {

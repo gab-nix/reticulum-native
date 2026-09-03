@@ -150,6 +150,9 @@ static void test_submit_preserves_pending_status(void) {
     assert(strstr(state->status, "Queued locally") != NULL);
     assert(strstr(state->status, "failed") == NULL);
     assert(state->message_count == 1u);
+    lxmf_peer_t peer;
+    assert(lxmf_peer_store_get(&state->peer_store, destination, &peer) == LXMF_OK);
+    assert(peer.draft_len == 0u);
 
     /* Exercise the pending identity/path branch without opening sockets. */
     state->router_ready = true;
@@ -161,6 +164,20 @@ static void test_submit_preserves_pending_status(void) {
     assert(state->message_count == 2u);
     assert(tui_editor_empty(&state->composer));
     state->router_ready = false;
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_COMPOSE);
+    const char *draft = "unfinished";
+    for (size_t i = 0u; draft[i] != '\0'; ++i)
+        assert(tui_dispatch_key(state, (unsigned char)draft[i]));
+    assert(tui_dispatch_key(state, 27));
+    tui_state_close(state);
+    free(state);
+
+    state = calloc(1u, sizeof *state);
+    assert(state != NULL);
+    assert(tui_state_open(state, identity_path, store_path,
+                          "42424242424242424242424242424242", NULL) == 0);
+    assert(strcmp(tui_editor_text(&state->composer), "unfinished") == 0);
     tui_state_close(state);
     free(state);
     assert(unlink(identity_path) == 0);

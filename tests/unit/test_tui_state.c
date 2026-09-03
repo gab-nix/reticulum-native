@@ -530,7 +530,48 @@ static void test_saved_block_policy_and_deferred_rejection(void) {
     destroy_state(state);
 }
 
+static void test_drafts_follow_contacts_and_persist(void) {
+    tui_state_t *state = make_state();
+    char path[] = "/tmp/nomad-ui-drafts-XXXXXX";
+    int fd = mkstemp(path);
+    assert(fd >= 0 && close(fd) == 0 && unlink(path) == 0);
+    assert(lxmf_peer_store_open(&state->peer_store, path) == LXMF_OK);
+    add_contact(state, 0xa1u, TUI_TRUST_UNKNOWN);
+    add_contact(state, 0xa2u, TUI_TRUST_UNKNOWN);
+    state->selected = 0u;
+    assert(tui_editor_insert(&state->composer, "first draft", 11u));
+    tui_state_save_draft(state);
+    tui_state_select_offset(state, 1);
+    assert(state->selected == 1u && tui_editor_empty(&state->composer));
+    assert(tui_editor_insert(&state->composer, "second", 6u));
+    tui_state_save_draft(state);
+    tui_state_select_offset(state, -1);
+    assert(strcmp(tui_editor_text(&state->composer), "first draft") == 0);
+    lxmf_peer_t first, second;
+    assert(lxmf_peer_store_get(&state->peer_store, state->contacts[0].peer,
+                               &first) == LXMF_OK);
+    assert(lxmf_peer_store_get(&state->peer_store, state->contacts[1].peer,
+                               &second) == LXMF_OK);
+    assert(first.draft_len == 11u && strcmp(first.draft, "first draft") == 0);
+    assert(second.draft_len == 6u && strcmp(second.draft, "second") == 0);
+
+    /* Do not truncate a pre-existing larger draft merely by saving metadata. */
+    memset(first.draft, 'x', 2048u);
+    first.draft[2048] = '\0';
+    first.draft_len = 2048u;
+    bool inserted = false;
+    assert(lxmf_peer_store_put(&state->peer_store, &first, &inserted) == LXMF_OK);
+    state->contacts[0].draft_dirty = false;
+    tui_state_persist_contacts(state);
+    assert(lxmf_peer_store_get(&state->peer_store, first.address, &first) == LXMF_OK);
+    assert(first.draft_len == 2048u);
+    lxmf_peer_store_close(&state->peer_store);
+    assert(unlink(path) == 0);
+    destroy_state(state);
+}
+
 int main(void) {
+    test_drafts_follow_contacts_and_persist();
     test_saved_block_policy_and_deferred_rejection();
     test_rejected_message_keeps_owned_previews();
     test_verified_peer_stamp_cost_resolution();

@@ -75,6 +75,9 @@ typedef struct {
     bool pinned;
     bool blocked;
     char note[TUI_NOTE_MAX];
+    char draft[LXMF_PEER_DRAFT_MAX + 1u];
+    size_t draft_len;
+    bool draft_dirty;
 } tui_contact_t;
 
 typedef struct {
@@ -186,6 +189,8 @@ void tui_state_scroll_by(tui_state_t *state, int lines);
 /* Selects, creating if needed, the conversation with peer. */
 bool tui_state_open_conversation(tui_state_t *state, const uint8_t peer[LXMF_DESTINATION_LENGTH]);
 lxmf_status_t tui_state_queue_message(tui_state_t *state);
+/* Persists the active composer into the selected conversation. */
+void tui_state_save_draft(tui_state_t *state);
 void tui_state_persist_contacts(tui_state_t *state);
 void tui_state_set_trust(tui_state_t *state, tui_trust_t trust);
 void tui_state_toggle_pin(tui_state_t *state);

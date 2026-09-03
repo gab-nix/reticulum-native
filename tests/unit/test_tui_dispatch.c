@@ -197,7 +197,13 @@ static void test_shortcuts_drafts_and_node_action(void) {
     assert(state->screen == TUI_SCREEN_CONVERSATIONS);
     assert(state->overlay == TUI_OVERLAY_NONE && state->field == TUI_FIELD_COMPOSE);
     assert(state->contacts[state->selected].peer[0] == 0x44u);
+    assert(tui_editor_empty(&state->composer));
+    state->field = TUI_FIELD_NONE;
+    assert(tui_dispatch_key(state, 'k'));
+    assert(tui_editor_empty(&state->composer));
+    assert(tui_dispatch_key(state, 'k'));
     assert(strcmp(tui_editor_text(&state->composer), "N") == 0);
+    state->field = TUI_FIELD_COMPOSE;
     assert(tui_dispatch_key(state, 27));
     assert(tui_dispatch_key(state, 'S'));
     assert(state->screen == TUI_SCREEN_SETTINGS);
