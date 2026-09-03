@@ -1,0 +1,86 @@
+{
+  "c_events": [
+    {
+      "destination": "653d0bd4184b87e219e5f0e755f4395e",
+      "event": "ready"
+    },
+    {
+      "event": "python_delivery_verified"
+    },
+    {
+      "cost": 13,
+      "event": "propagation_verified"
+    },
+    {
+      "event": "upload_queued",
+      "id": "3eacf159fd847534539fecf7e495c43a74f7e50f138d713ffdebcbd738b8817c"
+    },
+    {
+      "event": "upload_state",
+      "id": "3eacf159fd847534539fecf7e495c43a74f7e50f138d713ffdebcbd738b8817c",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "sync_received",
+      "id": "2f56e92e01f2e73fb29ef92c59f55ab5afc013cef650d56a961eeebab8880b31",
+      "size": 2048,
+      "valid": true
+    },
+    {
+      "accepted": 1,
+      "acknowledged": 1,
+      "available": 1,
+      "duplicates": 0,
+      "event": "sync_done",
+      "rejected": 0,
+      "result": 0,
+      "state": 7,
+      "valid": true
+    },
+    {
+      "event": "done",
+      "ok": true,
+      "sync_acknowledged": true,
+      "sync_received": true,
+      "upload_sent": true
+    }
+  ],
+  "c_exit": 0,
+  "driver_sha256": "7460f51b017f6f4f6a1da48759ed565d856afd4f9145b8deb78e9a68cdcc32bf",
+  "driver_source_sha256": "9aee0003ada7de2d332a05f5225dc81183eb1c23c9b1ffe84a6ed4a4a20307de",
+  "errors": [],
+  "harness_source_sha256": "c7d3c5a47fbaea1e9d7f82904d9dcf443b1d7b4decf0e35e927297a7048af66f",
+  "lxmf_commit": "795fdaa2b0777c13033787d933d1afc94a2377cb",
+  "lxmf_source_evidence": "git checkout",
+  "lxmf_version": "1.1.0",
+  "native_head": "69c4289ac292cc9cf2e7d1189c513cb42ca72a27",
+  "ok": true,
+  "python_injected": {
+    "message_id": "2f56e92e01f2e73fb29ef92c59f55ab5afc013cef650d56a961eeebab8880b31",
+    "size": 2048,
+    "stamp_cost": 13,
+    "transient_id": "1de9152f1bbc32baa93cf52f639af79b3558c8815986a7f13d1c33e06c5d0bcc"
+  },
+  "python_node": {
+    "accepted_uploads": 1,
+    "ack_removed_injected": true,
+    "received_identified_unpeered_uploads": 1,
+    "received_uploads": 0,
+    "served_messages": 1
+  },
+  "python_received": [
+    {
+      "id": "3eacf159fd847534539fecf7e495c43a74f7e50f138d713ffdebcbd738b8817c",
+      "method": 3,
+      "signature_valid": true,
+      "size": 257,
+      "valid": true
+    }
+  ],
+  "rns_commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+  "rns_source_evidence": "recorded clean source tree",
+  "rns_version": "1.5.2",
+  "run_utc": "2026-09-03T19:50:43.881020+00:00",
+  "transport": "loopback TCP"
+}

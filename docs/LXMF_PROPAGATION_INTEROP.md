@@ -2,7 +2,8 @@
 
 The opt-in propagation harness connects the native caller-polled router to an
 unmodified pinned Python RNS 1.5.2 / LXMF 1.1.0 propagation node over loopback
-UDP. It exercises both client directions in one run:
+UDP or a continuous framed-TCP connection. It exercises both client directions
+in one run:
 
 - C identifies to the Python propagation destination, uploads a stamped,
   encrypted message, receives the node's completion proof, and Python verifies
@@ -24,6 +25,13 @@ python3 tools/test_lxmf_propagation_live.py \
   --lxmf /path/to/pinned/LXMF \
   --driver build/tests/lxmf_propagation_live_driver \
   --output /tmp/lxmf-propagation-report.json
+
+python3 tools/test_lxmf_propagation_live.py \
+  --transport tcp \
+  --reticulum /path/to/pinned/Reticulum \
+  --lxmf /path/to/pinned/LXMF \
+  --driver build/tests/lxmf_propagation_live_driver \
+  --output /tmp/lxmf-propagation-tcp-report.json
 ```
 
 The script requires exact upstream commits and rejects tracked modifications.
@@ -39,8 +47,10 @@ one authenticated link. The report contains public destination/message IDs,
 state/counter results and source/binary fingerprints only. It contains no
 plaintext, private keys, identity files, histories or packet captures.
 
-`tests/fixtures/lxmf_propagation_udp_live.provenance.json` records the successful
-bidirectional run. This evidence verifies only one continuous loopback UDP
-client session. Automatic scheduling, restart/resume, retries under loss,
-framed TCP, relay hops, server hosting, peering, multi-segment Resources,
-TUI-driven sync and physical RNode transport remain outside this gate.
+`tests/fixtures/lxmf_propagation_udp_live.provenance.json` and
+`tests/fixtures/lxmf_propagation_tcp_live.provenance.json` record successful
+bidirectional runs. These verify one loopback UDP session and one continuous
+framed-TCP client connection. Automatic scheduling, TCP reconnect,
+restart/resume, retries under loss, relay hops, server hosting, peering,
+multi-segment Resources, TUI-driven sync and physical RNode transport remain
+outside this gate.

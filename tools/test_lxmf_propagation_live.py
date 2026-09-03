@@ -41,8 +41,9 @@ def check_checkout(path, commit):
     return "recorded clean source tree"
 
 
-def reserve_udp_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+def reserve_port(transport):
+    socket_type = socket.SOCK_STREAM if transport == "tcp" else socket.SOCK_DGRAM
+    with socket.socket(socket.AF_INET, socket_type) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
 
@@ -67,6 +68,7 @@ def main():
     parser.add_argument("--reticulum", type=pathlib.Path, required=True)
     parser.add_argument("--lxmf", type=pathlib.Path, required=True)
     parser.add_argument("--driver", type=pathlib.Path, required=True)
+    parser.add_argument("--transport", choices=("udp", "tcp"), default="udp")
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
     rns_source_evidence = check_checkout(args.reticulum, RNS_COMMIT)
@@ -90,7 +92,7 @@ def main():
         "lxmf_version": LXMF.__version__,
         "rns_source_evidence": rns_source_evidence,
         "lxmf_source_evidence": lxmf_source_evidence,
-        "transport": "loopback UDP",
+        "transport": f"loopback {args.transport.upper()}",
         "run_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "native_head": subprocess.check_output(
             ["git", "-C", str(repository), "rev-parse", "HEAD"],
@@ -105,18 +107,27 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="lxmf-propagation-live-") as temp:
         temp_root = pathlib.Path(temp)
-        c_port, python_port = reserve_udp_port(), reserve_udp_port()
-        while c_port == python_port:
-            python_port = reserve_udp_port()
+        if args.transport == "tcp":
+            c_port, python_port = None, reserve_port("tcp")
+        else:
+            c_port, python_port = reserve_port("udp"), reserve_port("udp")
+            while c_port == python_port:
+                python_port = reserve_port("udp")
         rns_dir = temp_root / "rns"
         rns_dir.mkdir()
+        if args.transport == "tcp":
+            interface_config = (
+                "type = TCPServerInterface\ninterface_enabled = True\n"
+                f"listen_ip = 127.0.0.1\nlisten_port = {python_port}\n")
+        else:
+            interface_config = (
+                "type = UDPInterface\ninterface_enabled = True\n"
+                f"listen_ip = 127.0.0.1\nlisten_port = {python_port}\n"
+                f"forward_ip = 127.0.0.1\nforward_port = {c_port}\n")
         (rns_dir / "config").write_text(
             "[reticulum]\nshare_instance = No\nenable_transport = No\n"
             "[logging]\nloglevel = 0\n[interfaces]\n"
-            "[[C propagation test]]\n"
-            "type = UDPInterface\ninterface_enabled = True\n"
-            f"listen_ip = 127.0.0.1\nlisten_port = {python_port}\n"
-            f"forward_ip = 127.0.0.1\nforward_port = {c_port}\n")
+            "[[C propagation test]]\n" + interface_config)
         reticulum = RNS.Reticulum(configdir=str(rns_dir), loglevel=0)
         identity = RNS.Identity()
         router = LXMF.LXMRouter(
@@ -144,9 +155,14 @@ def main():
                     "Python rejected C upload content/signature/method")
 
         router.register_delivery_callback(received)
-        process = subprocess.Popen(
+        driver_command = (
+            [str(args.driver.resolve()), "--tcp", str(python_port),
+             str(temp_root / "c.store")]
+            if args.transport == "tcp" else
             [str(args.driver.resolve()), str(c_port), str(python_port),
-             str(temp_root / "c.store")],
+             str(temp_root / "c.store")])
+        process = subprocess.Popen(
+            driver_command,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         lines = queue.Queue()
 

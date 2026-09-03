@@ -194,10 +194,12 @@ static bool queue_upload(lxmf_store_t *store, const rns_identity *identity,
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) return 2;
     uint16_t listen_port = 0u, forward_port = 0u;
-    if (!parse_port(argv[1], &listen_port) ||
-        !parse_port(argv[2], &forward_port))
+    bool tcp = argc == 4 && strcmp(argv[1], "--tcp") == 0;
+    if (argc != 4 ||
+        (tcp ? !parse_port(argv[2], &forward_port)
+             : (!parse_port(argv[1], &listen_port) ||
+                !parse_port(argv[2], &forward_port))))
         return 2;
     (void)setvbuf(stdout, NULL, _IOLBF, 0);
     live_state_t state = {0};
@@ -214,13 +216,18 @@ int main(int argc, char **argv) {
     config.interface_count = 1u;
     rns_config_interface_t *interface = &config.interfaces[0];
     (void)strcpy(interface->name, "python-propagation-test");
-    interface->type = RNS_CONFIG_UDP;
+    interface->type = tcp ? RNS_CONFIG_TCP_CLIENT : RNS_CONFIG_UDP;
     interface->type_set = true;
     interface->enabled = true;
-    (void)strcpy(interface->listen_ip, "127.0.0.1");
-    (void)strcpy(interface->forward_ip, "127.0.0.1");
-    interface->listen_port = listen_port;
-    interface->forward_port = forward_port;
+    if (tcp) {
+        (void)strcpy(interface->target_host, "127.0.0.1");
+        interface->target_port = forward_port;
+    } else {
+        (void)strcpy(interface->listen_ip, "127.0.0.1");
+        (void)strcpy(interface->forward_ip, "127.0.0.1");
+        interface->listen_port = listen_port;
+        interface->forward_port = forward_port;
+    }
     rns_runtime_options_t runtime_options = {0};
     runtime_options.announce_callback = announce_received;
     runtime_options.callback_context = &state;
@@ -268,16 +275,24 @@ int main(int argc, char **argv) {
             state.failed = true;
             break;
         }
-        if (last_announce == 0u || now - last_announce >= 3000u) {
-            if (rns_runtime_announce(runtime, &identity, "lxmf",
-                    delivery_aspects, 1u, app_data, app_data_length) != RNS_OK)
-                state.failed = true;
-            last_announce = now;
-        }
         size_t processed = 0u;
         if (rns_runtime_poll(runtime, 32u, &processed) != RNS_OK) {
             state.failed = true;
             break;
+        }
+        rns_runtime_interface_info_t interface_info;
+        if (rns_runtime_interface_info(runtime, 0u, &interface_info) != RNS_OK) {
+            state.failed = true;
+            break;
+        }
+        if (interface_info.state == RNS_RUNTIME_INTERFACE_UP &&
+            (last_announce == 0u || now - last_announce >= 3000u)) {
+            if (rns_runtime_announce(runtime, &identity, "lxmf",
+                    delivery_aspects, 1u, app_data, app_data_length) != RNS_OK) {
+                state.failed = true;
+                break;
+            }
+            last_announce = now;
         }
         if (state.propagation_known && !state.propagation_configured) {
             if (lxmf_router_set_propagation_node(
