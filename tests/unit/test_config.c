@@ -101,6 +101,8 @@ int main(void) {
     assert(strcmp(config.interfaces[3].devices, "en0, eth0") == 0 &&
            strcmp(config.interfaces[3].ignored_devices, "tun0") == 0);
     assert(rns_config_emit(&config, emitted, sizeof(emitted), &emitted_length) == RNS_OK);
+    assert(strstr(emitted, "    configured_bitrate = 12000000\n") != NULL);
+    assert(strstr(emitted, "\n    bitrate = ") == NULL);
     assert(rns_config_parse(emitted, emitted_length, &reparsed, &diagnostic) == RNS_OK);
     assert(reparsed.interface_count == config.interface_count);
     assert(reparsed.interfaces[2].tx_power == 17);

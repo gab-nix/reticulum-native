@@ -663,7 +663,7 @@ rns_status_t rns_config_emit(const rns_config_t *config,
                       "    group_id = %s\n    discovery_scope = %s\n"
                       "    multicast_address_type = %s\n"
                       "    discovery_port = %u\n    data_port = %u\n"
-                      "    bitrate = %u\n",
+                      "    configured_bitrate = %u\n",
                       group, scope, address_type,
                       (unsigned int)discovery_port,
                       (unsigned int)data_port,
