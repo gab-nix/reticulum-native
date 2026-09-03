@@ -2,6 +2,7 @@
 #define NOMAD_TUI_STATE_H
 
 #include "tui_editor.h"
+#include "tui_settings.h"
 
 #include "reticulum/browser.h"
 #include "reticulum/identity.h"
@@ -43,8 +44,19 @@ typedef enum {
     TUI_FIELD_NONE,
     TUI_FIELD_COMPOSE,
     TUI_FIELD_SEARCH,
-    TUI_FIELD_ADDRESS
+    TUI_FIELD_ADDRESS,
+    TUI_FIELD_SETTING
 } tui_field_t;
+
+typedef enum {
+    TUI_SETTING_DISPLAY_NAME,
+    TUI_SETTING_STAMP_COST,
+    TUI_SETTING_ANNOUNCE_AT_START,
+    TUI_SETTING_ANNOUNCE_INTERVAL,
+    TUI_SETTING_PROPAGATION_NODE,
+    TUI_SETTING_ANNOUNCE_NOW,
+    TUI_SETTING_COUNT
+} tui_setting_item_t;
 
 typedef enum {
     TUI_OVERLAY_NONE,
@@ -74,7 +86,7 @@ typedef struct {
  * rebuilt by tui_state_refresh() once per frame, so rendering never rescans
  * the message history per row.
  */
-typedef struct {
+typedef struct tui_state {
     rns_identity identity;
     uint8_t local[LXMF_DESTINATION_LENGTH];
 
@@ -100,6 +112,7 @@ typedef struct {
     tui_editor_t composer;
     tui_editor_t search;
     tui_editor_t address;
+    tui_editor_t setting;
     tui_field_t field;
     tui_overlay_t overlay;
     tui_screen_t screen;
@@ -119,6 +132,10 @@ typedef struct {
     bool router_ready;
     uint64_t router_polled_ms;
     uint64_t last_announce_ms;
+    uint64_t next_announce_ms;
+    bool startup_announce_pending;
+    bool has_announce_result;
+    rns_status_t last_announce_result;
     rns_identity resolved_identity;
     bool send_attempted;
     bool send_ok;
@@ -130,6 +147,11 @@ typedef struct {
     size_t link_selected;
     size_t page_scroll;
     char url[RNS_MICRON_TEXT_MAX];
+
+    tui_settings_t settings;
+    char settings_path[TUI_SETTINGS_PATH_MAX + 1u];
+    tui_setting_item_t setting_selected;
+    bool settings_load_error;
 
     char status[TUI_STATUS_MAX];
 } tui_state_t;
@@ -186,5 +208,13 @@ void tui_state_browse_back(tui_state_t *state);
 void tui_state_browse_node(tui_state_t *state, const rns_node_record *node);
 /* Returns true when an in-flight page request was cancelled. */
 bool tui_state_browse_cancel(tui_state_t *state);
+
+void tui_state_setting_move(tui_state_t *state, int delta);
+/* Starts editing, toggles a setting, or sends an announcement as applicable. */
+void tui_state_setting_activate(tui_state_t *state);
+bool tui_state_setting_apply(tui_state_t *state);
+void tui_state_setting_cancel(tui_state_t *state);
+bool tui_state_save_settings(tui_state_t *state);
+bool tui_state_announce(tui_state_t *state);
 
 #endif

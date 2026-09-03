@@ -1,0 +1,137 @@
+#include "tui.h"
+#include "tui_render.h"
+#include "tui_state.h"
+
+#include <assert.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+static tui_state_t *make_state(const char *settings_path) {
+    tui_state_t *state = calloc(1u, sizeof *state);
+    assert(state != NULL);
+    state->messages = calloc(TUI_MAX_MESSAGES, sizeof *state->messages);
+    assert(state->messages != NULL);
+    tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
+    tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
+    tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
+    tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
+    tui_settings_defaults(&state->settings);
+    assert(snprintf(state->settings_path, sizeof state->settings_path, "%s",
+                    settings_path) > 0);
+    return state;
+}
+
+static void destroy_state(tui_state_t *state) {
+    free(state->messages);
+    free(state);
+}
+
+static void test_keys_dump_and_persistence(void) {
+    char path[] = "/tmp/nomad-settings-ui-XXXXXX";
+    int descriptor = mkstemp(path);
+    assert(descriptor >= 0);
+    assert(close(descriptor) == 0);
+    assert(unlink(path) == 0);
+    tui_state_t *state = make_state(path);
+
+    assert(tui_dispatch_key(state, 'S'));
+    assert(state->screen == TUI_SCREEN_SETTINGS);
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_SETTING);
+    assert(tui_dispatch_key(state, 21));
+    assert(tui_dispatch_key(state, 'R'));
+    assert(tui_dispatch_key(state, 'e'));
+    assert(tui_dispatch_key(state, 'i'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_NONE);
+    assert(strcmp(state->settings.display_name, "Rei") == 0);
+
+    state->setting_selected = TUI_SETTING_ANNOUNCE_AT_START;
+    assert(tui_dispatch_key(state, '\n'));
+    assert(!state->settings.announce_at_start);
+    state->settings.has_stamp_cost = true;
+    state->settings.stamp_cost = 8u;
+    state->settings.has_propagation_node = true;
+    memset(state->settings.propagation_node, 0x42,
+           sizeof state->settings.propagation_node);
+
+    FILE *dump = tmpfile();
+    assert(dump != NULL);
+    assert(tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    char output[2048] = {0};
+    size_t length = fread(output, 1u, sizeof output - 1u, dump);
+    assert(!ferror(dump));
+    output[length] = '\0';
+    assert(strstr(output, "Screen: Settings") != NULL);
+    assert(strstr(output, "Display name: Rei") != NULL);
+    assert(strstr(output, "advertised; enforcement pending") != NULL);
+    assert(strstr(output, "stored; sync pending") != NULL);
+    assert(fclose(dump) == 0);
+
+    tui_settings_t persisted;
+    bool found = false;
+    assert(tui_settings_load(path, &persisted, &found) && found);
+    assert(strcmp(persisted.display_name, "Rei") == 0);
+    assert(!persisted.announce_at_start);
+    assert(unlink(path) == 0);
+    destroy_state(state);
+}
+
+static void write_identity(const char *path) {
+    rns_identity identity;
+    uint8_t private_key[RNS_IDENTITY_PRIVATE_SIZE];
+    assert(rns_identity_generate(&identity));
+    assert(rns_identity_export_private(&identity, private_key));
+    int descriptor = open(path, O_WRONLY | O_TRUNC);
+    assert(descriptor >= 0);
+    assert(write(descriptor, private_key, sizeof private_key) ==
+           (ssize_t)sizeof private_key);
+    assert(close(descriptor) == 0);
+}
+
+static void remove_sidecar(const char *base, const char *suffix) {
+    char path[TUI_PATH_MAX + 16u];
+    int written = snprintf(path, sizeof path, "%s%s", base, suffix);
+    assert(written > 0 && (size_t)written < sizeof path);
+    (void)unlink(path);
+}
+
+static void test_corruption_warning_survives_startup(void) {
+    char identity_path[] = "/tmp/nomad-settings-identity-XXXXXX";
+    char store_path[] = "/tmp/nomad-settings-store-XXXXXX";
+    int identity_fd = mkstemp(identity_path);
+    int store_fd = mkstemp(store_path);
+    assert(identity_fd >= 0 && store_fd >= 0);
+    assert(close(identity_fd) == 0 && close(store_fd) == 0);
+    write_identity(identity_path);
+
+    char settings_path[TUI_PATH_MAX + 16u];
+    assert(snprintf(settings_path, sizeof settings_path, "%s.settings",
+                    store_path) > 0);
+    int descriptor = open(settings_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    assert(descriptor >= 0);
+    assert(write(descriptor, "corrupt", 7u) == 7);
+    assert(close(descriptor) == 0);
+
+    tui_state_t state;
+    assert(tui_state_open(&state, identity_path, store_path, NULL, NULL) == 0);
+    assert(state.settings_load_error);
+    assert(strstr(state.status, "invalid") != NULL);
+    tui_state_close(&state);
+
+    assert(unlink(identity_path) == 0);
+    assert(unlink(store_path) == 0);
+    remove_sidecar(store_path, ".settings");
+    remove_sidecar(store_path, ".peers");
+    remove_sidecar(store_path, ".nodes");
+}
+
+int main(void) {
+    test_keys_dump_and_persistence();
+    test_corruption_warning_survives_startup();
+    return 0;
+}

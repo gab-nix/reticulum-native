@@ -16,6 +16,7 @@ static tui_editor_t *active_editor(tui_state_t *state) {
         case TUI_FIELD_COMPOSE: return &state->composer;
         case TUI_FIELD_SEARCH: return &state->search;
         case TUI_FIELD_ADDRESS: return &state->address;
+        case TUI_FIELD_SETTING: return &state->setting;
         case TUI_FIELD_NONE: break;
     }
     return NULL;
@@ -73,11 +74,13 @@ static void handle_field_key(tui_state_t *state, int key) {
     tui_edit_command_t command;
     if (editor == NULL) return;
     if (key == 27) {
-        state->field = TUI_FIELD_NONE;
+        if (state->field == TUI_FIELD_SETTING) tui_state_setting_cancel(state);
+        else state->field = TUI_FIELD_NONE;
         return;
     }
     if (key == '\n' || key == KEY_ENTER) {
-        if (state->field == TUI_FIELD_ADDRESS) submit_address(state);
+        if (state->field == TUI_FIELD_SETTING) (void)tui_state_setting_apply(state);
+        else if (state->field == TUI_FIELD_ADDRESS) submit_address(state);
         else if (state->field == TUI_FIELD_SEARCH) {
             state->field = TUI_FIELD_NONE;
             tui_state_refresh(state);
@@ -114,6 +117,8 @@ static void handle_node_actions_key(tui_state_t *state, int key) {
 static void select_previous(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_BROWSER) {
         if (state->link_selected > 0u) --state->link_selected;
+    } else if (state->screen == TUI_SCREEN_SETTINGS) {
+        tui_state_setting_move(state, -1);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
         tui_state_node_move(state, -1);
     } else tui_state_select_offset(state, -1);
@@ -123,6 +128,8 @@ static void select_next(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_BROWSER) {
         size_t links = tui_state_link_count(state);
         if (links > 0u) state->link_selected = (state->link_selected + 1u) % links;
+    } else if (state->screen == TUI_SCREEN_SETTINGS) {
+        tui_state_setting_move(state, 1);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
         tui_state_node_move(state, 1);
     } else tui_state_select_offset(state, 1);
@@ -131,6 +138,8 @@ static void select_next(tui_state_t *state) {
 static void activate(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_BROWSER) {
         tui_state_browse_selected(state);
+    } else if (state->screen == TUI_SCREEN_SETTINGS) {
+        tui_state_setting_activate(state);
     } else if (state->screen == TUI_SCREEN_NETWORK && tui_state_node_count(state) > 0u) {
         if (!state->has_node_selection) tui_state_node_move(state, 0);
         state->overlay = TUI_OVERLAY_NODE_ACTIONS;
@@ -145,6 +154,8 @@ static void reload(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_NETWORK) tui_state_request_path(state);
     else if (state->screen == TUI_SCREEN_BROWSER)
         (void)tui_state_browse(state, state->url, false);
+    else if (state->screen == TUI_SCREEN_SETTINGS)
+        tui_state_set_status(state, "Select Announce Now to send an LXMF announce");
     else unavailable_screen(state, "RRC");
 }
 
@@ -158,16 +169,27 @@ static bool handle_command_key(tui_state_t *state, int key) {
                 return true;
             return false;
         case '?': state->overlay = TUI_OVERLAY_HELP; break;
-        case '1': tui_state_set_tab(state, TUI_TRUST_TRUSTED); break;
-        case '2': tui_state_set_tab(state, TUI_TRUST_UNKNOWN); break;
-        case '3': tui_state_set_tab(state, TUI_TRUST_UNTRUSTED); break;
+        case '1':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+                tui_state_set_tab(state, TUI_TRUST_TRUSTED);
+            break;
+        case '2':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+                tui_state_set_tab(state, TUI_TRUST_UNKNOWN);
+            break;
+        case '3':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+                tui_state_set_tab(state, TUI_TRUST_UNTRUSTED);
+            break;
         case KEY_UP: case 'k': select_previous(state); break;
         case KEY_DOWN: case 'j': case '\t': select_next(state); break;
         case KEY_PPAGE: tui_state_scroll_by(state, TUI_SCROLL_STEP); break;
         case KEY_NPAGE: tui_state_scroll_by(state, -TUI_SCROLL_STEP); break;
         case '/':
-            state->field = TUI_FIELD_SEARCH;
-            (void)tui_editor_apply(&state->search, TUI_EDIT_END);
+            if (state->screen == TUI_SCREEN_CONVERSATIONS) {
+                state->field = TUI_FIELD_SEARCH;
+                (void)tui_editor_apply(&state->search, TUI_EDIT_END);
+            }
             break;
         case 'a': case 'A':
             if (state->screen == TUI_SCREEN_CONVERSATIONS) {
@@ -179,11 +201,23 @@ static bool handle_command_key(tui_state_t *state, int key) {
             if (tui_state_selected_contact(state) != NULL)
                 state->overlay = TUI_OVERLAY_PEER;
             break;
-        case 'p': tui_state_toggle_pin(state); break;
-        case 'x': tui_state_toggle_block(state); break;
-        case 't': tui_state_set_trust(state, TUI_TRUST_TRUSTED); break;
-        case 'u': tui_state_set_trust(state, TUI_TRUST_UNTRUSTED); break;
-        case 'n': tui_state_toggle_note(state); break;
+        case 'p':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS) tui_state_toggle_pin(state);
+            break;
+        case 'x':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS) tui_state_toggle_block(state);
+            break;
+        case 't':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+                tui_state_set_trust(state, TUI_TRUST_TRUSTED);
+            break;
+        case 'u':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS)
+                tui_state_set_trust(state, TUI_TRUST_UNTRUSTED);
+            break;
+        case 'n':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS) tui_state_toggle_note(state);
+            break;
         case 'y':
             tui_state_set_status(state,
                                  "Clipboard unavailable; use history or --dump-ui to copy text");
@@ -192,7 +226,7 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'N': state->screen = TUI_SCREEN_NETWORK; break;
         case 'B': state->screen = TUI_SCREEN_BROWSER; break;
         case 'o': case 'O': unavailable_screen(state, "Node"); break;
-        case 's': case 'S': unavailable_screen(state, "Settings"); break;
+        case 's': case 'S': state->screen = TUI_SCREEN_SETTINGS; break;
         case 'g': case 'G': unavailable_screen(state, "Guide"); break;
         case 'l': case 'L': unavailable_screen(state, "Logs"); break;
         case 'r': case 'R': reload(state); break;
@@ -205,7 +239,7 @@ static bool handle_command_key(tui_state_t *state, int key) {
     return true;
 }
 
-static bool dispatch_key(tui_state_t *state, int key) {
+bool tui_dispatch_key(tui_state_t *state, int key) {
     if (state->overlay == TUI_OVERLAY_NODE_ACTIONS) {
         handle_node_actions_key(state, key);
         return true;
@@ -242,7 +276,7 @@ static int run_loop(tui_state_t *state) {
         (void)curs_set(state->field != TUI_FIELD_NONE ? 1 : 0);
         int key = getch();
         if (key == ERR || key == KEY_RESIZE) continue;
-        running = dispatch_key(state, key);
+        running = tui_dispatch_key(state, key);
     }
     if (endwin() == ERR) result = -1;
     return result;

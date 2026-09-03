@@ -1,8 +1,11 @@
 #include "tui_state.h"
 
 #include <assert.h>
+#include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static const uint8_t local_address[LXMF_DESTINATION_LENGTH] = {0x11u};
 
@@ -19,6 +22,8 @@ static tui_state_t *make_state(void) {
     tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
     tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
+    tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
+    tui_settings_defaults(&state->settings);
     state->tab = TUI_TRUST_UNKNOWN;
     state->filter_dirty = true;
     return state;
@@ -289,12 +294,58 @@ static void test_browser_links_and_scroll(void) {
     destroy_state(state);
 }
 
+static void test_settings_navigation_and_edits(void) {
+    char path[] = "/tmp/nomad-state-settings-XXXXXX";
+    int descriptor = mkstemp(path);
+    assert(descriptor >= 0);
+    assert(close(descriptor) == 0);
+    assert(unlink(path) == 0);
+    tui_state_t *state = make_state();
+    (void)snprintf(state->settings_path, sizeof state->settings_path, "%s", path);
+
+    tui_state_setting_move(state, -1);
+    assert(state->setting_selected == TUI_SETTING_ANNOUNCE_NOW);
+    tui_state_setting_move(state, 1);
+    assert(state->setting_selected == TUI_SETTING_DISPLAY_NAME);
+    tui_state_setting_activate(state);
+    assert(state->field == TUI_FIELD_SETTING);
+    tui_editor_clear(&state->setting);
+    assert(tui_editor_insert(&state->setting, "Rei", 3u));
+    assert(tui_state_setting_apply(state));
+    assert(strcmp(state->settings.display_name, "Rei") == 0);
+    assert(state->field == TUI_FIELD_NONE);
+
+    state->setting_selected = TUI_SETTING_ANNOUNCE_INTERVAL;
+    tui_state_setting_activate(state);
+    tui_editor_clear(&state->setting);
+    assert(tui_editor_insert(&state->setting, "29", 2u));
+    assert(!tui_state_setting_apply(state));
+    assert(state->field == TUI_FIELD_SETTING);
+    assert(state->settings.announce_interval_minutes == 360u);
+    tui_state_setting_cancel(state);
+    assert(state->field == TUI_FIELD_NONE);
+
+    state->setting_selected = TUI_SETTING_ANNOUNCE_NOW;
+    tui_state_setting_activate(state);
+    assert(state->has_announce_result);
+    assert(state->last_announce_result == RNS_ERROR_INVALID_STATE);
+    assert(strstr(state->status, "offline") != NULL);
+
+    tui_settings_t persisted;
+    bool found = false;
+    assert(tui_settings_load(path, &persisted, &found) && found);
+    assert(strcmp(persisted.display_name, "Rei") == 0);
+    assert(unlink(path) == 0);
+    destroy_state(state);
+}
+
 int main(void) {
     test_node_selection_survives_resort();
     test_node_move_clamps();
     test_only_nomad_nodes_serve_pages();
     test_empty_registry_has_no_selection();
     test_browser_links_and_scroll();
+    test_settings_navigation_and_edits();
     test_trust_tabs();
     test_thread_and_search();
     test_selection_cycles();

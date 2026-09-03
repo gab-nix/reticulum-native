@@ -199,6 +199,7 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
         case TUI_FIELD_COMPOSE: editor = &state->composer; prompt = "Message: "; break;
         case TUI_FIELD_SEARCH: editor = &state->search; prompt = "Search: "; break;
         case TUI_FIELD_ADDRESS: editor = &state->address; prompt = "Address: "; break;
+        case TUI_FIELD_SETTING: break;
         case TUI_FIELD_NONE: break;
     }
     (void)mvhline(layout->divider_row, 0, ACS_HLINE, layout->columns);
@@ -349,6 +350,110 @@ static void draw_network(const tui_state_t *state, const tui_layout_t *layout) {
     }
     clipped(stdscr, layout->hint_row, 0, layout->columns,
             "j/k select  Enter details  R refresh path  B browser  C conversations  q quit");
+}
+
+static void draw_setting_row(const tui_state_t *state, const tui_layout_t *layout,
+                             int row, tui_setting_item_t item, const char *text) {
+    bool selected = state->setting_selected == item;
+    if (selected) (void)attron(A_REVERSE);
+    clipped(stdscr, row, 2, layout->columns - 4, text);
+    if (selected) (void)attroff(A_REVERSE);
+}
+
+static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) {
+    char address[TUI_ADDRESS_DIGITS + 1u];
+    char propagation[TUI_ADDRESS_DIGITS + 1u];
+    char items[TUI_SETTING_COUNT][192];
+    char line[192];
+    size_t total = state->runtime != NULL
+                       ? rns_runtime_interface_count(state->runtime) : 0u;
+    size_t up = 0u;
+    for (size_t i = 0u; i < total; ++i) {
+        rns_runtime_interface_info_t info;
+        if (rns_runtime_interface_info(state->runtime, i, &info) == RNS_OK &&
+            info.state == RNS_RUNTIME_INTERFACE_UP && info.last_error == RNS_OK)
+            ++up;
+    }
+    tui_hex_format(state->local, LXMF_DESTINATION_LENGTH, address);
+    (void)attron(A_BOLD);
+    clipped(stdscr, 2, 1, layout->columns - 2,
+            "Settings (local identity loaded)");
+    (void)attroff(A_BOLD);
+    (void)snprintf(line, sizeof line, "LXMF: %s", address);
+    clipped(stdscr, 3, 0, layout->columns, line);
+    (void)snprintf(items[TUI_SETTING_DISPLAY_NAME], sizeof items[0],
+                   "Display name: %s",
+                   state->settings.display_name[0] != '\0'
+                       ? state->settings.display_name : "(empty)");
+    if (state->settings.has_stamp_cost)
+        (void)snprintf(items[TUI_SETTING_STAMP_COST], sizeof items[0],
+                       "Inbound stamp cost: %u (advertised; enforcement pending)",
+                       (unsigned)state->settings.stamp_cost);
+    else
+        (void)snprintf(items[TUI_SETTING_STAMP_COST], sizeof items[0], "%s",
+                       "Inbound stamp cost: off (enforcement pending)");
+    (void)snprintf(items[TUI_SETTING_ANNOUNCE_AT_START], sizeof items[0],
+                   "Announce at start: %s",
+                   state->settings.announce_at_start ? "yes" : "no");
+    (void)snprintf(items[TUI_SETTING_ANNOUNCE_INTERVAL], sizeof items[0],
+                   "Announce interval: %u minutes",
+                   state->settings.announce_interval_minutes);
+    if (state->settings.has_propagation_node) {
+        tui_hex_format(state->settings.propagation_node, LXMF_DESTINATION_LENGTH,
+                       propagation);
+        (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0],
+                       "Propagation node: %s (stored; sync pending)", propagation);
+    } else {
+        (void)snprintf(items[TUI_SETTING_PROPAGATION_NODE], sizeof items[0], "%s",
+                       "Propagation node: none (sync pending)");
+    }
+    (void)snprintf(items[TUI_SETTING_ANNOUNCE_NOW], sizeof items[0], "%s",
+                   "Announce Now");
+
+    const int setting_top = 4;
+    size_t capacity = layout->divider_row > setting_top ?
+                          (size_t)(layout->divider_row - setting_top) : 0u;
+    size_t first = 0u;
+    if (capacity < TUI_SETTING_COUNT &&
+        (size_t)state->setting_selected >= capacity)
+        first = (size_t)state->setting_selected - capacity + 1u;
+    for (size_t i = first, shown = 0u;
+         i < TUI_SETTING_COUNT && shown < capacity; ++i, ++shown)
+        draw_setting_row(state, layout, setting_top + (int)shown,
+                         (tui_setting_item_t)i, items[i]);
+
+    if (capacity > TUI_SETTING_COUNT) {
+        int row = setting_top + (int)TUI_SETTING_COUNT;
+        (void)snprintf(line, sizeof line, "Interfaces: %zu/%zu up", up, total);
+        clipped(stdscr, row, 2, layout->columns - 4, line);
+        if (capacity > TUI_SETTING_COUNT + 1u) {
+            if (!state->has_announce_result)
+                (void)snprintf(line, sizeof line, "%s", "Last announce: never");
+            else if (state->last_announce_result == RNS_OK)
+                (void)snprintf(line, sizeof line,
+                               "Last announce: success at monotonic %llu ms",
+                               (unsigned long long)state->last_announce_ms);
+            else
+                (void)snprintf(line, sizeof line, "Last announce: %s",
+                               rns_status_string(state->last_announce_result));
+            clipped(stdscr, row + 1, 2, layout->columns - 4, line);
+        }
+    }
+
+    (void)mvhline(layout->divider_row, 0, ACS_HLINE, layout->columns);
+    if (state->field == TUI_FIELD_SETTING) {
+        (void)snprintf(line, sizeof line, "Edit: %s",
+                       tui_editor_text(&state->setting));
+        clipped(stdscr, layout->input_row, 0, layout->columns, line);
+        int cursor = 6 + (int)tui_editor_column(&state->setting);
+        (void)move(layout->input_row,
+                   cursor < layout->columns ? cursor : layout->columns - 1);
+    } else
+        clipped(stdscr, layout->input_row, 0, layout->columns, state->status);
+    clipped(stdscr, layout->hint_row, 0, layout->columns,
+            state->field == TUI_FIELD_SETTING
+                ? "Enter save  Esc cancel  edit value"
+                : "j/k select  Enter edit/toggle/announce  C conversations  q quit");
 }
 
 /* ------------------------------------------------------------------- micron */
@@ -615,6 +720,11 @@ void tui_render_draw(tui_state_t *state) {
         (void)refresh();
         return;
     }
+    if (state->screen == TUI_SCREEN_SETTINGS) {
+        draw_settings(state, &layout);
+        (void)refresh();
+        return;
+    }
     if (state->screen == TUI_SCREEN_BROWSER) {
         draw_browser(state, &layout);
         (void)refresh();
@@ -632,6 +742,32 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
     if (state == NULL || output == NULL) return -1;
     tui_hex_format(state->local, LXMF_DESTINATION_LENGTH, address);
     (void)fprintf(output, "Nomad Chat\nIdentity: %s\n", address);
+    if (state->screen == TUI_SCREEN_SETTINGS) {
+        char propagation[TUI_ADDRESS_DIGITS + 1u];
+        (void)fprintf(output, "Screen: Settings\nDisplay name: %s\n",
+                      state->settings.display_name);
+        if (state->settings.has_stamp_cost)
+            (void)fprintf(output, "Stamp cost: %u (advertised; enforcement pending)\n",
+                          (unsigned)state->settings.stamp_cost);
+        else
+            (void)fprintf(output, "Stamp cost: off\n");
+        (void)fprintf(output, "Announce at start: %s\nAnnounce interval: %u minutes\n",
+                      state->settings.announce_at_start ? "yes" : "no",
+                      state->settings.announce_interval_minutes);
+        if (state->settings.has_propagation_node) {
+            tui_hex_format(state->settings.propagation_node,
+                           LXMF_DESTINATION_LENGTH, propagation);
+            (void)fprintf(output, "Propagation node: %s (stored; sync pending)\n",
+                          propagation);
+        } else {
+            (void)fprintf(output, "Propagation node: none\n");
+        }
+        (void)fprintf(output, "Last announce: %s\nStatus: %s\n",
+                      !state->has_announce_result ? "never"
+                      : rns_status_string(state->last_announce_result),
+                      state->status);
+        return ferror(output) ? -1 : 0;
+    }
     const tui_contact_t *contact = tui_state_selected_contact(state);
     if (contact != NULL) {
         char peer[TUI_ADDRESS_DIGITS + 1u];

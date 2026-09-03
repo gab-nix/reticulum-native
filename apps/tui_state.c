@@ -8,13 +8,14 @@
 #include "reticulum/lxmf.h"
 
 #include <stdarg.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #define TUI_ROUTER_INTERVAL_MS 1000u
-#define TUI_ANNOUNCE_INTERVAL_MS (5u * 60u * 1000u)
 #define TUI_ROUTER_BATCH 2u
 #define TUI_RUNTIME_BATCH 32u
 #define TUI_NODE_LIFETIME 3600.0
@@ -397,6 +398,8 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
     tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
+    tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
+    tui_settings_defaults(&state->settings);
     state->tab = TUI_TRUST_UNKNOWN;
     state->screen = TUI_SCREEN_CONVERSATIONS;
     state->filter_dirty = true;
@@ -407,6 +410,13 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
         goto fail;
     if (lxmf_store_open(&state->store, store_path) != LXMF_OK ||
         lxmf_store_list(&state->store, load_message, state) != LXMF_OK) goto fail;
+    written = snprintf(state->settings_path, sizeof state->settings_path,
+                       "%s.settings", store_path);
+    if (written <= 0 || (size_t)written >= sizeof state->settings_path) goto fail;
+    if (!tui_settings_load(state->settings_path, &state->settings, NULL)) {
+        tui_settings_defaults(&state->settings);
+        state->settings_load_error = true;
+    }
     written = snprintf(state->peer_store_path, sizeof state->peer_store_path,
                        "%s.peers", store_path);
     if (written <= 0 || (size_t)written >= sizeof state->peer_store_path ||
@@ -428,6 +438,8 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     else state->node_store_path[0] = '\0';
 
     if (config_path != NULL) start_runtime(state, config_path);
+    state->startup_announce_pending = state->runtime != NULL &&
+                                      state->settings.announce_at_start;
     if (state->runtime != NULL &&
         rns_browser_create(&state->browser, state->runtime, NULL) != RNS_OK)
         tui_state_set_status(state, "Page browser unavailable; messaging remains active");
@@ -436,6 +448,9 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     (void)snprintf(state->url, sizeof state->url, "nomad://local/home");
     if (!rns_micron_parse(&state->page, tui_home_page, sizeof tui_home_page - 1u) ||
         !rns_micron_history_push(&state->history, state->url)) goto fail;
+    if (state->settings_load_error)
+        tui_state_set_status(state,
+                             "Settings file is invalid; safe defaults are active");
     tui_state_refresh(state);
     return 0;
 fail:
@@ -447,6 +462,8 @@ void tui_state_close(tui_state_t *state) {
     if (state == NULL) return;
     if (state->node_store_path[0] != '\0')
         (void)rns_node_registry_save(&state->nodes, state->node_store_path);
+    if (state->settings_path[0] != '\0')
+        (void)tui_settings_save(state->settings_path, &state->settings);
     rns_browser_destroy(state->browser);
     state->browser = NULL;
     rns_runtime_destroy(state->runtime);
@@ -478,6 +495,52 @@ static void poll_browser(tui_state_t *state) {
     }
 }
 
+static bool announce_at(tui_state_t *state, uint64_t now) {
+    static const char *const delivery[] = {"delivery"};
+    uint8_t app_data[RNS_NODE_APP_DATA_MAX];
+    size_t app_data_length = 0u;
+    lxmf_status_t encoded = tui_settings_encode_announce(
+        &state->settings, app_data, sizeof app_data, &app_data_length);
+    if (encoded != LXMF_OK) {
+        state->has_announce_result = true;
+        state->last_announce_result = RNS_ERROR_INVALID_ARGUMENT;
+        tui_state_set_status(state, "Cannot encode LXMF announce (%d)", encoded);
+        return false;
+    }
+    if (state->runtime == NULL || !state->router_ready) {
+        state->has_announce_result = true;
+        state->last_announce_result = RNS_ERROR_INVALID_STATE;
+        tui_state_set_status(state, "Cannot announce while the messaging runtime is offline");
+        return false;
+    }
+    rns_status_t result = rns_runtime_announce(state->runtime, &state->identity,
+                                               "lxmf", delivery, 1u, app_data,
+                                               app_data_length);
+    state->has_announce_result = true;
+    state->last_announce_result = result;
+    if (result != RNS_OK) {
+        tui_state_set_status(state, "LXMF announce failed: %s",
+                             rns_status_string(result));
+        return false;
+    }
+    state->last_announce_ms = now;
+    state->next_announce_ms = now + tui_settings_interval_ms(&state->settings);
+    tui_state_set_status(state, "LXMF delivery destination announced");
+    return true;
+}
+
+bool tui_state_announce(tui_state_t *state) {
+    uint64_t now = 0u;
+    if (state == NULL) return false;
+    if (rns_hal_monotonic_ms(&now) != RNS_OK) {
+        state->has_announce_result = true;
+        state->last_announce_result = RNS_ERROR_IO;
+        tui_state_set_status(state, "Cannot read the monotonic clock for announce");
+        return false;
+    }
+    return announce_at(state, now);
+}
+
 void tui_state_poll(tui_state_t *state) {
     uint64_t now = 0u;
     size_t processed = 0u;
@@ -486,14 +549,15 @@ void tui_state_poll(tui_state_t *state) {
     poll_browser(state);
     if (rns_hal_monotonic_ms(&now) == RNS_OK) {
         (void)rns_node_registry_expire(&state->nodes, (double)now / 1000.0);
-        /* Announce our inbox so peers can discover us and route replies back. */
-        if (state->router_ready &&
-            (state->last_announce_ms == 0u ||
-             now - state->last_announce_ms >= TUI_ANNOUNCE_INTERVAL_MS)) {
-            static const char *const delivery[] = {"delivery"};
-            if (rns_runtime_announce(state->runtime, &state->identity, "lxmf",
-                                     delivery, 1u, NULL, 0u) == RNS_OK)
-                state->last_announce_ms = now;
+        if (state->next_announce_ms == 0u)
+            state->next_announce_ms = now + tui_settings_interval_ms(&state->settings);
+        if (tui_settings_announce_due(state->startup_announce_pending,
+                                      state->next_announce_ms, now)) {
+            state->startup_announce_pending = false;
+            (void)announce_at(state, now);
+            if (state->next_announce_ms <= now)
+                state->next_announce_ms = now +
+                                          tui_settings_interval_ms(&state->settings);
         }
         if (state->router_ready &&
             now - state->router_polled_ms >= TUI_ROUTER_INTERVAL_MS) {
@@ -662,6 +726,161 @@ void tui_state_toggle_note(tui_state_t *state) {
     state->filter_dirty = true;
     tui_state_persist_contacts(state);
     tui_state_set_status(state, "Contact note saved");
+}
+
+/* ---------------------------------------------------------------- settings */
+
+bool tui_state_save_settings(tui_state_t *state) {
+    if (state == NULL || state->settings_path[0] == '\0') return false;
+    if (!tui_settings_save(state->settings_path, &state->settings)) {
+        tui_state_set_status(state, "Could not save settings");
+        return false;
+    }
+    return true;
+}
+
+void tui_state_setting_move(tui_state_t *state, int delta) {
+    if (state == NULL || state->field != TUI_FIELD_NONE) return;
+    int selected = (int)state->setting_selected + (delta < 0 ? -1 : 1);
+    if (selected < 0) selected = (int)TUI_SETTING_COUNT - 1;
+    if (selected >= (int)TUI_SETTING_COUNT) selected = 0;
+    state->setting_selected = (tui_setting_item_t)selected;
+}
+
+static void begin_setting_edit(tui_state_t *state, const char *value) {
+    tui_editor_clear(&state->setting);
+    if (value != NULL)
+        (void)tui_editor_insert(&state->setting, value, strlen(value));
+    state->field = TUI_FIELD_SETTING;
+}
+
+void tui_state_setting_activate(tui_state_t *state) {
+    char value[TUI_ADDRESS_DIGITS + 1u];
+    if (state == NULL) return;
+    switch (state->setting_selected) {
+        case TUI_SETTING_DISPLAY_NAME:
+            begin_setting_edit(state, state->settings.display_name);
+            break;
+        case TUI_SETTING_STAMP_COST:
+            if (state->settings.has_stamp_cost)
+                (void)snprintf(value, sizeof value, "%u",
+                               (unsigned)state->settings.stamp_cost);
+            else
+                (void)snprintf(value, sizeof value, "%s", "off");
+            begin_setting_edit(state, value);
+            break;
+        case TUI_SETTING_ANNOUNCE_AT_START: {
+            bool previous = state->settings.announce_at_start;
+            state->settings.announce_at_start = !state->settings.announce_at_start;
+            if (tui_state_save_settings(state))
+                tui_state_set_status(state, "Announce-at-start setting saved");
+            else
+                state->settings.announce_at_start = previous;
+            break;
+        }
+        case TUI_SETTING_ANNOUNCE_INTERVAL:
+            (void)snprintf(value, sizeof value, "%u",
+                           state->settings.announce_interval_minutes);
+            begin_setting_edit(state, value);
+            break;
+        case TUI_SETTING_PROPAGATION_NODE:
+            if (state->settings.has_propagation_node)
+                tui_hex_format(state->settings.propagation_node,
+                               LXMF_DESTINATION_LENGTH, value);
+            else
+                (void)snprintf(value, sizeof value, "%s", "none");
+            begin_setting_edit(state, value);
+            break;
+        case TUI_SETTING_ANNOUNCE_NOW:
+            (void)tui_state_announce(state);
+            break;
+        case TUI_SETTING_COUNT:
+            break;
+    }
+}
+
+void tui_state_setting_cancel(tui_state_t *state) {
+    if (state == NULL) return;
+    tui_editor_clear(&state->setting);
+    state->field = TUI_FIELD_NONE;
+    tui_state_set_status(state, "Settings edit cancelled");
+}
+
+static bool parse_decimal(const char *text, unsigned long maximum,
+                          unsigned long *value) {
+    char *end = NULL;
+    errno = 0;
+    unsigned long parsed = strtoul(text, &end, 10);
+    if (errno != 0 || text[0] == '\0' || end == NULL || *end != '\0' ||
+        parsed > maximum)
+        return false;
+    *value = parsed;
+    return true;
+}
+
+bool tui_state_setting_apply(tui_state_t *state) {
+    tui_settings_t changed;
+    const char *text;
+    unsigned long number = 0u;
+    if (state == NULL || state->field != TUI_FIELD_SETTING) return false;
+    changed = state->settings;
+    text = tui_editor_text(&state->setting);
+    switch (state->setting_selected) {
+        case TUI_SETTING_DISPLAY_NAME:
+            changed.display_name_len = tui_editor_length(&state->setting);
+            memcpy(changed.display_name, text, changed.display_name_len + 1u);
+            break;
+        case TUI_SETTING_STAMP_COST:
+            if (text[0] == '\0' || strcmp(text, "0") == 0 ||
+                strcmp(text, "off") == 0) {
+                changed.has_stamp_cost = false;
+                changed.stamp_cost = 0u;
+            } else if (parse_decimal(text, 254u, &number) && number >= 1u) {
+                changed.has_stamp_cost = true;
+                changed.stamp_cost = (uint8_t)number;
+            } else {
+                tui_state_set_status(state, "Stamp cost must be off or 1-254");
+                return false;
+            }
+            break;
+        case TUI_SETTING_ANNOUNCE_INTERVAL:
+            if (!parse_decimal(text, UINT32_MAX, &number) ||
+                number < TUI_SETTINGS_MIN_ANNOUNCE_MINUTES) {
+                tui_state_set_status(state, "Announce interval must be at least 30 minutes");
+                return false;
+            }
+            changed.announce_interval_minutes = (uint32_t)number;
+            break;
+        case TUI_SETTING_PROPAGATION_NODE:
+            if (text[0] == '\0' || strcmp(text, "none") == 0) {
+                changed.has_propagation_node = false;
+                memset(changed.propagation_node, 0,
+                       sizeof changed.propagation_node);
+            } else if (tui_hex_parse(text, changed.propagation_node,
+                                     sizeof changed.propagation_node)) {
+                changed.has_propagation_node = true;
+            } else {
+                tui_state_set_status(state,
+                                     "Propagation node must be none or 32 hex characters");
+                return false;
+            }
+            break;
+        case TUI_SETTING_ANNOUNCE_AT_START:
+        case TUI_SETTING_ANNOUNCE_NOW:
+        case TUI_SETTING_COUNT:
+            return false;
+    }
+    if (!tui_settings_valid(&changed) ||
+        !tui_settings_save(state->settings_path, &changed)) {
+        tui_state_set_status(state, "Could not validate or save settings");
+        return false;
+    }
+    state->settings = changed;
+    state->next_announce_ms = 0u;
+    tui_editor_clear(&state->setting);
+    state->field = TUI_FIELD_NONE;
+    tui_state_set_status(state, "Settings saved");
+    return true;
 }
 
 /* ------------------------------------------------------------------ network */
