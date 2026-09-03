@@ -74,6 +74,11 @@ typedef bool (*lxmf_router_ratchet_resolver_fn)(
 typedef bool (*lxmf_router_stamp_cost_resolver_fn)(
     void *context, const uint8_t destination[LXMF_DESTINATION_LENGTH],
     uint8_t *cost);
+/* Application-owned block preferences. The source is a claimed delivery hash
+ * for unverified senders, so false is not proof of trust. Must not block or
+ * retain the borrowed hash. Trust never implicitly disables stamp checks. */
+typedef bool (*lxmf_router_source_blocked_fn)(
+    void *context, const uint8_t source[LXMF_SOURCE_LENGTH]);
 typedef lxmf_status_t (*lxmf_router_send_fn)(void *context,
                                              const uint8_t *packet,
                                              size_t packet_length);
@@ -120,6 +125,11 @@ typedef struct {
     /* Zero disables inbound stamp enforcement. Costs 1..254 accept either a
      * valid issued-ticket stamp or a proof-of-work stamp. */
     uint8_t inbound_stamp_cost;
+    lxmf_router_source_blocked_fn is_source_blocked;
+    void *source_policy_context;
+    /* Maximum packed LXMF size across packet, Resource and deferred delivery.
+     * Zero uses the store bound; nonzero must fit within that bound. */
+    size_t max_incoming_message_size;
     /* When supplied, opportunistic sends use a Reticulum packet receipt and
      * only become DELIVERED after a valid proof. `send_packet` remains the
      * compatibility transport for callers that do not own a runtime. */

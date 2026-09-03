@@ -40,7 +40,10 @@ typedef enum {
      * means a known identity did not sign the message. */
     LXMF_ERR_UNKNOWN_SIGNER,
     /* The message did not satisfy the configured inbound stamp policy. */
-    LXMF_ERR_STAMP
+    LXMF_ERR_STAMP,
+    /* Application-owned source policy rejected this message; not a signature
+     * failure. Applies even when the source identity is not yet known. */
+    LXMF_ERR_BLOCKED
 } lxmf_status_t;
 
 /* Trust carried alongside a retained message. */

@@ -23,9 +23,15 @@ typedef struct {
 
 typedef struct {
     bool received;
+    bool blocked;
     uint8_t content[LXMF_STORE_MAX_CONTENT];
     size_t content_length;
 } inbox_t;
+
+static bool source_is_blocked(void *context, const uint8_t source[16]) {
+    (void)source;
+    return ((inbox_t *)context)->blocked;
+}
 
 typedef struct {
     lxmf_delivery_status_t statuses[16];
@@ -199,6 +205,8 @@ int main(void) {
         .resolve_context = &bob_resolver,
         .message_callback = delivered,
         .message_context = &bob_inbox,
+        .is_source_blocked = source_is_blocked,
+        .source_policy_context = &bob_inbox,
         .preferred_delivery_method = LXMF_DELIVERY_METHOD_DIRECT,
         .accept_inbound_links = true};
     assert(lxmf_router_init(&alice_router, &alice_options) == LXMF_OK);
@@ -410,7 +418,7 @@ int main(void) {
     assert(memcmp(retained, resource_packed, retained_length) == 0);
 
     /* Remote policy rejection is terminal and never creates a SENT state. */
-    bob_router.config.max_incoming_resource_size = 400U;
+    bob_router.config.max_incoming_message_size = 400U;
     (void)queue_large_message(
         &alice_store, &alice, bob_destination, alice_destination, 95.0, 0x42U,
         resource_content, resource_packed, resource_id);
@@ -439,7 +447,7 @@ int main(void) {
     assert(alice_delivery.statuses[1] == LXMF_DELIVERY_FAILED);
 
     /* A stalled Resource remains SENDING until its own deadline, then fails. */
-    bob_router.config.max_incoming_resource_size = 0U;
+    bob_router.config.max_incoming_message_size = 0U;
     alice_router.config.resource_timeout_seconds = 0.002;
     (void)queue_large_message(
         &alice_store, &alice, bob_destination, alice_destination, 96.0, 0x63U,
@@ -473,6 +481,29 @@ int main(void) {
     assert(alice_delivery.count == 2U);
     assert(alice_delivery.statuses[1] == LXMF_DELIVERY_FAILED);
     assert(alice_delivery.results[1] == LXMF_ERR_CANCELLED);
+
+    /* Block policy applies on an already authenticated/reused link, before
+     * history delivery or an application packet proof. */
+    bob_inbox.blocked = true;
+    bob_inbox.received = false;
+    size_t previous_count = lxmf_store_count(&bob_store);
+    outbound.message_id[0] = 0x98U;
+    outbound.timestamp = 98.0;
+    inserted = false;
+    assert(lxmf_store_put(&alice_store, &outbound, &inserted) == LXMF_OK && inserted);
+    assert(lxmf_router_send_message(&alice_router, outbound.message_id) == LXMF_OK);
+    for (size_t i = 0; i < 100; ++i) {
+        assert(rns_runtime_poll(bob_runtime, 8U, &processed) == RNS_OK);
+        assert(rns_runtime_poll(alice_runtime, 8U, &processed) == RNS_OK);
+    }
+    assert(!bob_inbox.received && lxmf_store_count(&bob_store) == previous_count);
+    {
+        uint8_t content[64];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, outbound.message_id, &stored,
+                               content, sizeof content) == LXMF_OK);
+        assert(stored.status == LXMF_DELIVERY_SENT);
+    }
 
     lxmf_router_destroy(&bob_router);
     lxmf_router_destroy(&alice_router);

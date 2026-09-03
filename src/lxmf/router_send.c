@@ -61,6 +61,18 @@ static uint64_t router_wall_time(const lxmf_router_t *router) {
     return router->config.wall_clock(router->config.wall_clock_context);
 }
 
+static size_t inbound_message_limit(const lxmf_router_t *router) {
+    return router->config.max_incoming_message_size != 0u
+        ? router->config.max_incoming_message_size : LXMF_STORE_MAX_PACKED;
+}
+
+static bool source_blocked(const lxmf_router_t *router,
+                            const uint8_t source[LXMF_SOURCE_LENGTH]) {
+    return router->config.is_source_blocked != NULL &&
+        router->config.is_source_blocked(router->config.source_policy_context,
+                                         source);
+}
+
 static lxmf_status_t validate_inbound_stamp(
     lxmf_router_t *router, const lxmf_message_t *message) {
     uint8_t cost = router->config.inbound_stamp_cost;
@@ -169,6 +181,7 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
         (config->runtime == NULL && config->send_packet == NULL) ||
         (config->ticket_store != NULL && config->wall_clock == NULL) ||
         config->inbound_stamp_cost == UINT8_MAX ||
+        config->max_incoming_message_size > LXMF_STORE_MAX_PACKED ||
         config->stamp_work_units > LXMF_STAMP_POLL_MAX_UNITS)
         return LXMF_ERR_ARGUMENT;
     memset(router, 0, sizeof *router);
@@ -480,7 +493,7 @@ static bool direct_resource_accept(
                   : LXMF_STORE_MAX_PACKED;
     return advertisement->data_size > 0U &&
            advertisement->data_size <= maximum &&
-           advertisement->data_size <= LXMF_STORE_MAX_PACKED;
+           advertisement->data_size <= inbound_message_limit(router);
 }
 
 static void direct_resource_received(
@@ -1243,6 +1256,7 @@ static lxmf_status_t receive_representation(
     if (router == NULL || packed == NULL || packed_length == 0U ||
         packed_length > LXMF_STORE_MAX_PACKED)
         return LXMF_ERR_ARGUMENT;
+    if (packed_length > inbound_message_limit(router)) return LXMF_ERR_BOUNDS;
     lxmf_message_t message;
     lxmf_identity_verifier_context_t verifier = {
         .resolve = router->config.resolve_identity,
@@ -1259,6 +1273,15 @@ static lxmf_status_t receive_representation(
     if (memcmp(message.destination, local_destination,
                LXMF_DESTINATION_LENGTH) != 0)
         return LXMF_ERR_FORMAT;
+
+    /* Reject before learning tickets, recording replay/history state, invoking
+     * the application or returning an application-level link proof. */
+    if (source_blocked(router, message.source)) {
+        report_event(router, message.message_id, method,
+                     LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_NONE,
+                     LXMF_ERR_BLOCKED, 0u);
+        return LXMF_ERR_BLOCKED;
+    }
 
     status = validate_inbound_stamp(router, &message);
     if (status != LXMF_OK) {
@@ -1342,6 +1365,15 @@ lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
             result->pending++;
             continue;
         }
+        if (retained_length > inbound_message_limit(router)) {
+            if (lxmf_store_remove(router->config.store, pending.ids[i]) != LXMF_OK)
+                return LXMF_ERR_CRYPTO;
+            result->rejected++;
+            report_event(router, pending.ids[i], LXMF_DELIVERY_METHOD_UNKNOWN,
+                         LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_NONE,
+                         LXMF_ERR_BOUNDS, 0u);
+            continue;
+        }
         retained = malloc(retained_length);
         if (retained == NULL) return LXMF_ERR_BOUNDS;
         if (lxmf_store_read_packed(router->config.store, pending.ids[i], retained,
@@ -1353,6 +1385,19 @@ lxmf_status_t lxmf_router_verify_pending(lxmf_router_t *router,
         lxmf_status_t checked =
             lxmf_unpack(retained, retained_length, lxmf_identity_verifier,
                         &verifier, &message);
+        if ((checked == LXMF_OK || checked == LXMF_ERR_UNKNOWN_SIGNER) &&
+            memcmp(message.message_id, pending.ids[i], LXMF_MESSAGE_ID_LENGTH) == 0 &&
+            source_blocked(router, message.source)) {
+            free(retained);
+            if (lxmf_store_remove(router->config.store, pending.ids[i]) != LXMF_OK)
+                return LXMF_ERR_CRYPTO;
+            result->rejected++;
+            /* A changed policy is not evidence of a bad cryptographic signature. */
+            report_event(router, pending.ids[i], LXMF_DELIVERY_METHOD_UNKNOWN,
+                         LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_NONE,
+                         LXMF_ERR_BLOCKED, 0u);
+            continue;
+        }
         if (checked == LXMF_ERR_UNKNOWN_SIGNER) {
             free(retained);
             result->pending++;

@@ -17,7 +17,13 @@ typedef struct {
     lxmf_router_event_t event;
     uint8_t packet[RNS_MTU];
     size_t packet_length;
+    bool blocked;
 } state_t;
+
+static bool source_is_blocked(void *context, const uint8_t hash[16]) {
+    state_t *state = context;
+    return state->blocked && memcmp(hash, state->peer_hash, 16) == 0;
+}
 
 static const rns_identity *resolve(void *context, const uint8_t hash[16]) {
     state_t *state = context;
@@ -157,6 +163,8 @@ int main(void) {
         .wall_clock = wall_clock,
         .wall_clock_context = &state,
         .inbound_stamp_cost = 1u,
+        .is_source_blocked = source_is_blocked,
+        .source_policy_context = &state,
         .resolve_identity = resolve,
         .resolve_context = &state,
         .send_packet = no_send,
@@ -214,8 +222,13 @@ int main(void) {
            memcmp(parsed_field.ticket, remote_ticket, 16u) == 0);
     length = make_packet(&alice, &bob, 5.0, fields, fields_length,
                          TICKET_STAMP, issued.ticket, packet, message_id);
-    assert(lxmf_router_receive_packet(&router, packet, length) == LXMF_OK);
     lxmf_ticket_entry_t remembered;
+    state.blocked = true;
+    assert(lxmf_router_receive_packet(&router, packet, length) == LXMF_ERR_BLOCKED);
+    assert(lxmf_ticket_store_get_outbound(tickets, state.peer_hash, state.now,
+                                          &remembered) == LXMF_ERR_PENDING);
+    state.blocked = false;
+    assert(lxmf_router_receive_packet(&router, packet, length) == LXMF_OK);
     assert(lxmf_ticket_store_get_outbound(tickets, state.peer_hash, state.now,
                                           &remembered) == LXMF_OK);
     assert(remembered.expires_at == state.now + 5000u &&
