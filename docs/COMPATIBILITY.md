@@ -43,6 +43,15 @@ standard and unknown fields, and the 255-byte MessagePack binary boundary. The
 fixture intentionally excludes random Reticulum ciphertext and therefore does
 not establish live encrypted delivery interoperability.
 
+The Reticulum link vectors in `tests/fixtures/rns_link_vectors.h` execute the
+pinned Python packet, link-signalling, link-ID and identity-signing APIs. They
+record deterministic public link-request and LRPROOF packets, their signing
+preimages, RTT MessagePack plaintext and link-identification signing data. The
+C test reconstructs the packets, verifies the signatures and checks locally
+decrypted RTT plaintext. Random-IV ciphertext and live link establishment are
+intentionally outside this fixture, so this is deterministic representation
+evidence rather than bidirectional link interoperability.
+
 ## Compatibility policy
 
 - The wire behaviour of the pinned releases is authoritative.

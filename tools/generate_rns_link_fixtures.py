@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Generate deterministic public Reticulum link vectors from pinned Python RNS."""
+
+import argparse
+import hashlib
+import pathlib
+import subprocess
+import sys
+from types import SimpleNamespace
+
+RNS_COMMIT = "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6"
+
+
+def checked_head(repository: pathlib.Path) -> None:
+    actual = subprocess.check_output(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if actual != RNS_COMMIT:
+        raise SystemExit(f"{repository}: expected commit {RNS_COMMIT}, found {actual}")
+
+
+def c_bytes(data: bytes) -> str:
+    return ", ".join(f"0x{value:02x}" for value in data)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reticulum", required=True, type=pathlib.Path)
+    parser.add_argument("--output", required=True, type=pathlib.Path)
+    args = parser.parse_args()
+    checked_head(args.reticulum)
+    sys.path.insert(0, str(args.reticulum))
+
+    import RNS  # pylint: disable=import-outside-toplevel
+    import RNS.vendor.umsgpack as msgpack  # pylint: disable=import-outside-toplevel
+    from RNS.Cryptography import (  # pylint: disable=import-outside-toplevel
+        Ed25519PrivateKey,
+        X25519PrivateKey,
+    )
+    from RNS.Link import Link  # pylint: disable=import-outside-toplevel
+
+    if not pathlib.Path(RNS.__file__).resolve().is_relative_to(args.reticulum.resolve()):
+        raise SystemExit("imported RNS from outside the pinned checkout")
+
+    # Destination construction normally consults a running Reticulum instance.
+    # This fixture performs no I/O, so supply only the owner flag used by the
+    # authoritative constructor. Synthetic private inputs exist only while
+    # generating public vectors and are never written out.
+    RNS.Transport.owner = SimpleNamespace(is_connected_to_shared_instance=False)
+    destination_identity = RNS.Identity.from_bytes(bytes(range(1, 65)))
+    identifying_identity = RNS.Identity.from_bytes(bytes(range(65, 129)))
+    destination = RNS.Destination(
+        destination_identity, RNS.Destination.OUT, RNS.Destination.SINGLE,
+        "lxmf", "delivery"
+    )
+    initiator_x = X25519PrivateKey.from_private_bytes(bytes(range(129, 161)))
+    initiator_signing = Ed25519PrivateKey.from_private_bytes(bytes(range(161, 193)))
+    responder_x = X25519PrivateKey.from_private_bytes(bytes(range(193, 225)))
+
+    signalling = Link.signalling_bytes(500, Link.MODE_AES256_CBC)
+    request_payload = (initiator_x.public_key().public_bytes()
+                       + initiator_signing.public_key().public_bytes()
+                       + signalling)
+    request = RNS.Packet(destination, request_payload,
+                         packet_type=RNS.Packet.LINKREQUEST)
+    request.pack()
+    link_id = Link.link_id_from_lr_packet(request)
+
+    responder_public = responder_x.public_key().public_bytes()
+    proof_signed_data = (link_id + responder_public
+                         + destination_identity.sig_pub_bytes + signalling)
+    proof_data = (destination_identity.sign(proof_signed_data)
+                  + responder_public + signalling)
+    link_destination = SimpleNamespace(
+        type=RNS.Destination.LINK, mtu=500, link_id=link_id, hash=link_id
+    )
+    proof_packet = RNS.Packet(link_destination, proof_data,
+                              packet_type=RNS.Packet.PROOF,
+                              context=RNS.Packet.LRPROOF)
+    proof_packet.pack()
+
+    rtt_plaintext = msgpack.packb(0.125)
+    identifying_public = identifying_identity.get_public_key()
+    identification_signed_data = link_id + identifying_public
+    identification_data = (identifying_public
+                           + identifying_identity.sign(identification_signed_data))
+
+    if len(request_payload) != 67 or len(proof_data) != 99:
+        raise SystemExit("unexpected pinned link request or proof size")
+    if len(rtt_plaintext) != 9 or len(identification_data) != 128:
+        raise SystemExit("unexpected pinned RTT or identification size")
+    if hashlib.sha256(request.raw).digest() == bytes(32):
+        raise SystemExit("invalid request packet")
+
+    values = {
+        "rns_link_destination_public": destination_identity.get_public_key(),
+        "rns_link_destination_hash": destination.hash,
+        "rns_link_signalling": signalling,
+        "rns_link_request_payload": request_payload,
+        "rns_link_request_raw": request.raw,
+        "rns_link_id": link_id,
+        "rns_link_responder_public": responder_public,
+        "rns_link_proof_signed_data": proof_signed_data,
+        "rns_link_proof_data": proof_data,
+        "rns_link_proof_raw": proof_packet.raw,
+        "rns_link_rtt_plaintext": rtt_plaintext,
+        "rns_link_identification_public": identifying_public,
+        "rns_link_identification_signed_data": identification_signed_data,
+        "rns_link_identification_data": identification_data,
+    }
+    lines = [
+        "/* Generated by tools/generate_rns_link_fixtures.py.",
+        f" * Reticulum commit: {RNS_COMMIT}",
+        " * Source APIs: RNS.Packet.pack, RNS.Link.signalling_bytes,",
+        " * RNS.Link.link_id_from_lr_packet, and RNS.Identity.sign.",
+        " * Contains public synthetic test material only. Do not edit manually. */",
+        "#ifndef RETICULUM_TEST_RNS_LINK_FIXTURES_H",
+        "#define RETICULUM_TEST_RNS_LINK_FIXTURES_H",
+        "#include <stdint.h>",
+    ]
+    for name, value in values.items():
+        lines.append(f"static const uint8_t {name}[] = {{{c_bytes(value)}}};")
+    lines.extend(["#endif", ""])
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text("\n".join(lines), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

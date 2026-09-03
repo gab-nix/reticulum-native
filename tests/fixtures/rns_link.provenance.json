@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "fixture": "rns_link_vectors.h",
+  "fixture_sha256": "24b5c85015dc9443eadcfb8a2e417cb512324b63ed1b1d6fce8c4075559f4e73",
+  "generator": "tools/generate_rns_link_fixtures.py",
+  "reticulum": {
+    "version": "1.5.2",
+    "commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+    "source_apis": [
+      "RNS.Packet.pack",
+      "RNS.Link.signalling_bytes",
+      "RNS.Link.link_id_from_lr_packet",
+      "RNS.Identity.sign"
+    ]
+  },
+  "coverage": [
+    "link request payload and packet bytes",
+    "link signalling and link ID",
+    "LRPROOF signing preimage, signature and packet bytes",
+    "RTT MessagePack float64 plaintext",
+    "link identification signing preimage and signature"
+  ],
+  "limitations": [
+    "contains public synthetic test material only",
+    "random-IV encrypted tokens are not fixture bytes",
+    "does not exercise a live Python-to-C or C-to-Python link"
+  ]
+}

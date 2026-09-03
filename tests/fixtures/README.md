@@ -39,3 +39,22 @@ Python opportunistic packet payload is not exactly the packed LXMF
 representation after its 16-byte destination prefix. Encryption and complete
 Reticulum packet bytes are deliberately excluded because their ephemeral key
 and IV are random; live encrypted exchange is a separate acceptance gate.
+
+`rns_link_vectors.h` is generated from pinned Reticulum 1.5.2 APIs. It records
+public link-request packet bytes, the derived link ID, proof signing preimage
+and packet, the RTT MessagePack plaintext, and the identification signing
+preimage. Synthetic private inputs are used only while generating signatures
+and public keys and are not written to the fixture.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tools/generate_rns_link_fixtures.py \
+  --reticulum /path/to/Reticulum \
+  --output tests/fixtures/rns_link_vectors.h
+```
+
+The generator rejects a checkout at any revision other than the recorded pin.
+The compiled C test reconstructs the deterministic packets and preimages and
+verifies the Python signatures. RTT ciphertext is decrypted locally and
+compared at the plaintext boundary because Reticulum tokens contain a random
+IV. These vectors do not exercise a live handshake, transport forwarding,
+timeouts, or encrypted interoperability with a Python peer.
