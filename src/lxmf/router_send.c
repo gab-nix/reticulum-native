@@ -154,6 +154,7 @@ const char *lxmf_queue_reason_string(lxmf_queue_reason_t reason) {
         case LXMF_QUEUE_REASON_RESOURCE: return "resource";
         case LXMF_QUEUE_REASON_PROPAGATION_NODE: return "propagation node";
         case LXMF_QUEUE_REASON_RETRY_BACKOFF: return "retry backoff";
+        case LXMF_QUEUE_REASON_CANCELLED: return "cancelled";
         default: return "invalid";
     }
 }
@@ -167,7 +168,8 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
         config->preferred_delivery_method > LXMF_DELIVERY_METHOD_PROPAGATED ||
         (config->runtime == NULL && config->send_packet == NULL) ||
         (config->ticket_store != NULL && config->wall_clock == NULL) ||
-        config->inbound_stamp_cost == UINT8_MAX)
+        config->inbound_stamp_cost == UINT8_MAX ||
+        config->stamp_work_units > LXMF_STAMP_POLL_MAX_UNITS)
         return LXMF_ERR_ARGUMENT;
     memset(router, 0, sizeof *router);
     router->config = *config;
@@ -226,6 +228,7 @@ static void release_resources(lxmf_router_t *router, bool all) {
 
 void lxmf_router_destroy(lxmf_router_t *router) {
     if (router == NULL) return;
+    lxmf_stamp_job_destroy(router->stamp_job);
     release_receipts(router, true);
     release_resources(router, true);
     for (size_t i = 0U; i < LXMF_ROUTER_MAX_LINKS; ++i) {
@@ -574,6 +577,148 @@ static lxmf_status_t ensure_direct_link(
     return LXMF_ERR_PENDING;
 }
 
+lxmf_status_t lxmf_router_stamp_progress(
+    const lxmf_router_t *router, const uint8_t id[32],
+    lxmf_stamp_job_progress_t *progress) {
+    if (router == NULL || id == NULL || progress == NULL)
+        return LXMF_ERR_ARGUMENT;
+    if (router->stamp_job == NULL ||
+        memcmp(router->stamp_message_id, id, 32u) != 0)
+        return LXMF_ERR_PENDING;
+    return lxmf_stamp_job_progress(router->stamp_job, progress);
+}
+
+/* Stamp work runs before SENDING and does not consume network retry attempts.
+ * The worker keeps only an ID and hash state, never pointers into the store. */
+static lxmf_status_t prepare_outbound_stamp(
+    lxmf_router_t *router, lxmf_store_message_t *stored, const uint8_t id[32]) {
+    uint8_t cost = 0u;
+    if (router->config.resolve_stamp_cost == NULL ||
+        !router->config.resolve_stamp_cost(router->config.stamp_cost_context,
+                                           stored->destination, &cost) ||
+        cost == 0u) {
+        if (router->stamp_job != NULL &&
+            memcmp(router->stamp_message_id, id, 32u) == 0) {
+            lxmf_stamp_job_destroy(router->stamp_job);
+            router->stamp_job = NULL;
+        }
+        return LXMF_OK;
+    }
+    if (cost == UINT8_MAX) return LXMF_ERR_ARGUMENT;
+    lxmf_stamp_job_progress_t progress = {0};
+    if (router->stamp_job != NULL) {
+        lxmf_delivery_metadata_t active;
+        if (lxmf_store_read_delivery(router->config.store,
+            router->stamp_message_id, &active) != LXMF_OK ||
+            active.queue_reason == LXMF_QUEUE_REASON_CANCELLED) {
+            lxmf_stamp_job_destroy(router->stamp_job);
+            router->stamp_job = NULL;
+        }
+    }
+    if (router->stamp_job != NULL) {
+        (void)lxmf_stamp_job_progress(router->stamp_job, &progress);
+        bool same = memcmp(router->stamp_message_id, id, 32u) == 0;
+        if (!same && progress.state != LXMF_STAMP_COMPLETE &&
+            progress.state != LXMF_STAMP_FAILED &&
+            progress.state != LXMF_STAMP_CANCELLED)
+            return LXMF_ERR_PENDING;
+        if (!same || router->stamp_cost != cost) {
+            lxmf_stamp_job_destroy(router->stamp_job);
+            router->stamp_job = NULL;
+        }
+    }
+    size_t retained_length = 0u;
+    lxmf_status_t status = lxmf_store_packed_size(router->config.store, id,
+                                                 &retained_length);
+    /* Legacy content-only journals cannot be safely stamped under the old ID. */
+    if (status != LXMF_OK) return status;
+    uint8_t *retained = malloc(retained_length);
+    if (retained == NULL) return LXMF_ERR_BOUNDS;
+    status = lxmf_store_read_packed(router->config.store, id, retained,
+                                    retained_length, &retained_length);
+    lxmf_message_t message;
+    if (status == LXMF_OK)
+        status = lxmf_unpack(retained, retained_length, NULL, NULL, &message);
+    static const char *const aspects[] = {"delivery"};
+    uint8_t local_hash[16];
+    if (status == LXMF_OK &&
+        (!rns_destination_hash(router->config.identity, "lxmf", aspects, 1u,
+                               local_hash) ||
+         memcmp(message.message_id, id, 32u) != 0 ||
+         memcmp(message.destination, stored->destination, 16u) != 0 ||
+         memcmp(message.source, stored->source, 16u) != 0 ||
+         memcmp(message.source, local_hash, 16u) != 0))
+        status = LXMF_ERR_FORMAT;
+    if (status != LXMF_OK) { free(retained); return status; }
+
+    uint8_t stamp[LXMF_POW_STAMP_LENGTH];
+    size_t stamp_length = LXMF_POW_STAMP_LENGTH;
+    bool ticket = false;
+    if (router->config.ticket_store != NULL) {
+        status = lxmf_ticket_store_stamp_outbound(router->config.ticket_store,
+            stored->destination, router_wall_time(router), id, stamp);
+        ticket = status == LXMF_OK;
+        if (status != LXMF_OK && status != LXMF_ERR_PENDING) {
+            free(retained);
+            return status;
+        }
+    }
+    if (ticket) {
+        stamp_length = LXMF_STAMP_LENGTH;
+        /* A newly learned ticket supersedes unfinished expensive work. */
+        if (router->stamp_job != NULL) {
+            lxmf_stamp_job_destroy(router->stamp_job);
+            router->stamp_job = NULL;
+        }
+    } else {
+        if (router->stamp_job == NULL) {
+            const uint8_t *nonce = message.has_stamp &&
+                message.stamp_len == LXMF_POW_STAMP_LENGTH
+                    ? message.stamp : NULL;
+            status = lxmf_stamp_job_create(id, cost, nonce,
+                                            &router->stamp_job);
+            if (status != LXMF_OK) { free(retained); return status; }
+            memcpy(router->stamp_message_id, id, 32u);
+            router->stamp_cost = cost;
+        }
+        uint32_t units = router->config.stamp_work_units != 0u
+            ? router->config.stamp_work_units : LXMF_STAMP_POLL_MAX_UNITS;
+        status = lxmf_stamp_job_poll(router->stamp_job, units);
+        (void)lxmf_stamp_job_progress(router->stamp_job, &progress);
+        /* Preparation has a known bound; nonce search deliberately has no
+         * fabricated percentage. Detailed attempts are exposed separately. */
+        stored->delivery.progress = progress.prepared_rounds * 500000u /
+                                    LXMF_STAMP_WORKBLOCK_ROUNDS;
+        if (status != LXMF_OK && status != LXMF_ERR_PENDING) {
+            free(retained);
+            return status;
+        }
+        status = lxmf_stamp_job_result(router->stamp_job, stamp, NULL);
+        if (status != LXMF_OK) { free(retained); return status; }
+    }
+    if (message.has_stamp && message.stamp_len == stamp_length &&
+        memcmp(message.stamp, stamp, stamp_length) == 0) {
+        free(retained);
+        return LXMF_OK;
+    }
+    message.has_stamp = true;
+    message.stamp_len = stamp_length;
+    memcpy(message.stamp, stamp, stamp_length);
+    size_t capacity = lxmf_pack_bound(&message);
+    if (capacity > LXMF_STORE_MAX_PACKED) capacity = LXMF_STORE_MAX_PACKED;
+    uint8_t *packed = malloc(capacity);
+    if (packed == NULL) { free(retained); return LXMF_ERR_BOUNDS; }
+    size_t packed_length = 0u;
+    status = lxmf_pack(&message, lxmf_identity_signer, router->config.identity,
+                       packed, capacity, &packed_length);
+    if (status == LXMF_OK)
+        status = lxmf_store_update_packed(router->config.store, id, packed,
+                                          packed_length);
+    free(packed);
+    free(retained);
+    return status;
+}
+
 static lxmf_status_t prepare_outbound_representation(
     lxmf_router_t *router, const lxmf_store_message_t *stored,
     const uint8_t id[LXMF_MESSAGE_ID_LENGTH], uint8_t *packed,
@@ -799,6 +944,20 @@ lxmf_status_t lxmf_router_send_message(
                      LXMF_ERR_PENDING, stored.delivery.attempts);
         return LXMF_ERR_PENDING;
     }
+    lxmf_status_t stamp_status = prepare_outbound_stamp(router, &stored, id);
+    if (stamp_status != LXMF_OK) {
+        stored.delivery.queue_reason = LXMF_QUEUE_REASON_STAMP;
+        lxmf_delivery_status_t state = stamp_status == LXMF_ERR_PENDING
+            ? LXMF_DELIVERY_QUEUED : LXMF_DELIVERY_FAILED;
+        if (lxmf_store_update_delivery(router->config.store, id,
+                                       &stored.delivery) != LXMF_OK ||
+            lxmf_store_update_status(router->config.store, id, state) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
+        report_event(router, id, method, state, LXMF_QUEUE_REASON_STAMP,
+                     stamp_status, stored.delivery.attempts);
+        return stamp_status;
+    }
+    stored.delivery.progress = 0u;
     stored.delivery.actual_method = method;
     if (lxmf_store_update_delivery(router->config.store, id,
                                    &stored.delivery) != LXMF_OK)
@@ -928,6 +1087,27 @@ lxmf_status_t lxmf_router_cancel_message(
     lxmf_router_t *router,
     const uint8_t id[LXMF_MESSAGE_ID_LENGTH]) {
     if (router == NULL || id == NULL) return LXMF_ERR_ARGUMENT;
+    lxmf_delivery_metadata_t delivery;
+    if (lxmf_store_read_delivery(router->config.store, id, &delivery) == LXMF_OK &&
+        delivery.queue_reason == LXMF_QUEUE_REASON_STAMP) {
+        delivery.queue_reason = LXMF_QUEUE_REASON_CANCELLED;
+        delivery.progress = 0u;
+        if (lxmf_store_update_delivery(router->config.store, id, &delivery) !=
+                LXMF_OK ||
+            lxmf_store_update_status(router->config.store, id,
+                                     LXMF_DELIVERY_FAILED) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
+        if (router->stamp_job != NULL &&
+            memcmp(router->stamp_message_id, id, 32u) == 0) {
+            lxmf_stamp_job_cancel(router->stamp_job);
+            lxmf_stamp_job_destroy(router->stamp_job);
+            router->stamp_job = NULL;
+        }
+        report_event(router, id, delivery.desired_method, LXMF_DELIVERY_FAILED,
+                     LXMF_QUEUE_REASON_CANCELLED, LXMF_ERR_CANCELLED,
+                     delivery.attempts);
+        return LXMF_OK;
+    }
     for (size_t i = 0U; i < LXMF_ROUTER_MAX_RESOURCES; ++i) {
         lxmf_router_resource_slot_t *slot = &router->resources[i];
         if (!slot->used || slot->terminal ||
@@ -955,7 +1135,8 @@ typedef struct {
 
 static bool collect_pending(void *context, const lxmf_store_message_t *message) {
     pending_messages_t *pending = context;
-    if ((message->status == LXMF_DELIVERY_QUEUED ||
+    if (message->delivery.queue_reason != LXMF_QUEUE_REASON_CANCELLED &&
+        (message->status == LXMF_DELIVERY_QUEUED ||
          message->status == LXMF_DELIVERY_FAILED) && pending->count < pending->limit)
         memcpy(pending->ids[pending->count++], message->message_id,
                LXMF_MESSAGE_ID_LENGTH);

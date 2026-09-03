@@ -69,6 +69,11 @@ typedef const rns_identity *(*lxmf_router_identity_resolver_fn)(
 typedef bool (*lxmf_router_ratchet_resolver_fn)(
     void *context, const uint8_t destination[LXMF_DESTINATION_LENGTH],
     uint8_t ratchet_public[RNS_RATCHET_PUBLIC_SIZE]);
+/* Return a verified advertised cost (0 means disabled). False means no known
+ * requirement; 255 is rejected. The callback must not block. */
+typedef bool (*lxmf_router_stamp_cost_resolver_fn)(
+    void *context, const uint8_t destination[LXMF_DESTINATION_LENGTH],
+    uint8_t *cost);
 typedef lxmf_status_t (*lxmf_router_send_fn)(void *context,
                                              const uint8_t *packet,
                                              size_t packet_length);
@@ -124,6 +129,10 @@ typedef struct {
     /* Optional verified peer-ratchet resolver for opportunistic sends. */
     lxmf_router_ratchet_resolver_fn resolve_ratchet;
     void *ratchet_context;
+    lxmf_router_stamp_cost_resolver_fn resolve_stamp_cost;
+    void *stamp_cost_context;
+    /* Zero selects 64 bounded preparation/search units per send attempt. */
+    uint32_t stamp_work_units;
     lxmf_router_send_fn send_packet;
     void *send_context;
     lxmf_router_delivery_callback_fn delivery_callback;
@@ -180,6 +189,10 @@ struct lxmf_router {
     lxmf_router_link_slot_t links[LXMF_ROUTER_MAX_LINKS];
     lxmf_router_resource_slot_t resources[LXMF_ROUTER_MAX_RESOURCES];
     rns_runtime_destination_t *inbound_destination;
+    /* One active worker bounds CPU and memory regardless of queue length. */
+    lxmf_stamp_job_t *stamp_job;
+    uint8_t stamp_message_id[LXMF_MESSAGE_ID_LENGTH];
+    uint8_t stamp_cost;
 };
 
 typedef struct {
@@ -194,10 +207,16 @@ lxmf_status_t lxmf_router_init(lxmf_router_t *router,
 void lxmf_router_destroy(lxmf_router_t *router);
 lxmf_status_t lxmf_router_send_message(lxmf_router_t *router,
                                        const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]);
-/* Cancels an active packet receipt or Resource transfer for this message. */
+/* Cancels an active stamp worker, packet receipt or Resource transfer. */
 lxmf_status_t lxmf_router_cancel_message(
     lxmf_router_t *router,
     const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH]);
+/* Privacy-safe detailed progress for the active stamp job. PENDING means the
+ * message does not currently own the worker. */
+lxmf_status_t lxmf_router_stamp_progress(
+    const lxmf_router_t *router,
+    const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+    lxmf_stamp_job_progress_t *progress);
 /* Attempts queued or failed messages without blocking. Individual failures are
  * persisted in the store and counted in result; they do not fail the poll. */
 lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,

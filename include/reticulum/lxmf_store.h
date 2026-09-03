@@ -43,7 +43,9 @@ typedef enum {
     LXMF_QUEUE_REASON_LINK,
     LXMF_QUEUE_REASON_RESOURCE,
     LXMF_QUEUE_REASON_PROPAGATION_NODE,
-    LXMF_QUEUE_REASON_RETRY_BACKOFF
+    LXMF_QUEUE_REASON_RETRY_BACKOFF,
+    /* Explicit user cancellation; automatic polling must not retry. */
+    LXMF_QUEUE_REASON_CANCELLED
 } lxmf_queue_reason_t;
 
 #define LXMF_DELIVERY_PROGRESS_COMPLETE 1000000u
@@ -113,6 +115,11 @@ lxmf_status_t lxmf_store_read_packed(
 lxmf_status_t lxmf_store_packed_size(
     lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     size_t *packed_len);
+/* Durably replaces a retained representation without deleting the old record.
+ * The computed message ID, source and destination must remain unchanged. */
+lxmf_status_t lxmf_store_update_packed(
+    lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
+    const uint8_t *packed, size_t packed_len);
 lxmf_status_t lxmf_store_read_delivery(
     lxmf_store_t *store, const uint8_t message_id[LXMF_MESSAGE_ID_LENGTH],
     lxmf_delivery_metadata_t *delivery);

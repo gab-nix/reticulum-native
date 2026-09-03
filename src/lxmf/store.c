@@ -17,7 +17,9 @@
  * written. TYPE_PUT_V2 added the signature state and original packed message.
  * TYPE_PUT_V3 adds restart-safe delivery metadata; compaction migrates older
  * records without discarding their representable state. TYPE_PUT_V4 widens
- * packed length to 32 bits; all prior formats remain readable. */
+ * packed length to 32 bits. TYPE_REPLACE_V4 durably replaces a representation
+ * under the same ID; ordinary duplicate puts still retain their first bytes.
+ * All prior formats remain readable. */
 #define HEADER_SIZE 16u
 #define PUT_FIXED 77u
 #define PUT2_FIXED 80u
@@ -36,6 +38,7 @@
 #define TYPE_PUT_V3 6u
 #define TYPE_DELIVERY 7u
 #define TYPE_PUT_V4 8u
+#define TYPE_REPLACE_V4 9u
 
 typedef struct {
     uint8_t id[32];
@@ -60,8 +63,8 @@ static uint32_t crc32_bytes(const uint8_t *p,size_t n){return ~crc32_update(0xff
 static bool valid_status(uint8_t s){return s<=LXMF_DELIVERY_FAILED;}
 static bool valid_signature(uint8_t s){return s<=LXMF_SIGNATURE_FAILED;}
 static bool valid_method(uint8_t method){return method<=LXMF_DELIVERY_METHOD_PROPAGATED;}
-static bool valid_queue_reason(uint8_t reason){return reason<=LXMF_QUEUE_REASON_RETRY_BACKOFF;}
-static bool valid_delivery(const lxmf_delivery_metadata_t *delivery){return delivery&&delivery->desired_method>=LXMF_DELIVERY_METHOD_UNKNOWN&&delivery->desired_method<=LXMF_DELIVERY_METHOD_PROPAGATED&&delivery->actual_method>=LXMF_DELIVERY_METHOD_UNKNOWN&&delivery->actual_method<=LXMF_DELIVERY_METHOD_PROPAGATED&&delivery->queue_reason>=LXMF_QUEUE_REASON_NONE&&delivery->queue_reason<=LXMF_QUEUE_REASON_RETRY_BACKOFF&&delivery->progress<=LXMF_DELIVERY_PROGRESS_COMPLETE;}
+static bool valid_queue_reason(uint8_t reason){return reason<=LXMF_QUEUE_REASON_CANCELLED;}
+static bool valid_delivery(const lxmf_delivery_metadata_t *delivery){return delivery&&delivery->desired_method>=LXMF_DELIVERY_METHOD_UNKNOWN&&delivery->desired_method<=LXMF_DELIVERY_METHOD_PROPAGATED&&delivery->actual_method>=LXMF_DELIVERY_METHOD_UNKNOWN&&delivery->actual_method<=LXMF_DELIVERY_METHOD_PROPAGATED&&delivery->queue_reason>=LXMF_QUEUE_REASON_NONE&&delivery->queue_reason<=LXMF_QUEUE_REASON_CANCELLED&&delivery->progress<=LXMF_DELIVERY_PROGRESS_COMPLETE;}
 static index_entry *find(store_impl *s,const uint8_t id[32]){for(size_t i=0;i<s->count;i++)if(memcmp(s->index[i].id,id,32)==0)return &s->index[i];return NULL;}
 static lxmf_status_t sync_file(FILE *f){if(fflush(f)!=0)return LXMF_ERR_CRYPTO;return fsync(fileno(f))==0?LXMF_OK:LXMF_ERR_CRYPTO;}
 static lxmf_status_t append_record(FILE *f,uint8_t type,const uint8_t *payload,uint32_t n,uint64_t *offset){if(fseek(f,0,SEEK_END)!=0)return LXMF_ERR_CRYPTO;long pos=ftell(f);if(pos<0||(uint64_t)pos+HEADER_SIZE+n>LXMF_STORE_MAX_FILE_SIZE)return LXMF_ERR_BOUNDS;uint8_t h[HEADER_SIZE]={'L','X','M','S',1,type,0,0};put32(h+8,n);put32(h+12,crc32_bytes(payload,n));if(fwrite(h,1,sizeof h,f)!=sizeof h||fwrite(payload,1,n,f)!=n)return LXMF_ERR_CRYPTO;lxmf_status_t st=sync_file(f);if(st==LXMF_OK&&offset)*offset=(uint64_t)pos;return st;}
@@ -126,7 +129,7 @@ static void encode_put(uint8_t payload[PUT4_FIXED],const lxmf_store_message_t *m
     encode_delivery(payload+82,&m->delivery);
 }
 
-static lxmf_status_t append_put(FILE *file,const lxmf_store_message_t *m,uint64_t *offset){
+static lxmf_status_t append_put_record(FILE *file,const lxmf_store_message_t *m,uint8_t type,uint64_t *offset){
     uint8_t fixed[PUT4_FIXED];
     encode_put(fixed,m);
     uint32_t n=(uint32_t)(PUT4_FIXED+m->content.len+m->packed.len);
@@ -136,7 +139,7 @@ static lxmf_status_t append_put(FILE *file,const lxmf_store_message_t *m,uint64_
     uint32_t crc=crc32_update(0xffffffffu,fixed,sizeof fixed);
     crc=crc32_update(crc,m->content.data,m->content.len);
     crc=crc32_update(crc,m->packed.data,m->packed.len);
-    uint8_t h[HEADER_SIZE]={'L','X','M','S',1,TYPE_PUT_V4,0,0};
+    uint8_t h[HEADER_SIZE]={'L','X','M','S',1,type,0,0};
     put32(h+8,n);put32(h+12,~crc);
     if(fwrite(h,1,sizeof h,file)!=sizeof h||
        fwrite(fixed,1,sizeof fixed,file)!=sizeof fixed||
@@ -145,6 +148,10 @@ static lxmf_status_t append_put(FILE *file,const lxmf_store_message_t *m,uint64_
     lxmf_status_t st=sync_file(file);
     if(st==LXMF_OK&&offset)*offset=(uint64_t)pos;
     return st;
+}
+
+static lxmf_status_t append_put(FILE *file,const lxmf_store_message_t *m,uint64_t *offset){
+    return append_put_record(file,m,TYPE_PUT_V4,offset);
 }
 
 static index_entry *upsert(store_impl *s,const uint8_t *payload,uint64_t offset,uint16_t fixed,uint32_t content_len,uint32_t packed_len){
@@ -174,7 +181,7 @@ static lxmf_status_t scan(store_impl *s){
         size_t got=fread(h,1,sizeof h,s->file);
         if(got==0&&feof(s->file))break;
         if(got!=sizeof h)goto recover;
-        if(memcmp(h,"LXMS",4)!=0||h[4]!=1||h[5]<TYPE_PUT||h[5]>TYPE_PUT_V4)goto recover;
+        if(memcmp(h,"LXMS",4)!=0||h[4]!=1||h[5]<TYPE_PUT||h[5]>TYPE_REPLACE_V4)goto recover;
         uint32_t n=get32(h+8);
         if(n==0||n>MAX_PAYLOAD||good+HEADER_SIZE+n>LXMF_STORE_MAX_FILE_SIZE)goto recover;
         uint8_t payload[PUT4_FIXED],chunk[4096];
@@ -204,20 +211,26 @@ static lxmf_status_t scan(store_impl *s){
             if(!e)return LXMF_ERR_BOUNDS;
             e->status=payload[72];
             e->signature=payload[77];
-        }else if(h[5]==TYPE_PUT_V3||h[5]==TYPE_PUT_V4){
-            uint16_t fixed=h[5]==TYPE_PUT_V4?PUT4_FIXED:PUT3_FIXED;
+        }else if(h[5]==TYPE_PUT_V3||h[5]==TYPE_PUT_V4||h[5]==TYPE_REPLACE_V4){
+            bool wide=h[5]!=TYPE_PUT_V3;
+            uint16_t fixed=wide?PUT4_FIXED:PUT3_FIXED;
             if(n<fixed||!valid_status(payload[72])||
                !valid_signature(payload[77]))goto recover;
             uint32_t content_len=get32(payload+73);
-            uint32_t packed_len=h[5]==TYPE_PUT_V4?get32(payload+78):get16(payload+78);
+            uint32_t packed_len=wide?get32(payload+78):get16(payload+78);
             lxmf_delivery_metadata_t delivery;
             if(content_len>LXMF_STORE_MAX_CONTENT||
                packed_len>LXMF_STORE_MAX_PACKED||
                n!=fixed+content_len+packed_len||
-               !decode_delivery(payload+(h[5]==TYPE_PUT_V4?82:80),&delivery))goto recover;
+               !decode_delivery(payload+(wide?82:80),&delivery))goto recover;
+            if(h[5]==TYPE_REPLACE_V4&&!find(s,payload))goto recover;
             index_entry *e=upsert(s,payload,good,fixed,
                                   content_len,packed_len);
             if(!e)return LXMF_ERR_BOUNDS;
+            if(h[5]==TYPE_REPLACE_V4){
+                e->offset=good;e->fixed=fixed;
+                e->content_len=content_len;e->packed_len=packed_len;
+            }
             e->status=payload[72];
             e->signature=payload[77];
             e->delivery=delivery;
@@ -393,6 +406,42 @@ lxmf_status_t lxmf_store_packed_size(lxmf_store_t *store,const uint8_t id[32],si
     index_entry *e=find(store->implementation,id);
     if(!e||!e->packed_len)return LXMF_ERR_FORMAT;
     *packed_len=e->packed_len;
+    return LXMF_OK;
+}
+
+lxmf_status_t lxmf_store_update_packed(lxmf_store_t *store,
+    const uint8_t id[32], const uint8_t *packed, size_t packed_len) {
+    if (!store || !store->implementation || !id || !packed ||
+        !packed_len || packed_len > LXMF_STORE_MAX_PACKED)
+        return LXMF_ERR_ARGUMENT;
+    lxmf_message_t parsed;
+    lxmf_status_t status = lxmf_unpack(packed, packed_len, NULL, NULL, &parsed);
+    if (status != LXMF_OK) return status;
+    uint8_t content[LXMF_STORE_MAX_CONTENT];
+    lxmf_store_message_t message;
+    status = lxmf_store_read(store, id, &message, content, sizeof content);
+    if (status != LXMF_OK) return status;
+    if (memcmp(parsed.message_id, id, 32u) != 0 ||
+        memcmp(parsed.source, message.source, 16u) != 0 ||
+        memcmp(parsed.destination, message.destination, 16u) != 0)
+        return LXMF_ERR_FORMAT;
+    message.packed = (lxmf_slice_t){packed, packed_len};
+    store_impl *s = store->implementation;
+    uint64_t offset;
+    status = append_put_record(s->file, &message, TYPE_REPLACE_V4, &offset);
+    if (status != LXMF_OK) return status;
+    uint8_t fixed[PUT4_FIXED];
+    encode_put(fixed, &message);
+    index_entry *entry = upsert(s, fixed, offset, PUT4_FIXED,
+        (uint32_t)message.content.len, (uint32_t)packed_len);
+    if (!entry) return LXMF_ERR_BOUNDS;
+    entry->offset = offset;
+    entry->fixed = PUT4_FIXED;
+    entry->content_len = (uint32_t)message.content.len;
+    entry->packed_len = (uint32_t)packed_len;
+    entry->status = (uint8_t)message.status;
+    entry->signature = (uint8_t)message.signature_state;
+    entry->delivery = message.delivery;
     return LXMF_OK;
 }
 

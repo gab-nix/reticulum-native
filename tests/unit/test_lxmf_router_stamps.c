@@ -28,6 +28,13 @@ static uint64_t wall_clock(void *context) {
     return ((state_t *)context)->now;
 }
 
+static bool peer_cost(void *context, const uint8_t hash[16], uint8_t *cost) {
+    (void)context;
+    (void)hash;
+    *cost = 20u;
+    return true;
+}
+
 static lxmf_status_t no_send(void *context, const uint8_t *packet,
                              size_t packet_length) {
     (void)context;
@@ -262,8 +269,10 @@ int main(void) {
     config.inbound_stamp_cost = 0u;
     config.message_callback = NULL;
     config.event_callback = NULL;
+    config.resolve_stamp_cost = peer_cost;
     assert(lxmf_router_init(&router, &config) == LXMF_OK);
     assert(lxmf_router_send_message(&router, queued.message_id) == LXMF_OK);
+    assert(router.stamp_job == NULL);
     assert(state.packet_length > 0u);
     uint8_t plaintext[RNS_MTU];
     size_t plaintext_length = 0u;
@@ -279,6 +288,12 @@ int main(void) {
            sent.fields_msgpack.len == sizeof outbound_fields &&
            memcmp(sent.fields_msgpack.data, outbound_fields,
                   sizeof outbound_fields) == 0);
+    assert(lxmf_store_read_packed(&messages, queued.message_id, retained,
+        sizeof retained, &retained_length) == LXMF_OK);
+    assert(lxmf_unpack(retained, retained_length, NULL, NULL,
+                       &retained_message) == LXMF_OK &&
+           retained_message.has_stamp &&
+           retained_message.stamp_len == LXMF_STAMP_LENGTH);
 
     lxmf_router_destroy(&router);
     lxmf_ticket_store_close(tickets);
