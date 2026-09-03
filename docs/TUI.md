@@ -8,9 +8,10 @@ delivery address. A destination is useful when the store has no conversations.
 The header always reports the local delivery address and the real connectivity
 state. Without `--config` it says **OFFLINE**: the TUI queues signed LXMF
 messages into the durable local outbox and never claims them as sent. With
-`--config` it says **ONLINE** and the caller-polled runtime attempts
-opportunistic delivery, so the status line distinguishes a queued message from
-one that was actually sent.
+`--config`, the caller-polled router prefers authenticated direct delivery and
+selects packet- or Resource-backed transfer after identity and path discovery.
+The status line reports the queue reason, transfer, proof, delivery, or failure;
+starting an asynchronous attempt is never presented as a failure by itself.
 
 ## Keys
 
@@ -34,11 +35,14 @@ one that was actually sent.
   clearly labelled QR-display placeholder.
 - `p`, `x`, `t`, `u`, `n`: toggle pin, block, trusted, untrusted, and a contact
   note placeholder. Each change is written to the peer store immediately.
-  Blocking records the preference only; it does not yet suppress delivery.
+  Blocking is enforced in the LXMF router before history, ticket learning,
+  callbacks, or packet proofs. Trust does not bypass stamp requirements.
 - `y`: show the portable copy fallback. Clipboard integration is unavailable;
   copy message text from `history` or `tui --dump-ui` instead.
 - `?`: show the keyboard help overlay.
-- `Esc`: cancel composition, or leave the TUI when not composing.
+- `Esc`: close the active editor or dialog first; cancel an active Browser
+  request; return other screens to Conversations. In Conversations, a second
+  `Esc` leaves the TUI.
 - `q`: leave the TUI when not composing.
 
 The top navigation reserves Conversations, Network, Browser, Node, Settings,
@@ -77,12 +81,11 @@ and resource-backed pages now load. While a request is in flight the browser
 shows the progress line alone; a retained page from a previous URL is only
 redisplayed after a failure and is labelled as such.
 
-Two limits remain. Resources spanning more than one segment, or more than the
-74 parts a single advertisement hashmap carries, are refused with
-`page is sent as a Reticulum Resource, which is not supported yet`. And the
-Micron renderer understands only a minimal markup subset, so real Micron
-formatting and `` `[label`target] `` links currently render as raw text rather
-than as selectable links.
+Resources spanning more than one segment, or more than the 74 parts a single
+advertisement hashmap carries, remain unsupported. The Micron renderer handles
+sections, headings, formatting, colours, alignment, dividers and selectable
+links. Tables and partials are flattened; form editing/submission, executable
+pages, file downloads, in-page anchor positioning and cache directives remain.
 
 Use `nomad-chat tui --config CONFIG IDENTITY STORE [DESTINATION]` to start the
 caller-polled UDP/TCP runtime. Verified announces populate the Network screen;
@@ -94,15 +97,16 @@ interfaces, or the first interface that failed with its error. The header shows
 `OFFLINE` with no runtime, `NO LINK` when a runtime exists but no interface
 started, and `ONLINE` otherwise.
 
-`ONLINE` currently means every configured interface *started*, not that a TCP
-session is established. A `TCPClientInterface` pointing at an unreachable host
-connects asynchronously and still reports `ONLINE`; distinguishing it needs the
-runtime to expose per-interface connection state, which it does not yet do.
+The runtime exposes per-interface state and errors. `ONLINE` means at least one
+configured interface is up; `NO LINK` means none is usable. It does not by
+itself prove that a remote destination is reachable, so route, link and request
+failures remain visible without discarding local history or the last page.
 
 ## Current persistence boundary
 
 Messages and delivery states use the durable LXMF store. Trust grouping, pins,
 blocks, notes, and unread counts are persisted in the companion peer store
-(`STORE.peers`), and the known-node registry in `STORE.nodes`. The composer
-draft and the search term are deliberately in-memory for the session. Queued
-messages are never presented as delivered.
+(`STORE.peers`), and the known-node registry in `STORE.nodes`. Full packed
+representations, delivery metadata and queue state are journaled. The current
+composer draft and search term remain in-memory. Queued messages are never
+presented as delivered.
