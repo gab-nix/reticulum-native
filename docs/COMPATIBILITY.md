@@ -26,6 +26,14 @@ Golden vectors generated from these revisions must record the generator,
 revision, inputs and expected bytes. Updating a baseline requires regenerating
 the vectors and passing all differential interoperability tests.
 
+The first executable pinned fixture is the LXMF delivery announce application
+data set in `tests/fixtures/lxmf_delivery_announce_vectors.h`. Its provenance is
+recorded alongside it, and `tools/generate_lxmf_announce_fixtures.py` refuses to
+run against source trees at different commits. The fixture exercises the
+authoritative Python `LXMRouter.get_announce_app_data()` method and the C test
+checks both encoding to those bytes and decoding from them. This is codec-level
+evidence, not a live-network or complete messaging parity claim.
+
 ## Compatibility policy
 
 - The wire behaviour of the pinned releases is authoritative.
