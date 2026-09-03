@@ -148,7 +148,9 @@ failures remain visible without discarding local history or the last page.
 
 Messages and delivery states use the durable LXMF store. Trust grouping, pins,
 blocks, notes, and unread counts are persisted in the companion peer store
-(`STORE.peers`), and the known-node registry in `STORE.nodes`. Full packed
-representations, delivery metadata and queue state are journaled. The current
-composer draft and search term remain in-memory. Queued messages are never
-presented as delivered.
+(`STORE.peers`), and the known-node registry in `STORE.nodes`. A bounded,
+checksummed route snapshot is atomically saved in `STORE.paths`; restored paths
+lose the time spent offline, and a corrupt snapshot is ignored without stopping
+the runtime. Full packed representations, delivery metadata and queue state are
+journaled. The current composer draft and search term remain in-memory. Queued
+messages are never presented as delivered.

@@ -1,6 +1,7 @@
 #include "tui_state.h"
 
 #include "tui_text.h"
+#include "tui_paths.h"
 
 #include "reticulum/config.h"
 #include "reticulum/destination.h"
@@ -1075,6 +1076,18 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
     options.callback_context = state;
     rns_status_t status = rns_runtime_create(&state->runtime, &config, &options);
     if (status == RNS_OK) {
+        size_t restored_paths = 0u;
+        tui_paths_load_result_t restored = tui_paths_load(
+            state->runtime, state->path_store_path, &restored_paths);
+        if (restored == TUI_PATHS_LOADED && restored_paths != 0u)
+            tui_state_set_status(state, "Restored %zu saved network paths",
+                                 restored_paths);
+        else if (restored == TUI_PATHS_INVALID)
+            tui_state_set_status(state,
+                "Ignored invalid saved path snapshot; network remains active");
+        else if (restored == TUI_PATHS_IO_ERROR)
+            tui_state_set_status(state,
+                "Could not read saved paths; network remains active");
         rns_node_record propagation_record;
         uint8_t propagation_cost = 0u;
         const rns_identity *propagation_identity = NULL;
@@ -1299,6 +1312,10 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
                 state->nodes.records[i].reachable = false;
     }
     else state->node_store_path[0] = '\0';
+    written = snprintf(state->path_store_path, sizeof state->path_store_path,
+                       "%s.paths", store_path);
+    if (written <= 0 || (size_t)written >= sizeof state->path_store_path)
+        state->path_store_path[0] = '\0';
 
     if (config_path != NULL) start_runtime(state, config_path);
     state->startup_announce_pending = state->runtime != NULL &&
@@ -1326,6 +1343,11 @@ void tui_state_close(tui_state_t *state) {
     if (state == NULL) return;
     if (state->node_store_path[0] != '\0')
         (void)rns_node_registry_save(&state->nodes, state->node_store_path);
+    if (state->runtime != NULL && state->path_store_path[0] != '\0') {
+        size_t saved_paths = 0u;
+        (void)tui_paths_save(state->runtime, state->path_store_path,
+                             &saved_paths);
+    }
     settings_from_rrc(&state->settings, &state->rrc);
     if (state->settings_path[0] != '\0' && !state->settings_load_error)
         (void)tui_settings_save(state->settings_path, &state->settings);

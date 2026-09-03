@@ -13,6 +13,7 @@
 *.identity
 *.lxms
 *.lxms.nodes
+*.lxms.paths
 *.lxms.peers
 *.lxms.ratchets
 *.lxms.settings

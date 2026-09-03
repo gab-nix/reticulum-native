@@ -272,6 +272,7 @@ static void test_corruption_warning_survives_startup(void) {
     remove_sidecar(store_path, ".settings");
     remove_sidecar(store_path, ".peers");
     remove_sidecar(store_path, ".nodes");
+    remove_sidecar(store_path, ".paths");
 }
 
 static void test_submit_preserves_pending_status(void) {
@@ -334,6 +335,7 @@ static void test_submit_preserves_pending_status(void) {
     remove_sidecar(store_path, ".settings");
     remove_sidecar(store_path, ".peers");
     remove_sidecar(store_path, ".nodes");
+    remove_sidecar(store_path, ".paths");
     remove_sidecar(store_path, ".tickets");
     remove_sidecar(store_path, ".ratchets");
 }
@@ -415,6 +417,7 @@ static void test_rrc_settings_and_draft_restart(void) {
     remove_sidecar(store_path, ".settings");
     remove_sidecar(store_path, ".peers");
     remove_sidecar(store_path, ".nodes");
+    remove_sidecar(store_path, ".paths");
     remove_sidecar(store_path, ".tickets");
     remove_sidecar(store_path, ".ratchets");
 }

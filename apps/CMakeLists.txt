@@ -10,6 +10,7 @@ add_executable(nomad-chat
     tui.c
     tui_editor.c
     tui_interfaces.c
+    tui_paths.c
     tui_render.c
     tui_rrc.c
     tui_settings.c

@@ -162,6 +162,7 @@ typedef struct tui_state {
     rns_ratchet_store_t *ratchet_store;
     char peer_store_path[TUI_PATH_MAX];
     char node_store_path[TUI_PATH_MAX];
+    char path_store_path[TUI_PATH_MAX];
     char ticket_store_path[TUI_PATH_MAX];
     char ratchet_store_path[TUI_PATH_MAX];
     char attachment_directory[TUI_PATH_MAX];

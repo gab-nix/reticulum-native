@@ -86,9 +86,15 @@ target_sources(test_tui_interfaces PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c)
 target_include_directories(test_tui_interfaces PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
+reticulum_add_test(test_tui_paths unit/test_tui_paths.c)
+target_sources(test_tui_paths PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c)
+target_include_directories(test_tui_paths PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps)
 reticulum_add_test(test_tui_state unit/test_tui_state.c)
 target_sources(test_tui_state PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
@@ -148,6 +154,7 @@ if(TARGET nomad-chat)
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
@@ -180,6 +187,7 @@ if(TARGET nomad-chat)
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
@@ -198,6 +206,7 @@ if(TARGET nomad-chat)
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_render.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
