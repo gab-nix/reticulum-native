@@ -17,6 +17,7 @@
 #include "reticulum/lxmf_peer_store.h"
 #include "reticulum/lxmf_router.h"
 #include "reticulum/lxmf_store.h"
+#include "reticulum/lxmf_tickets.h"
 #include "reticulum/link.h"
 #include "reticulum/micron.h"
 #include "reticulum/node_registry.h"
