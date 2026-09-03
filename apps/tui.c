@@ -303,7 +303,7 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'B': state->screen = TUI_SCREEN_BROWSER; break;
         case 'o': case 'O': unavailable_screen(state, "Node"); break;
         case 's': case 'S': state->screen = TUI_SCREEN_SETTINGS; break;
-        case 'g': case 'G': unavailable_screen(state, "Guide"); break;
+        case 'g': case 'G': state->screen = TUI_SCREEN_GUIDE; break;
         case 'l': case 'L': unavailable_screen(state, "Logs"); break;
         case 'r': case 'R': reload(state); break;
         case '\n': case KEY_ENTER: activate(state); break;

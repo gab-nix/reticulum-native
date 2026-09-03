@@ -711,6 +711,30 @@ static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
             "j/k link  Enter open  PgUp/PgDn scroll  Backspace back  R reload  N network");
 }
 
+static void draw_guide(const tui_layout_t *layout) {
+    static const char *const lines[] = {
+        "Nomad Chat Guide",
+        "C Conversations   N Network   B Browser   S Settings",
+        "j/k or arrows select; Enter activates; Esc returns to Conversations",
+        "",
+        "Conversations: 1/2/3 trust tabs, / search, a address, Enter compose",
+        "Contact actions: i details, p pin, x block, t trust, u untrust",
+        "Network: / search nodes, Enter details, then b browse, m message, r path",
+        "Browser: j/k select links, Enter follow, Backspace back, R reload",
+        "Settings: j/k select, Enter edit or activate Announce Now",
+        "",
+        "Delivery is proof-backed. A queued message is not shown as delivered.",
+        "See docs/TUI.md for setup, persistence, bounds and current limitations."
+    };
+    for (size_t i = 0u; i < sizeof lines / sizeof lines[0]; ++i) {
+        int row = 3 + (int)i;
+        if (row >= layout->hint_row) break;
+        clipped(stdscr, row, 2, layout->columns - 4, lines[i]);
+    }
+    clipped(stdscr, layout->hint_row, 0, layout->columns,
+            "C or Esc conversations  N network  B browser  S settings  q quit");
+}
+
 void tui_render_draw(tui_state_t *state) {
     int rows, columns;
     if (state == NULL) return;
@@ -736,6 +760,11 @@ void tui_render_draw(tui_state_t *state) {
     }
     if (state->screen == TUI_SCREEN_BROWSER) {
         draw_browser(state, &layout);
+        (void)refresh();
+        return;
+    }
+    if (state->screen == TUI_SCREEN_GUIDE) {
+        draw_guide(&layout);
         (void)refresh();
         return;
     }
@@ -775,6 +804,17 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
                       !state->has_announce_result ? "never"
                       : rns_status_string(state->last_announce_result),
                       state->status);
+        return ferror(output) ? -1 : 0;
+    }
+    if (state->screen == TUI_SCREEN_GUIDE) {
+        (void)fprintf(output,
+            "Screen: Guide\n"
+            "Conversations: C, trust tabs 1/2/3, / search, a address, Enter compose\n"
+            "Network: N, / search, Enter node actions, b browse, m message, r path\n"
+            "Browser: B, j/k links, Enter follow, Backspace back, R reload\n"
+            "Settings: S, j/k select, Enter edit/activate\n"
+            "Escape: close active layer or return to Conversations\n"
+            "Status: %s\n", state->status);
         return ferror(output) ? -1 : 0;
     }
     const tui_contact_t *contact = tui_state_selected_contact(state);

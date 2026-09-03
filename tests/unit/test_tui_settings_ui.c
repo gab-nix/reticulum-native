@@ -73,6 +73,18 @@ static void test_keys_dump_and_persistence(void) {
     assert(strstr(output, "stored; sync pending") != NULL);
     assert(fclose(dump) == 0);
 
+    state->screen = TUI_SCREEN_GUIDE;
+    dump = tmpfile();
+    assert(dump != NULL && tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    memset(output, 0, sizeof output);
+    length = fread(output, 1u, sizeof output - 1u, dump);
+    assert(!ferror(dump));
+    output[length] = '\0';
+    assert(strstr(output, "Screen: Guide") != NULL);
+    assert(strstr(output, "Enter node actions") != NULL);
+    assert(fclose(dump) == 0);
+
     tui_settings_t persisted;
     bool found = false;
     assert(tui_settings_load(path, &persisted, &found) && found);

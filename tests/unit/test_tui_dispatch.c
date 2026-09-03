@@ -224,6 +224,12 @@ static void test_shortcuts_drafts_and_node_action(void) {
     assert(state->screen == TUI_SCREEN_SETTINGS && state->field == TUI_FIELD_NONE);
     assert(tui_dispatch_key(state, 27));
     assert(state->screen == TUI_SCREEN_CONVERSATIONS);
+    assert(tui_dispatch_key(state, 'G'));
+    assert(state->screen == TUI_SCREEN_GUIDE);
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->screen == TUI_SCREEN_GUIDE && state->field == TUI_FIELD_NONE);
+    assert(tui_dispatch_key(state, 27));
+    assert(state->screen == TUI_SCREEN_CONVERSATIONS);
     assert(!tui_dispatch_key(state, 'Q'));
     free(state);
 }
