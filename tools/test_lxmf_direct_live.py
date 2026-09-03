@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in real UDP C↔pinned Python direct LXMF messaging acceptance test.
+"""Opt-in real C↔pinned Python direct LXMF messaging acceptance test.
 
 Creates only ephemeral synthetic identities and data. JSON output includes
 public message IDs and states, never keys, contents, or captured wire packets.
@@ -32,8 +32,9 @@ def check_checkout(path, commit):
         raise RuntimeError(f"Pinned source has tracked modifications: {path}")
 
 
-def reserve_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+def reserve_port(transport):
+    socket_type = socket.SOCK_STREAM if transport == "tcp" else socket.SOCK_DGRAM
+    with socket.socket(socket.AF_INET, socket_type) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
 
@@ -55,6 +56,7 @@ def main():
     parser.add_argument("--reticulum", type=pathlib.Path, required=True)
     parser.add_argument("--lxmf", type=pathlib.Path, required=True)
     parser.add_argument("--driver", type=pathlib.Path, required=True)
+    parser.add_argument("--transport", choices=("udp", "tcp"), default="udp")
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
     check_checkout(args.reticulum, RNS_COMMIT)
@@ -67,7 +69,8 @@ def main():
             raise RuntimeError("Imported implementation outside pinned checkout")
     report = {"rns_commit": RNS_COMMIT, "lxmf_commit": LXMF_COMMIT,
               "rns_version": RNS.__version__, "lxmf_version": LXMF.__version__,
-              "transport": "loopback UDP", "c_events": [], "python_received": [],
+              "transport": f"loopback {args.transport.upper()}",
+              "c_events": [], "python_received": [],
               "python_proved": [], "errors": [], "ok": False}
     report["run_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     report["library_revision"] = subprocess.check_output(
@@ -78,16 +81,26 @@ def main():
          "lxmf_direct_live_driver.c").read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix="lxmf-direct-live-") as temp:
         root = pathlib.Path(temp)
-        c_port, py_port = reserve_port(), reserve_port()
-        while c_port == py_port:
-            py_port = reserve_port()
+        if args.transport == "tcp":
+            c_port, py_port = None, reserve_port("tcp")
+        else:
+            c_port, py_port = reserve_port("udp"), reserve_port("udp")
+            while c_port == py_port:
+                py_port = reserve_port("udp")
         (root / "rns").mkdir()
+        if args.transport == "tcp":
+            interface_config = (
+                "type = TCPServerInterface\ninterface_enabled = True\n"
+                f"listen_ip = 127.0.0.1\nlisten_port = {py_port}\n")
+        else:
+            interface_config = (
+                "type = UDPInterface\ninterface_enabled = True\n"
+                f"listen_ip = 127.0.0.1\nlisten_port = {py_port}\n"
+                f"forward_ip = 127.0.0.1\nforward_port = {c_port}\n")
         (root / "rns" / "config").write_text(
             "[reticulum]\nshare_instance = No\nenable_transport = No\n"
-            "[logging]\nloglevel = 0\n[interfaces]\n[[C direct test]]\n"
-            "type = UDPInterface\ninterface_enabled = True\n"
-            f"listen_ip = 127.0.0.1\nlisten_port = {py_port}\n"
-            f"forward_ip = 127.0.0.1\nforward_port = {c_port}\n")
+            "[logging]\nloglevel = 0\n[interfaces]\n[[C direct test]]\n" +
+            interface_config)
         reticulum = RNS.Reticulum(configdir=str(root / "rns"), loglevel=0)
         identity = RNS.Identity()
         router = LXMF.LXMRouter(identity=identity, storagepath=str(root),
@@ -107,8 +120,12 @@ def main():
                 report["errors"].append("Python rejected content/signature/method expectations")
 
         router.register_delivery_callback(received)
-        process = subprocess.Popen([str(args.driver.resolve()), str(c_port), str(py_port),
-                                    str(root / "c-messages.store")],
+        driver_command = ([str(args.driver.resolve()), "--tcp", str(py_port),
+                           str(root / "c-messages.store")]
+                          if args.transport == "tcp" else
+                          [str(args.driver.resolve()), str(c_port), str(py_port),
+                           str(root / "c-messages.store")])
+        process = subprocess.Popen(driver_command,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         lines = queue.Queue()
 
@@ -137,10 +154,13 @@ def main():
                     if event.get("event") == "peer_verified":
                         peer_verified = True
                 now = time.monotonic()
-                if now - last_announce > 3:
+                remote = RNS.Identity.recall(destination_hash) if destination_hash else None
+                # C starts sending as soon as it learns this announce. Only
+                # release it after Python has validated C's identity, or a fast
+                # stream connection can deliver the first LXMF before recall.
+                if remote and now - last_announce > 3:
                     router.announce(source.hash)
                     last_announce = now
-                remote = RNS.Identity.recall(destination_hash) if destination_hash else None
                 if remote and peer_verified and len(outbound) < 2 and len(report["python_proved"]) == len(outbound):
                     destination = RNS.Destination(remote, RNS.Destination.OUT,
                         RNS.Destination.SINGLE, "lxmf", "delivery")

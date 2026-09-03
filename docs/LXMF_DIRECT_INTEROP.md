@@ -2,7 +2,9 @@
 
 The opt-in harness exchanges real encrypted Reticulum traffic between the C
 router and the unmodified pinned Python RNS 1.5.2 / LXMF 1.1.0 stack over UDP
-loopback. It does not mock either protocol endpoint and is not a C-to-C test.
+or framed TCP loopback. It does not mock either protocol endpoint and is not a
+C-to-C test. UDP remains the default; pass `--transport tcp` to start a pinned
+Python `TCPServerInterface` and connect the native TCP client.
 
 ```sh
 cmake -S . -B build -G Ninja -DRETICULUM_BUILD_TESTS=ON -DRETICULUM_BUILD_APPS=ON -DRETICULUM_WARNINGS_AS_ERRORS=ON
@@ -12,6 +14,13 @@ python3 tools/test_lxmf_direct_live.py \
   --lxmf /path/to/pinned/LXMF \
   --driver build/tests/lxmf_direct_live_driver \
   --output /tmp/lxmf-direct-report.json
+
+python3 tools/test_lxmf_direct_live.py \
+  --transport tcp \
+  --reticulum /path/to/pinned/Reticulum \
+  --lxmf /path/to/pinned/LXMF \
+  --driver build/tests/lxmf_direct_live_driver \
+  --output /tmp/lxmf-direct-tcp-report.json
 ```
 
 The script checks exact upstream revisions and rejects tracked source changes.

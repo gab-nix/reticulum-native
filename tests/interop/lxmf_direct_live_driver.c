@@ -106,18 +106,27 @@ static bool parse_port(const char *text, uint16_t *port) {
     *port = (uint16_t)value; return true;
 }
 int main(int argc, char **argv) {
-    uint16_t listen, forward;
-    if (argc != 4 || !parse_port(argv[1], &listen) || !parse_port(argv[2], &forward))
-        return 2;
+    uint16_t listen = 0U, forward = 0U;
+    bool tcp = argc == 4 && strcmp(argv[1], "--tcp") == 0;
+    if (argc != 4 || (tcp ? !parse_port(argv[2], &forward)
+                          : (!parse_port(argv[1], &listen) ||
+                             !parse_port(argv[2], &forward)))) return 2;
     setvbuf(stdout, NULL, _IOLBF, 0);
     state_t state = {0}; rns_identity identity;
     if (!rns_identity_generate(&identity)) return 3;
     rns_config_t config; rns_config_init(&config); config.interface_count = 1;
     rns_config_interface_t *interface = &config.interfaces[0];
-    strcpy(interface->name, "python-direct-test"); interface->type = RNS_CONFIG_UDP;
+    strcpy(interface->name, "python-direct-test");
+    interface->type = tcp ? RNS_CONFIG_TCP_CLIENT : RNS_CONFIG_UDP;
     interface->type_set = true; interface->enabled = true;
-    strcpy(interface->listen_ip, "127.0.0.1"); strcpy(interface->forward_ip, "127.0.0.1");
-    interface->listen_port = listen; interface->forward_port = forward;
+    if (tcp) {
+        strcpy(interface->target_host, "127.0.0.1");
+        interface->target_port = forward;
+    } else {
+        strcpy(interface->listen_ip, "127.0.0.1");
+        strcpy(interface->forward_ip, "127.0.0.1");
+        interface->listen_port = listen; interface->forward_port = forward;
+    }
     rns_runtime_options_t ro = {0}; ro.announce_callback = announce;
     ro.callback_context = &state; rns_runtime_t *runtime = NULL;
     if (rns_runtime_create(&runtime, &config, &ro) != RNS_OK) return 4;
