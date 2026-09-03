@@ -26,6 +26,22 @@ struct rns_resource {
     bool assembled;
 };
 
+struct rns_resource_sender {
+    uint8_t *stream;
+    size_t stream_length;
+    size_t data_length;
+    size_t parts;
+    size_t part_size;
+    uint8_t random_hash[RNS_RESOURCE_RANDOM_HASH_SIZE];
+    uint8_t hash[RNS_RESOURCE_HASH_SIZE];
+    uint8_t expected_proof[RNS_RESOURCE_HASH_SIZE];
+    uint8_t hashmap[RNS_RESOURCE_MAX_PARTS * RNS_RESOURCE_MAPHASH_LEN];
+    uint8_t request_id[RNS_RESOURCE_REQUEST_ID_SIZE];
+    bool has_request_id;
+    bool compressed;
+    bool is_response;
+};
+
 /* ------------------------------------------------------- msgpack decoding */
 
 typedef struct {
@@ -353,7 +369,7 @@ rns_status_t rns_resource_assemble(rns_resource_t *resource, const rns_link *lin
         status = RNS_ERROR_PROTOCOL;
         goto done;
     }
-    /* The sender prefixes the payload with a copy of the random hash. */
+    /* The sender prefixes the payload with an independent random value. */
     plain += RNS_RESOURCE_RANDOM_HASH_SIZE;
     plain_length -= RNS_RESOURCE_RANDOM_HASH_SIZE;
 
@@ -412,4 +428,348 @@ rns_status_t rns_resource_build_proof(const rns_resource_t *resource,
     memcpy(output, resource->advertisement.hash, RNS_RESOURCE_HASH_SIZE);
     memcpy(output + RNS_RESOURCE_HASH_SIZE, resource->proof, RNS_RESOURCE_HASH_SIZE);
     return RNS_OK;
+}
+
+/* --------------------------------------------------------------- sending */
+
+static rns_status_t hash_join(const uint8_t *first, size_t first_length,
+                              const uint8_t *second, size_t second_length,
+                              uint8_t digest[RNS_SHA256_SIZE]) {
+    if (first_length > SIZE_MAX - second_length) return RNS_ERROR_OVERFLOW;
+    size_t length = first_length + second_length;
+    uint8_t *joined = malloc(length != 0u ? length : 1u);
+    if (joined == NULL) return RNS_ERROR_NO_MEMORY;
+    if (first_length != 0u) memcpy(joined, first, first_length);
+    if (second_length != 0u) memcpy(joined + first_length, second, second_length);
+    bool ok = rns_sha256(joined, length, digest) != 0;
+    free(joined);
+    return ok ? RNS_OK : RNS_ERROR_CRYPTO;
+}
+
+static rns_status_t prepare_compressed(const uint8_t *data, size_t data_length,
+                                       bool enabled, uint8_t **prepared,
+                                       size_t *prepared_length,
+                                       bool *compressed) {
+    *prepared = NULL;
+    *prepared_length = 0u;
+    *compressed = false;
+#ifdef RETICULUM_HAVE_BZIP2
+    if (enabled && data_length <= UINT_MAX) {
+        size_t bound = data_length + data_length / 100u + 601u;
+        if (bound <= UINT_MAX) {
+            uint8_t *candidate = malloc(bound != 0u ? bound : 1u);
+            if (candidate == NULL) return RNS_ERROR_NO_MEMORY;
+            unsigned int produced = (unsigned int)bound;
+            int result = BZ2_bzBuffToBuffCompress(
+                (char *)candidate, &produced, (char *)(uintptr_t)data,
+                (unsigned int)data_length, 9, 0, 30);
+            if (result == BZ_OK && (size_t)produced < data_length) {
+                *prepared = candidate;
+                *prepared_length = (size_t)produced;
+                *compressed = true;
+                return RNS_OK;
+            }
+            free(candidate);
+        }
+    }
+#else
+    (void)enabled;
+#endif
+    uint8_t *copy = malloc(data_length != 0u ? data_length : 1u);
+    if (copy == NULL) return RNS_ERROR_NO_MEMORY;
+    if (data_length != 0u) memcpy(copy, data, data_length);
+    *prepared = copy;
+    *prepared_length = data_length;
+    return RNS_OK;
+}
+
+static rns_status_t sender_compute_hashes(rns_resource_sender_t *sender,
+                                          const uint8_t *data,
+                                          size_t data_length) {
+    uint8_t digest[RNS_SHA256_SIZE];
+    for (size_t attempt = 0u; attempt < 32u; ++attempt) {
+        if (!rns_random_bytes(sender->random_hash,
+                              sizeof sender->random_hash))
+            return RNS_ERROR_CRYPTO;
+        rns_status_t status = hash_join(data, data_length, sender->random_hash,
+                                        sizeof sender->random_hash,
+                                        sender->hash);
+        if (status != RNS_OK) return status;
+        bool collision = false;
+        for (size_t i = 0u; i < sender->parts; ++i) {
+            size_t offset = i * sender->part_size;
+            size_t length = sender->stream_length - offset;
+            if (length > sender->part_size) length = sender->part_size;
+            status = hash_join(sender->stream + offset, length,
+                               sender->random_hash,
+                               sizeof sender->random_hash, digest);
+            if (status != RNS_OK) return status;
+            for (size_t previous = 0u; previous < i; ++previous)
+                if (memcmp(sender->hashmap +
+                               previous * RNS_RESOURCE_MAPHASH_LEN,
+                           digest, RNS_RESOURCE_MAPHASH_LEN) == 0) {
+                    collision = true;
+                    break;
+                }
+            if (collision) break;
+            memcpy(sender->hashmap + i * RNS_RESOURCE_MAPHASH_LEN, digest,
+                   RNS_RESOURCE_MAPHASH_LEN);
+        }
+        if (!collision)
+            return hash_join(data, data_length, sender->hash,
+                             sizeof sender->hash, sender->expected_proof);
+    }
+    return RNS_ERROR_CRYPTO;
+}
+
+rns_status_t rns_resource_sender_create(
+    rns_resource_sender_t **output, const rns_link *link,
+    const uint8_t *data, size_t data_length,
+    const rns_resource_sender_options_t *options) {
+    if (output == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    *output = NULL;
+    if (link == NULL || data == NULL || data_length == 0u ||
+        data_length > RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    bool auto_compress = options == NULL || options->auto_compress;
+    if (options != NULL && options->is_response && options->request_id == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    rns_resource_sender_t *sender = calloc(1u, sizeof *sender);
+    if (sender == NULL) return RNS_ERROR_NO_MEMORY;
+    if (link->mtu <= RNS_RESOURCE_WIRE_OVERHEAD || link->mtu > 500u) {
+        rns_resource_sender_destroy(sender);
+        return RNS_ERROR_UNSUPPORTED;
+    }
+    sender->part_size = (size_t)link->mtu - RNS_RESOURCE_WIRE_OVERHEAD;
+    uint8_t *prepared = NULL;
+    size_t prepared_length = 0u;
+    rns_status_t status = prepare_compressed(
+        data, data_length, auto_compress, &prepared, &prepared_length,
+        &sender->compressed);
+    if (status != RNS_OK) goto failed;
+    if (prepared_length > SIZE_MAX - RNS_RESOURCE_RANDOM_HASH_SIZE) {
+        status = RNS_ERROR_OVERFLOW;
+        goto failed;
+    }
+    size_t clear_length = prepared_length + RNS_RESOURCE_RANDOM_HASH_SIZE;
+    uint8_t *clear = malloc(clear_length);
+    if (clear == NULL) {
+        status = RNS_ERROR_NO_MEMORY;
+        goto failed;
+    }
+    if (!rns_random_bytes(clear, RNS_RESOURCE_RANDOM_HASH_SIZE)) {
+        free(clear);
+        status = RNS_ERROR_CRYPTO;
+        goto failed;
+    }
+    memcpy(clear + RNS_RESOURCE_RANDOM_HASH_SIZE, prepared, prepared_length);
+    size_t encrypted_capacity = clear_length + 128u;
+    sender->stream = malloc(encrypted_capacity);
+    if (sender->stream == NULL) {
+        free(clear);
+        status = RNS_ERROR_NO_MEMORY;
+        goto failed;
+    }
+    if (!rns_link_encrypt(link, clear, clear_length, sender->stream,
+                          encrypted_capacity, &sender->stream_length)) {
+        free(clear);
+        status = RNS_ERROR_CRYPTO;
+        goto failed;
+    }
+    free(clear);
+    sender->parts = (sender->stream_length + sender->part_size - 1u) /
+                    sender->part_size;
+    if (sender->parts == 0u || sender->parts > RNS_RESOURCE_MAX_PARTS) {
+        status = RNS_ERROR_UNSUPPORTED;
+        goto failed;
+    }
+    sender->data_length = data_length;
+    if (options != NULL && options->request_id != NULL) {
+        memcpy(sender->request_id, options->request_id,
+               sizeof sender->request_id);
+        sender->has_request_id = true;
+        sender->is_response = options->is_response;
+    }
+    status = sender_compute_hashes(sender, data, data_length);
+    if (status != RNS_OK) goto failed;
+    free(prepared);
+    *output = sender;
+    return RNS_OK;
+
+failed:
+    free(prepared);
+    rns_resource_sender_destroy(sender);
+    return status;
+}
+
+void rns_resource_sender_destroy(rns_resource_sender_t *sender) {
+    if (sender == NULL) return;
+    free(sender->stream);
+    free(sender);
+}
+
+typedef struct resource_writer {
+    uint8_t *data;
+    size_t capacity;
+    size_t offset;
+} resource_writer_t;
+
+static bool write_data(resource_writer_t *writer, const void *data,
+                       size_t length) {
+    if (length > writer->capacity - writer->offset) return false;
+    memcpy(writer->data + writer->offset, data, length);
+    writer->offset += length;
+    return true;
+}
+
+static bool write_u8(resource_writer_t *writer, uint8_t value) {
+    return write_data(writer, &value, 1u);
+}
+
+static bool write_uint(resource_writer_t *writer, size_t value) {
+    if (value <= 0x7fu) return write_u8(writer, (uint8_t)value);
+    if (value <= UINT8_MAX) {
+        uint8_t encoded[2] = {0xccu, (uint8_t)value};
+        return write_data(writer, encoded, sizeof encoded);
+    }
+    if (value <= UINT16_MAX) {
+        uint8_t encoded[3] = {0xcdu, (uint8_t)(value >> 8u), (uint8_t)value};
+        return write_data(writer, encoded, sizeof encoded);
+    }
+    if (value <= UINT32_MAX) {
+        uint8_t encoded[5] = {0xceu, (uint8_t)(value >> 24u),
+                              (uint8_t)(value >> 16u),
+                              (uint8_t)(value >> 8u), (uint8_t)value};
+        return write_data(writer, encoded, sizeof encoded);
+    }
+    return false;
+}
+
+static bool write_key(resource_writer_t *writer, char key) {
+    uint8_t encoded[2] = {0xa1u, (uint8_t)key};
+    return write_data(writer, encoded, sizeof encoded);
+}
+
+static bool write_bin(resource_writer_t *writer, const uint8_t *data,
+                      size_t length) {
+    if (length <= UINT8_MAX) {
+        uint8_t header[2] = {0xc4u, (uint8_t)length};
+        if (!write_data(writer, header, sizeof header)) return false;
+    } else if (length <= UINT16_MAX) {
+        uint8_t header[3] = {0xc5u, (uint8_t)(length >> 8u), (uint8_t)length};
+        if (!write_data(writer, header, sizeof header)) return false;
+    } else return false;
+    return write_data(writer, data, length);
+}
+
+rns_status_t rns_resource_sender_advertisement(
+    const rns_resource_sender_t *sender, uint8_t *output, size_t capacity,
+    size_t *output_length) {
+    if (sender == NULL || output == NULL || output_length == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    resource_writer_t writer = {output, capacity, 0u};
+    uint8_t flags = RNS_RESOURCE_FLAG_ENCRYPTED;
+    if (sender->compressed) flags |= RNS_RESOURCE_FLAG_COMPRESSED;
+    if (sender->has_request_id)
+        flags |= sender->is_response ? RNS_RESOURCE_FLAG_RESPONSE
+                                     : RNS_RESOURCE_FLAG_REQUEST;
+    size_t hashmap_length = sender->parts * RNS_RESOURCE_MAPHASH_LEN;
+    if (!write_u8(&writer, 0x8bu) ||
+        !write_key(&writer, 't') || !write_uint(&writer, sender->stream_length) ||
+        !write_key(&writer, 'd') || !write_uint(&writer, sender->data_length) ||
+        !write_key(&writer, 'n') || !write_uint(&writer, sender->parts) ||
+        !write_key(&writer, 'h') || !write_bin(&writer, sender->hash, sizeof sender->hash) ||
+        !write_key(&writer, 'r') || !write_bin(&writer, sender->random_hash, sizeof sender->random_hash) ||
+        !write_key(&writer, 'o') || !write_bin(&writer, sender->hash, sizeof sender->hash) ||
+        !write_key(&writer, 'i') || !write_uint(&writer, 1u) ||
+        !write_key(&writer, 'l') || !write_uint(&writer, 1u) ||
+        !write_key(&writer, 'q') ||
+        !(sender->has_request_id
+              ? write_bin(&writer, sender->request_id, sizeof sender->request_id)
+              : write_u8(&writer, 0xc0u)) ||
+        !write_key(&writer, 'f') || !write_uint(&writer, flags) ||
+        !write_key(&writer, 'm') ||
+        !write_bin(&writer, sender->hashmap, hashmap_length))
+        return RNS_ERROR_OVERFLOW;
+    *output_length = writer.offset;
+    return RNS_OK;
+}
+
+rns_status_t rns_resource_sender_requested_parts(
+    const rns_resource_sender_t *sender, const uint8_t *request,
+    size_t request_length, size_t *part_indexes, size_t capacity,
+    size_t *part_count) {
+    if (sender == NULL || request == NULL || part_indexes == NULL ||
+        part_count == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    *part_count = 0u;
+    if (request_length < 1u + RNS_RESOURCE_HASH_SIZE + RNS_RESOURCE_MAPHASH_LEN ||
+        request[0] != HASHMAP_IS_NOT_EXHAUSTED ||
+        (request_length - 1u - RNS_RESOURCE_HASH_SIZE) %
+                RNS_RESOURCE_MAPHASH_LEN !=
+            0u ||
+        memcmp(request + 1u, sender->hash, sizeof sender->hash) != 0)
+        return RNS_ERROR_PROTOCOL;
+    size_t hashes = (request_length - 1u - RNS_RESOURCE_HASH_SIZE) /
+                    RNS_RESOURCE_MAPHASH_LEN;
+    for (size_t requested = 0u; requested < hashes; ++requested) {
+        const uint8_t *map_hash = request + 1u + RNS_RESOURCE_HASH_SIZE +
+                                  requested * RNS_RESOURCE_MAPHASH_LEN;
+        for (size_t part = 0u; part < sender->parts; ++part) {
+            if (memcmp(map_hash,
+                       sender->hashmap + part * RNS_RESOURCE_MAPHASH_LEN,
+                       RNS_RESOURCE_MAPHASH_LEN) != 0)
+                continue;
+            bool duplicate = false;
+            for (size_t i = 0u; i < *part_count; ++i)
+                if (part_indexes[i] == part) duplicate = true;
+            if (!duplicate) {
+                if (*part_count == capacity) return RNS_ERROR_OVERFLOW;
+                part_indexes[(*part_count)++] = part;
+            }
+            break;
+        }
+    }
+    return *part_count != 0u ? RNS_OK : RNS_ERROR_NOT_FOUND;
+}
+
+rns_status_t rns_resource_sender_part(
+    const rns_resource_sender_t *sender, size_t part_index,
+    const uint8_t **data, size_t *length) {
+    if (sender == NULL || data == NULL || length == NULL ||
+        part_index >= sender->parts)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    size_t offset = part_index * sender->part_size;
+    *length = sender->stream_length - offset;
+    if (*length > sender->part_size) *length = sender->part_size;
+    *data = sender->stream + offset;
+    return RNS_OK;
+}
+
+rns_status_t rns_resource_sender_validate_proof(
+    const rns_resource_sender_t *sender, const uint8_t *proof,
+    size_t proof_length) {
+    if (sender == NULL || proof == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (proof_length != RNS_RESOURCE_PROOF_SIZE ||
+        memcmp(proof, sender->hash, RNS_RESOURCE_HASH_SIZE) != 0 ||
+        memcmp(proof + RNS_RESOURCE_HASH_SIZE, sender->expected_proof,
+               RNS_RESOURCE_HASH_SIZE) != 0)
+        return RNS_ERROR_CRYPTO;
+    return RNS_OK;
+}
+
+const uint8_t *rns_resource_sender_hash(const rns_resource_sender_t *sender) {
+    return sender != NULL ? sender->hash : NULL;
+}
+
+size_t rns_resource_sender_total_parts(const rns_resource_sender_t *sender) {
+    return sender != NULL ? sender->parts : 0u;
+}
+
+size_t rns_resource_sender_data_size(const rns_resource_sender_t *sender) {
+    return sender != NULL ? sender->data_length : 0u;
+}
+
+size_t rns_resource_sender_transfer_size(const rns_resource_sender_t *sender) {
+    return sender != NULL ? sender->stream_length : 0u;
 }

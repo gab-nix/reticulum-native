@@ -20,8 +20,10 @@ extern "C" {
 #define RNS_RESOURCE_WINDOW 4u
 /* One advertisement carries floor((Link MDU - 134) / 4) map hashes. */
 #define RNS_RESOURCE_MAX_PARTS 74u
-#define RNS_RESOURCE_PART_MAX 465u
+#define RNS_RESOURCE_WIRE_OVERHEAD 36u
+#define RNS_RESOURCE_PART_MAX 464u
 #define RNS_RESOURCE_DEFAULT_MAX_SIZE (1024u * 1024u)
+#define RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE ((1024u * 1024u) - 1u)
 
 #define RNS_RESOURCE_FLAG_ENCRYPTED 0x01u
 #define RNS_RESOURCE_FLAG_COMPRESSED 0x02u
@@ -54,6 +56,13 @@ typedef struct rns_resource_advertisement {
 } rns_resource_advertisement_t;
 
 typedef struct rns_resource rns_resource_t;
+typedef struct rns_resource_sender rns_resource_sender_t;
+
+typedef struct rns_resource_sender_options {
+    bool auto_compress;
+    bool is_response;
+    const uint8_t *request_id;
+} rns_resource_sender_options_t;
 
 rns_status_t rns_resource_advertisement_parse(
     const uint8_t *msgpack, size_t length,
@@ -94,6 +103,35 @@ rns_status_t rns_resource_assemble(rns_resource_t *resource, const rns_link *lin
 /* Valid only after a successful assemble. */
 rns_status_t rns_resource_build_proof(const rns_resource_t *resource,
                                       uint8_t output[RNS_RESOURCE_PROOF_SIZE]);
+
+/* Prepares one bounded, single-segment Resource using the pinned Reticulum
+ * wire representation. The source bytes are copied, optionally compressed
+ * when that reduces their size, prefixed with an independent random value and
+ * encrypted once as a complete stream before part hashing. */
+rns_status_t rns_resource_sender_create(
+    rns_resource_sender_t **sender, const rns_link *link,
+    const uint8_t *data, size_t data_length,
+    const rns_resource_sender_options_t *options);
+void rns_resource_sender_destroy(rns_resource_sender_t *sender);
+rns_status_t rns_resource_sender_advertisement(
+    const rns_resource_sender_t *sender, uint8_t *output, size_t capacity,
+    size_t *output_length);
+/* Parses one RESOURCE_REQ body and returns matching part indexes. Unknown map
+ * hashes are ignored exactly as the reference sender does. */
+rns_status_t rns_resource_sender_requested_parts(
+    const rns_resource_sender_t *sender, const uint8_t *request,
+    size_t request_length, size_t *part_indexes, size_t capacity,
+    size_t *part_count);
+rns_status_t rns_resource_sender_part(
+    const rns_resource_sender_t *sender, size_t part_index,
+    const uint8_t **data, size_t *length);
+rns_status_t rns_resource_sender_validate_proof(
+    const rns_resource_sender_t *sender, const uint8_t *proof,
+    size_t proof_length);
+const uint8_t *rns_resource_sender_hash(const rns_resource_sender_t *sender);
+size_t rns_resource_sender_total_parts(const rns_resource_sender_t *sender);
+size_t rns_resource_sender_data_size(const rns_resource_sender_t *sender);
+size_t rns_resource_sender_transfer_size(const rns_resource_sender_t *sender);
 
 /* True when this build can decompress bz2 resource payloads. */
 bool rns_resource_decompression_available(void);
