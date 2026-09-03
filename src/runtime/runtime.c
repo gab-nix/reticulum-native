@@ -591,6 +591,11 @@ static bool resource_advertised(rns_runtime_link_t *link, const uint8_t *plainte
                                          &advertisement) != RNS_OK) return false;
     bool continuation = link->resource_assembled != NULL &&
                         link->resource == NULL;
+    if (!continuation && advertisement.segment_index != 1U) {
+        (void)link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_RCL,
+                               advertisement.hash, sizeof advertisement.hash);
+        return true;
+    }
     rns_request_receipt_t *receipt = continuation
         ? link->resource_receipt
         : (advertisement.has_request_id

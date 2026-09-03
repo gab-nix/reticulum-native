@@ -14,6 +14,24 @@ static void initialise_link(rns_link *link) {
         link->derived_key[i] = (uint8_t)(i * 13u + 7u);
 }
 
+static size_t find_last_key_before(const uint8_t *data, size_t limit,
+                                   uint8_t key) {
+    assert(limit >= 2U);
+    for (size_t i = limit - 1U; i > 0U; --i)
+        if (data[i - 1U] == 0xa1U && data[i] == key) return i;
+    assert(false);
+    return 0U;
+}
+
+static size_t find_first_key_before(const uint8_t *data, size_t limit,
+                                    uint8_t key) {
+    assert(limit >= 2U);
+    for (size_t i = 1U; i < limit; ++i)
+        if (data[i - 1U] == 0xa1U && data[i] == key) return i;
+    assert(false);
+    return 0U;
+}
+
 static void transfer_resource(bool response) {
     rns_link link;
     initialise_link(&link);
@@ -264,10 +282,71 @@ static void test_hashmap_updates_and_segments(void) {
     free(source);
 }
 
+static void test_advertisement_hardening(void) {
+    rns_link link;
+    initialise_link(&link);
+    uint8_t source[1400];
+    for (size_t i = 0U; i < sizeof source; ++i)
+        source[i] = (uint8_t)(i * 19U + 3U);
+    rns_resource_sender_options_t options = {.auto_compress = false};
+    rns_resource_sender_t *sender = NULL;
+    assert(rns_resource_sender_create(&sender, &link, source, sizeof source,
+                                      &options) == RNS_OK);
+    uint8_t advertisement_bytes[RNS_MTU];
+    size_t advertisement_length = 0U;
+    assert(rns_resource_sender_advertisement(
+               sender, advertisement_bytes, sizeof advertisement_bytes,
+               &advertisement_length) == RNS_OK);
+    rns_resource_advertisement_t advertisement;
+    assert(rns_resource_advertisement_parse(
+               advertisement_bytes, advertisement_length,
+               &advertisement) == RNS_OK);
+    size_t map_offset = (size_t)(advertisement.hashmap - advertisement_bytes);
+    size_t hash_key = find_first_key_before(advertisement_bytes, map_offset, 'h');
+    uint8_t malformed[RNS_MTU];
+
+    assert(hash_key + 1U < advertisement_length &&
+           advertisement_bytes[hash_key + 1U] == 0xc4U);
+    memcpy(malformed, advertisement_bytes, advertisement_length);
+    malformed[hash_key + 1U] = 0xd9U;
+    assert(rns_resource_advertisement_parse(
+               malformed, advertisement_length, &advertisement) ==
+           RNS_ERROR_PROTOCOL);
+    memcpy(malformed, advertisement_bytes, advertisement_length);
+    malformed[find_last_key_before(malformed, map_offset, 'q')] = 'z';
+    assert(rns_resource_advertisement_parse(
+               malformed, advertisement_length, &advertisement) ==
+           RNS_ERROR_PROTOCOL);
+    memcpy(malformed, advertisement_bytes, advertisement_length);
+    malformed[find_last_key_before(malformed, map_offset, 'q')] = 'f';
+    assert(rns_resource_advertisement_parse(
+               malformed, advertisement_length, &advertisement) ==
+           RNS_ERROR_PROTOCOL);
+    memcpy(malformed, advertisement_bytes, advertisement_length);
+    malformed[find_last_key_before(malformed, map_offset, 'm')] = 'z';
+    assert(rns_resource_advertisement_parse(
+               malformed, advertisement_length, &advertisement) ==
+           RNS_ERROR_PROTOCOL);
+
+    assert(rns_resource_advertisement_parse(
+               advertisement_bytes, advertisement_length,
+               &advertisement) == RNS_OK);
+    rns_resource_t *receiver = NULL;
+    advertisement.parts = 1U;
+    assert(rns_resource_accept(&receiver, &advertisement,
+                               RNS_RESOURCE_MAX_SIZE) == RNS_ERROR_PROTOCOL);
+    advertisement.transfer_size = 8U;
+    advertisement.parts = RNS_RESOURCE_MAX_PARTS;
+    assert(rns_resource_accept(&receiver, &advertisement,
+                               RNS_RESOURCE_MAX_SIZE) == RNS_ERROR_PROTOCOL);
+    rns_resource_sender_destroy(sender);
+}
+
 int main(void) {
     transfer_resource(false);
     transfer_resource(true);
     test_compression_and_bounds();
     test_hashmap_updates_and_segments();
+    test_advertisement_hardening();
     return 0;
 }

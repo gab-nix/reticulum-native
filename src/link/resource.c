@@ -125,6 +125,7 @@ rns_status_t rns_resource_advertisement_parse(
     bool transfer_seen = false, data_seen = false, parts_seen = false;
     bool hash_seen = false, original_seen = false, random_seen = false;
     bool segment_seen = false, segments_seen = false, flags_seen = false;
+    bool request_seen = false, hashmap_seen = false;
     if (msgpack == NULL || advertisement == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     memset(advertisement, 0, sizeof *advertisement);
     if (!read_byte(&reader, &code) || (code & 0xf0u) != 0x80u)
@@ -139,8 +140,33 @@ rns_status_t rns_resource_advertisement_parse(
             return RNS_ERROR_PROTOCOL;
         if (!read_byte(&reader, &code)) return RNS_ERROR_PROTOCOL;
         char name = (char)key[0];
+        bool *seen = NULL;
+        switch (name) {
+            case 't': seen = &transfer_seen; break;
+            case 'd': seen = &data_seen; break;
+            case 'n': seen = &parts_seen; break;
+            case 'h': seen = &hash_seen; break;
+            case 'r': seen = &random_seen; break;
+            case 'o': seen = &original_seen; break;
+            case 'i': seen = &segment_seen; break;
+            case 'l': seen = &segments_seen; break;
+            case 'q': seen = &request_seen; break;
+            case 'f': seen = &flags_seen; break;
+            case 'm': seen = &hashmap_seen; break;
+            default: break;
+        }
+        if (seen != NULL && *seen) return RNS_ERROR_PROTOCOL;
+        if (seen != NULL) *seen = true;
+        bool bytes_expected = name == 'h' || name == 'r' || name == 'o' ||
+                              name == 'q' || name == 'm';
+        bool unsigned_expected = name == 't' || name == 'd' || name == 'n' ||
+                                 name == 'i' || name == 'l' || name == 'f';
         if (code == 0xc4u || code == 0xc5u || code == 0xc6u || code == 0xd9u ||
             code == 0xdau || code == 0xdbu || (code & 0xe0u) == 0xa0u) {
+            if (unsigned_expected) return RNS_ERROR_PROTOCOL;
+            if (bytes_expected && code != 0xc4u && code != 0xc5u &&
+                code != 0xc6u)
+                return RNS_ERROR_PROTOCOL;
             const uint8_t *value;
             size_t value_length;
             if (!read_bytes(&reader, code, &value, &value_length))
@@ -150,25 +176,22 @@ rns_status_t rns_resource_advertisement_parse(
                     if (value_length != sizeof advertisement->hash)
                         return RNS_ERROR_PROTOCOL;
                     memcpy(advertisement->hash, value, value_length);
-                    hash_seen = true;
                     break;
                 case 'o':
                     if (value_length != sizeof advertisement->original_hash)
                         return RNS_ERROR_PROTOCOL;
                     memcpy(advertisement->original_hash, value, value_length);
-                    original_seen = true;
                     break;
                 case 'r':
                     if (value_length != sizeof advertisement->random_hash)
                         return RNS_ERROR_PROTOCOL;
                     memcpy(advertisement->random_hash, value, value_length);
-                    random_seen = true;
                     break;
                 case 'q':
-                    if (value_length == RNS_RESOURCE_REQUEST_ID_SIZE) {
-                        memcpy(advertisement->request_id, value, value_length);
-                        advertisement->has_request_id = true;
-                    }
+                    if (value_length != RNS_RESOURCE_REQUEST_ID_SIZE)
+                        return RNS_ERROR_PROTOCOL;
+                    memcpy(advertisement->request_id, value, value_length);
+                    advertisement->has_request_id = true;
                     break;
                 case 'm':
                     advertisement->hashmap = value;
@@ -178,42 +201,39 @@ rns_status_t rns_resource_advertisement_parse(
             }
         } else if (code == 0xc0u) {
             /* nil, for example an absent request id */
+            if (name != 'q' && seen != NULL) return RNS_ERROR_PROTOCOL;
         } else if (code == 0xc2u || code == 0xc3u) {
+            if (seen != NULL) return RNS_ERROR_PROTOCOL;
             if (name == 'c' && code == 0xc3u) advertisement->compressed = true;
             if (name == 'e' && code == 0xc3u) advertisement->encrypted = true;
         } else {
+            if (bytes_expected) return RNS_ERROR_PROTOCOL;
             uint64_t value;
             if (!read_unsigned(&reader, code, &value)) return RNS_ERROR_PROTOCOL;
             switch (name) {
                 case 't':
                     if (value > SIZE_MAX) return RNS_ERROR_OVERFLOW;
                     advertisement->transfer_size = (size_t)value;
-                    transfer_seen = true;
                     break;
                 case 'd':
                     if (value > SIZE_MAX) return RNS_ERROR_OVERFLOW;
                     advertisement->data_size = (size_t)value;
-                    data_seen = true;
                     break;
                 case 'n':
                     if (value > SIZE_MAX) return RNS_ERROR_OVERFLOW;
                     advertisement->parts = (size_t)value;
-                    parts_seen = true;
                     break;
                 case 'i':
                     if (value > SIZE_MAX) return RNS_ERROR_OVERFLOW;
                     advertisement->segment_index = (size_t)value;
-                    segment_seen = true;
                     break;
                 case 'l':
                     if (value > SIZE_MAX) return RNS_ERROR_OVERFLOW;
                     advertisement->total_segments = (size_t)value;
-                    segments_seen = true;
                     break;
                 case 'f':
                     if (value > UINT8_MAX) return RNS_ERROR_OVERFLOW;
                     advertisement->flags = (uint8_t)value;
-                    flags_seen = true;
                     break;
                 default: break;
             }
@@ -229,7 +249,8 @@ rns_status_t rns_resource_advertisement_parse(
     advertisement->has_metadata = (flags & RNS_RESOURCE_FLAG_METADATA) != 0u;
     if (!transfer_seen || !data_seen || !parts_seen || !hash_seen ||
         !original_seen || !random_seen || !segment_seen || !segments_seen ||
-        !flags_seen || advertisement->parts == 0u ||
+        !request_seen || !flags_seen || !hashmap_seen ||
+        advertisement->parts == 0u ||
         advertisement->transfer_size == 0u ||
         advertisement->data_size == 0u || advertisement->segment_index == 0u ||
         advertisement->total_segments == 0u ||
@@ -263,6 +284,12 @@ rns_status_t rns_resource_accept(rns_resource_t **output,
         return RNS_ERROR_PROTOCOL;
     if (advertisement->parts == 0u || advertisement->parts > RNS_RESOURCE_MAX_PARTS)
         return RNS_ERROR_UNSUPPORTED;
+    size_t minimum_parts =
+        (advertisement->transfer_size + RNS_RESOURCE_PART_MAX - 1u) /
+        RNS_RESOURCE_PART_MAX;
+    if (advertisement->parts < minimum_parts ||
+        advertisement->parts > advertisement->transfer_size)
+        return RNS_ERROR_PROTOCOL;
     if (advertisement->hashmap == NULL ||
         advertisement->hashmap_length == 0u ||
         advertisement->hashmap_length % RNS_RESOURCE_MAPHASH_LEN != 0u ||

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "reticulum/destination.h"
+#include "reticulum/packet.h"
 #include "reticulum/runtime.h"
 #include "reticulum/udp.h"
 
@@ -34,6 +35,15 @@ typedef struct fixture {
     observation_t sender;
     observation_t receiver;
 } fixture_t;
+
+static size_t find_last_key_before(const uint8_t *data, size_t limit,
+                                   uint8_t key) {
+    assert(limit >= 2U);
+    for (size_t i = limit - 1U; i > 0U; --i)
+        if (data[i - 1U] == 0xa1U && data[i] == key) return i;
+    assert(false);
+    return 0U;
+}
 
 static uint16_t reserve_udp_port(void) {
     rns_udp_endpoint_t *endpoint = NULL;
@@ -200,6 +210,43 @@ static void test_success_reject_cancel_and_malformed(void) {
     rns_identity identity;
     uint8_t destination_hash[16];
     fixture_init(&fixture, &identity, destination_hash, 2048U);
+    rns_link synthetic_link = {0};
+    synthetic_link.state = RNS_LINK_ACTIVE;
+    synthetic_link.mode = RNS_LINK_MODE_AES256_CBC;
+    synthetic_link.mtu = 500U;
+    memset(synthetic_link.derived_key, 0x71,
+           sizeof synthetic_link.derived_key);
+    static const uint8_t synthetic_data[] = "out-of-sequence segment";
+    rns_resource_sender_options_t synthetic_options = {.auto_compress = false};
+    rns_resource_sender_t *synthetic = NULL;
+    assert(rns_resource_sender_create(&synthetic, &synthetic_link,
+                                      synthetic_data,
+                                      sizeof synthetic_data,
+                                      &synthetic_options) == RNS_OK);
+    uint8_t malformed_segment[RNS_MTU];
+    size_t malformed_segment_length = 0U;
+    assert(rns_resource_sender_advertisement(
+               synthetic, malformed_segment, sizeof malformed_segment,
+               &malformed_segment_length) == RNS_OK);
+    rns_resource_advertisement_t parsed_segment;
+    assert(rns_resource_advertisement_parse(
+               malformed_segment, malformed_segment_length,
+               &parsed_segment) == RNS_OK);
+    size_t map_offset =
+        (size_t)(parsed_segment.hashmap - malformed_segment);
+    size_t index_key = find_last_key_before(malformed_segment, map_offset, 'i');
+    size_t total_key = find_last_key_before(malformed_segment, map_offset, 'l');
+    size_t flags_key = find_last_key_before(malformed_segment, map_offset, 'f');
+    malformed_segment[index_key + 1U] = 2U;
+    malformed_segment[total_key + 1U] = 2U;
+    malformed_segment[flags_key + 1U] |= RNS_RESOURCE_FLAG_SPLIT;
+    assert(rns_runtime_link_send(fixture.outbound,
+                                 RNS_LINK_CONTEXT_RESOURCE_ADV,
+                                 malformed_segment,
+                                 malformed_segment_length) == RNS_OK);
+    for (size_t i = 0U; i < 20U; ++i) fixture_poll(&fixture);
+    assert(fixture.receiver.accepted == 0U);
+    rns_resource_sender_destroy(synthetic);
     uint8_t message[900];
     for (size_t i = 0U; i < sizeof message; ++i)
         message[i] = (uint8_t)(i * 29U + 7U);
