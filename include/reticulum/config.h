@@ -16,6 +16,11 @@ extern "C" {
 #define RNS_CONFIG_VALUE_MAX 128U
 #define RNS_CONFIG_DIAGNOSTIC_MAX 192U
 
+typedef enum rns_config_shared_instance_type {
+    RNS_CONFIG_SHARED_INSTANCE_TCP = 0,
+    RNS_CONFIG_SHARED_INSTANCE_UNIX
+} rns_config_shared_instance_type_t;
+
 typedef enum rns_config_interface_type {
     RNS_CONFIG_TCP_CLIENT = 0,
     RNS_CONFIG_TCP_SERVER,
@@ -48,8 +53,14 @@ typedef struct rns_config_interface {
 typedef struct rns_config {
     bool enable_transport;
     bool share_instance;
+    /* Set by the parser when share_instance is explicitly configured. */
+    bool share_instance_configured;
     bool panic_on_interface_error;
+    rns_config_shared_instance_type_t shared_instance_type;
+    char instance_name[RNS_CONFIG_VALUE_MAX];
+    uint16_t shared_instance_port;
     uint16_t instance_control_port;
+    /* Deprecated compatibility alias for shared_instance_port. */
     uint16_t instance_data_port;
     rns_config_interface_t interfaces[RNS_CONFIG_MAX_INTERFACES];
     size_t interface_count;
@@ -77,4 +88,3 @@ const char *rns_config_interface_type_name(rns_config_interface_type_t type);
 #endif
 
 #endif
-

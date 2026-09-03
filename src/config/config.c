@@ -106,7 +106,10 @@ void rns_config_init(rns_config_t *config) {
     if (config != NULL) {
         memset(config, 0, sizeof(*config));
         config->share_instance = true;
-        config->instance_control_port = 37428U;
+        config->shared_instance_type = RNS_CONFIG_SHARED_INSTANCE_TCP;
+        (void)memcpy(config->instance_name, "default", sizeof("default"));
+        config->shared_instance_port = 37428U;
+        config->instance_control_port = 37429U;
         config->instance_data_port = 37428U;
     }
 }
@@ -144,9 +147,30 @@ static rns_status_t parse_reticulum_value(rns_config_t *config,
     if (strcmp(key, "enable_transport") == 0) {
         if (parse_bool(value, &config->enable_transport)) return RNS_OK;
     } else if (strcmp(key, "share_instance") == 0) {
-        if (parse_bool(value, &config->share_instance)) return RNS_OK;
+        if (parse_bool(value, &config->share_instance)) {
+            config->share_instance_configured = true;
+            return RNS_OK;
+        }
     } else if (strcmp(key, "panic_on_interface_error") == 0) {
         if (parse_bool(value, &config->panic_on_interface_error)) return RNS_OK;
+    } else if (strcmp(key, "shared_instance_type") == 0) {
+        if (equal_ignore_case(value, "tcp")) {
+            config->shared_instance_type = RNS_CONFIG_SHARED_INSTANCE_TCP;
+            return RNS_OK;
+        }
+        if (equal_ignore_case(value, "unix")) {
+            config->shared_instance_type = RNS_CONFIG_SHARED_INSTANCE_UNIX;
+            return RNS_OK;
+        }
+    } else if (strcmp(key, "instance_name") == 0) {
+        if (copy_value(config->instance_name, sizeof(config->instance_name), value))
+            return RNS_OK;
+    } else if (strcmp(key, "shared_instance_port") == 0) {
+        if (parse_unsigned(value, UINT16_MAX, &number) && number != 0U) {
+            config->shared_instance_port = (uint16_t)number;
+            config->instance_data_port = (uint16_t)number;
+            return RNS_OK;
+        }
     } else if (strcmp(key, "instance_control_port") == 0) {
         if (parse_unsigned(value, UINT16_MAX, &number) && number != 0U) {
             config->instance_control_port = (uint16_t)number;
@@ -155,6 +179,7 @@ static rns_status_t parse_reticulum_value(rns_config_t *config,
     } else if (strcmp(key, "instance_data_port") == 0) {
         if (parse_unsigned(value, UINT16_MAX, &number) && number != 0U) {
             config->instance_data_port = (uint16_t)number;
+            config->shared_instance_port = (uint16_t)number;
             return RNS_OK;
         }
     } else {
@@ -408,12 +433,15 @@ rns_status_t rns_config_emit(const rns_config_t *config,
     }
     *output_length = 0U;
     if (!emit(&emitter, "[reticulum]\n  enable_transport = %s\n  share_instance = %s\n"
-                        "  panic_on_interface_error = %s\n  instance_control_port = %u\n"
-                        "  instance_data_port = %u\n\n[interfaces]\n",
+                        "  shared_instance_type = %s\n  instance_name = %s\n"
+                        "  panic_on_interface_error = %s\n  shared_instance_port = %u\n"
+                        "  instance_control_port = %u\n\n[interfaces]\n",
               config->enable_transport ? "Yes" : "No", config->share_instance ? "Yes" : "No",
+              config->shared_instance_type == RNS_CONFIG_SHARED_INSTANCE_UNIX ? "unix" : "tcp",
+              config->instance_name,
               config->panic_on_interface_error ? "Yes" : "No",
-              (unsigned int)config->instance_control_port,
-              (unsigned int)config->instance_data_port)) return RNS_ERROR_OVERFLOW;
+              (unsigned int)config->shared_instance_port,
+              (unsigned int)config->instance_control_port)) return RNS_ERROR_OVERFLOW;
     for (index = 0U; index < config->interface_count; ++index) {
         const rns_config_interface_t *item = &config->interfaces[index];
         const char *type_name = rns_config_interface_type_name(item->type);
@@ -445,4 +473,3 @@ rns_status_t rns_config_emit(const rns_config_t *config,
     *output_length = emitter.length;
     return RNS_OK;
 }
-

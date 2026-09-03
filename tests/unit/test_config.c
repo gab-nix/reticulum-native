@@ -1,4 +1,5 @@
 #include "reticulum/config.h"
+#include "reticulum/local.h"
 
 #include <assert.h>
 #include <stddef.h>
@@ -41,6 +42,12 @@ int main(void) {
     static const char invalid[] =
         "[interfaces]\n[[Broken]]\ntype = TCPClientInterface\nenabled = Yes\n"
         "target_port = 1234\n";
+    static const char shared[] =
+        "[reticulum]\nshare_instance = Yes\nshared_instance_type = tcp\n"
+        "instance_name = nomad\nshared_instance_port = 48123\n"
+        "instance_control_port = 48124\n";
+    static const char shared_unix[] =
+        "[reticulum]\nshare_instance = Yes\nshared_instance_type = unix\n";
     rns_config_t config;
     rns_config_t reparsed;
     rns_config_diagnostic_t diagnostic;
@@ -60,6 +67,8 @@ int main(void) {
     assert(rns_config_parse(emitted, emitted_length, &reparsed, &diagnostic) == RNS_OK);
     assert(reparsed.interface_count == config.interface_count);
     assert(reparsed.interfaces[2].tx_power == 17);
+    assert(reparsed.shared_instance_port == 37428U);
+    assert(reparsed.instance_control_port == 37429U);
 
     assert(rns_config_parse(unsupported, sizeof(unsupported) - 1U,
                             &config, &diagnostic) == RNS_ERROR_UNSUPPORTED);
@@ -70,6 +79,22 @@ int main(void) {
     assert(rns_config_parse(valid_config, sizeof(valid_config) - 1U,
                             &config, &diagnostic) == RNS_OK);
     assert(rns_config_emit(&config, tiny, sizeof(tiny), &emitted_length) == RNS_ERROR_OVERFLOW);
+    assert(rns_config_parse(shared, sizeof(shared) - 1U, &config, &diagnostic) ==
+           RNS_OK);
+    assert(config.share_instance &&
+           config.shared_instance_type == RNS_CONFIG_SHARED_INSTANCE_TCP);
+    assert(strcmp(config.instance_name, "nomad") == 0);
+    assert(config.shared_instance_port == 48123U &&
+           config.instance_data_port == 48123U &&
+           config.instance_control_port == 48124U);
+    rns_local_options_t local_options;
+    assert(rns_local_options_from_config(&config, RNS_LOCAL_ROLE_AUTO,
+                                         &local_options) == RNS_OK);
+    assert(local_options.port == 48123U);
+    assert(rns_config_parse(shared_unix, sizeof(shared_unix) - 1U, &config,
+                            &diagnostic) == RNS_OK);
+    assert(rns_local_options_from_config(&config, RNS_LOCAL_ROLE_AUTO,
+                                         &local_options) ==
+           RNS_ERROR_UNSUPPORTED);
     return 0;
 }
-

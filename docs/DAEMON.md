@@ -28,6 +28,7 @@ interface prevents daemon startup. In tolerant mode, startup succeeds and caller
 can inspect each interface's state, last error, and packet/byte counters.
 
 This daemon is an early native runtime, not yet a drop-in replacement for Python
-RNS. It does not yet implement shared-instance IPC, TCP reconnect scheduling,
+RNS. Shared-instance TCP data IPC and TCP reconnect scheduling are available,
+but the daemon does not yet implement the shared control/RPC channel,
 multiple accepted TCP peers, persistent transport identity/path state, or delayed
 announce rebroadcast scheduling.

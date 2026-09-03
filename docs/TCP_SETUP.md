@@ -30,8 +30,8 @@ Save this as `server.conf`:
   enable_transport = No
   share_instance = No
   panic_on_interface_error = Yes
-  instance_control_port = 37428
-  instance_data_port = 37428
+  shared_instance_port = 37428
+  instance_control_port = 37429
 
 [interfaces]
   [[TCP Listener]]
@@ -60,8 +60,8 @@ address with the server's reachable address:
   enable_transport = No
   share_instance = No
   panic_on_interface_error = Yes
-  instance_control_port = 37428
-  instance_data_port = 37428
+  shared_instance_port = 37428
+  instance_control_port = 37429
 
 [interfaces]
   [[TCP Uplink]]

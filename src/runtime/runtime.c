@@ -4,6 +4,7 @@
 #include "reticulum/crypto.h"
 #include "reticulum/destination.h"
 #include "reticulum/hal.h"
+#include "reticulum/local.h"
 #include "reticulum/packet.h"
 #include "reticulum/request.h"
 #include "reticulum/resource.h"
@@ -26,6 +27,8 @@ typedef struct runtime_interface {
     bool has_udp_forward;
     rns_tcp_endpoint_t *tcp;
     rns_tcp_endpoint_t *accepted;
+    rns_local_instance_t *local;
+    bool local_server;
     double reconnect_at;
     double reconnect_delay;
 } runtime_interface_t;
@@ -108,7 +111,7 @@ struct rns_packet_receipt {
 struct rns_runtime {
     rns_config_t config;
     rns_node node;
-    runtime_interface_t interfaces[RNS_CONFIG_MAX_INTERFACES];
+    runtime_interface_t interfaces[RNS_CONFIG_MAX_INTERFACES + 1U];
     size_t interface_count;
     rns_runtime_packet_callback_t packet_callback;
     rns_runtime_announce_callback_t announce_callback;
@@ -123,6 +126,7 @@ struct rns_runtime {
     void *reconnect_clock_context;
     double tcp_reconnect_initial;
     double tcp_reconnect_max;
+    bool shared_server;
 };
 
 typedef struct receive_context {
@@ -235,6 +239,8 @@ static rns_status_t send_internal(rns_runtime_t *runtime, size_t index,
         status = rns_tcp_queue_frame(interface->accepted, packet, length);
     else if (interface->tcp != NULL && rns_tcp_state(interface->tcp) == RNS_TCP_CONNECTED)
         status = rns_tcp_queue_frame(interface->tcp, packet, length);
+    else if (interface->local != NULL)
+        status = rns_local_instance_send(interface->local, packet, length);
     if (status == RNS_OK) {
         interface->info.packets_sent++;
         interface->info.bytes_sent += length;
@@ -987,10 +993,12 @@ static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, s
         runtime->packet_callback(runtime, packet, length, &result, runtime->callback_context);
     if (result.has_verified_announce && runtime->announce_callback != NULL)
         runtime->announce_callback(runtime, &result, runtime->callback_context);
-    if (runtime->config.enable_transport &&
+    if ((runtime->config.enable_transport || runtime->shared_server) &&
         (result.action == RNS_NODE_FORWARD || result.action == RNS_NODE_REBROADCAST)) {
         for (size_t i = 0U; i < runtime->interface_count; ++i)
-            if (i != context->interface_index) (void)send_internal(runtime, i, output, result.output_length);
+            if (i != context->interface_index || source->local_server)
+                (void)send_internal(runtime, i, output,
+                                    result.output_length);
     }
     return RNS_OK;
 }
@@ -1047,6 +1055,43 @@ static rns_status_t start_interface(rns_runtime_t *runtime,
         }
     } else destination->info.state = status == RNS_OK ? RNS_RUNTIME_INTERFACE_UP : RNS_RUNTIME_INTERFACE_DOWN;
     return status;
+}
+
+static rns_status_t start_local_interface(rns_runtime_t *runtime,
+                                          const rns_config_t *config,
+                                          bool *shared_client) {
+    rns_local_options_t options;
+    rns_local_info_t info;
+    size_t index = config->interface_count;
+    rns_status_t status = rns_local_options_from_config(
+        config, RNS_LOCAL_ROLE_AUTO, &options);
+    options.clock = runtime->reconnect_clock;
+    options.clock_context = runtime->reconnect_clock_context;
+    if (status == RNS_OK)
+        status = rns_local_instance_create(&runtime->interfaces[index].local,
+                                           &options);
+    if (status == RNS_OK)
+        status = rns_local_instance_info(runtime->interfaces[index].local,
+                                         &info);
+    if (status != RNS_OK) return status;
+    runtime_interface_t *interface = &runtime->interfaces[index];
+    interface->info.id = index + 1U;
+    interface->info.type = info.role == RNS_LOCAL_ROLE_SERVER
+                               ? RNS_CONFIG_TCP_SERVER
+                               : RNS_CONFIG_TCP_CLIENT;
+    interface->info.state = info.state == RNS_LOCAL_UP
+                                ? RNS_RUNTIME_INTERFACE_UP
+                                : (info.state == RNS_LOCAL_STARTING
+                                       ? RNS_RUNTIME_INTERFACE_STARTING
+                                       : RNS_RUNTIME_INTERFACE_DOWN);
+    interface->info.last_error = info.last_error;
+    (void)memcpy(interface->info.name, "Local shared instance",
+                 sizeof("Local shared instance"));
+    interface->local_server = info.role == RNS_LOCAL_ROLE_SERVER;
+    runtime->shared_server = interface->local_server;
+    *shared_client = !interface->local_server;
+    runtime->interface_count++;
+    return RNS_OK;
 }
 
 rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *config,
@@ -1110,9 +1155,28 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
         return RNS_ERROR_NO_MEMORY;
     }
     runtime->plain_destination_capacity = node_config.local_destination_capacity;
-    for (size_t i = 0U; i < runtime->interface_count; ++i) {
-        rns_status_t status = start_interface(runtime, &runtime->interfaces[i],
-                                              &config->interfaces[i], i + 1U);
+    bool shared_client = false;
+    if (config->share_instance_configured && config->share_instance) {
+        rns_status_t status = start_local_interface(runtime, config,
+                                                    &shared_client);
+        if (status != RNS_OK) {
+            rns_runtime_destroy(runtime);
+            return status;
+        }
+    }
+    for (size_t i = 0U; i < config->interface_count; ++i) {
+        rns_status_t status;
+        if (shared_client) {
+            runtime_interface_t *interface = &runtime->interfaces[i];
+            interface->info.id = i + 1U;
+            interface->info.type = config->interfaces[i].type;
+            interface->info.state = RNS_RUNTIME_INTERFACE_DISABLED;
+            (void)memcpy(interface->info.name, config->interfaces[i].name,
+                         sizeof(interface->info.name));
+            continue;
+        }
+        status = start_interface(runtime, &runtime->interfaces[i],
+                                 &config->interfaces[i], i + 1U);
         if (status != RNS_OK && first_error == RNS_OK) first_error = status;
         if (status != RNS_OK && config->panic_on_interface_error) {
             rns_runtime_destroy(runtime);
@@ -1145,6 +1209,7 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
         rns_udp_endpoint_destroy(runtime->interfaces[i].udp);
         rns_tcp_endpoint_destroy(runtime->interfaces[i].accepted);
         rns_tcp_endpoint_destroy(runtime->interfaces[i].tcp);
+        rns_local_instance_destroy(runtime->interfaces[i].local);
     }
     free(runtime->plain_destinations);
     runtime->plain_destinations = NULL;
@@ -1213,6 +1278,30 @@ static rns_status_t poll_tcp(rns_runtime_t *runtime, size_t index, receive_conte
     return status;
 }
 
+static rns_status_t poll_local(runtime_interface_t *interface,
+                               receive_context_t *context) {
+    rns_status_t status = rns_local_instance_poll(interface->local,
+                                                   tcp_receive, context);
+    rns_local_info_t info;
+    if (rns_local_instance_info(interface->local, &info) == RNS_OK) {
+        interface->info.state = info.state == RNS_LOCAL_UP
+                                    ? RNS_RUNTIME_INTERFACE_UP
+                                    : (info.state == RNS_LOCAL_STARTING
+                                           ? RNS_RUNTIME_INTERFACE_STARTING
+                                           : RNS_RUNTIME_INTERFACE_DOWN);
+        interface->info.last_error = info.last_error;
+        interface->info.packets_received = info.packets_received;
+        interface->info.packets_sent = info.packets_sent;
+        interface->info.bytes_received = info.bytes_received;
+        interface->info.bytes_sent = info.bytes_sent;
+        interface->info.packets_dropped = info.packets_dropped;
+        interface->info.connection_attempts = info.connection_attempts;
+        interface->info.connections_established = info.connections_established;
+        interface->info.connections_lost = info.connections_lost;
+    }
+    return status;
+}
+
 rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t *processed) {
     rns_status_t first_error = RNS_OK;
     if (runtime == NULL || processed == NULL) return RNS_ERROR_INVALID_ARGUMENT;
@@ -1274,7 +1363,9 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
         runtime_interface_t *interface = &runtime->interfaces[i];
         receive_context_t context = {runtime, i, max_packets - *processed, 0U};
         rns_status_t status = RNS_OK;
-        if (interface->tcp != NULL &&
+        if (interface->local != NULL) {
+            status = poll_local(interface, &context);
+        } else if (interface->tcp != NULL &&
             interface->info.state != RNS_RUNTIME_INTERFACE_DISABLED &&
             interface->info.state != RNS_RUNTIME_INTERFACE_UNSUPPORTED) {
             status = poll_tcp(runtime, i, &context);
