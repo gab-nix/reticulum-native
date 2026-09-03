@@ -1,0 +1,12 @@
+{
+  "encoder": "RNS.vendor.umsgpack.packb",
+  "evidence": "deterministic fixture equality; not live interoperability",
+  "fixture_sha256": "06a18807030579df7ed77bf1357a63ec44cf300b4ed0f5b833fe84efd839c29e",
+  "fixture_size": 190,
+  "generated_utc": "2026-09-03T22:21:43.113425+00:00",
+  "generator": "tools/generate_lxmf_standard_fields_fixture.py",
+  "lxmf_commit": "795fdaa2b0777c13033787d933d1afc94a2377cb",
+  "rns_commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+  "schema": 1,
+  "source_constants": "LXMF/LXMF.py"
+}
