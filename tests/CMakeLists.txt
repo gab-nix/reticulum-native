@@ -12,6 +12,12 @@ target_link_libraries(lxmf_direct_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(lxmf_direct_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(lxmf_direct_live_driver)
 
+# Explicit opt-in stock-Python propagation acceptance driver.
+add_executable(lxmf_propagation_live_driver interop/lxmf_propagation_live_driver.c)
+target_link_libraries(lxmf_propagation_live_driver PRIVATE reticulum::reticulum)
+target_compile_features(lxmf_propagation_live_driver PRIVATE c_std_17)
+reticulum_set_project_warnings(lxmf_propagation_live_driver)
+
 reticulum_add_test(test_buffer test_buffer.c)
 reticulum_add_test(test_hal test_hal.c)
 reticulum_add_test(test_crypto unit/test_crypto.c)
