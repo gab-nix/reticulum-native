@@ -20,9 +20,14 @@ typedef enum rns_log_level {
     RNS_LOG_DEBUG
 } rns_log_level_t;
 
-/* Install once, before creating Reticulum objects. Callback context and
- * handles remain owned by the provider. Optional operations report
- * RNS_ERROR_UNSUPPORTED through their rns_hal_* wrapper. */
+/* Install once, before creating Reticulum objects. The operation table and
+ * callback context are borrowed, immutable, and must remain valid until the
+ * default is restored. Installing a different provider while one is active is
+ * rejected. Callback context must remain valid until every allocation and
+ * handle created by that provider has been released, even after restore.
+ * Raw HAL allocations remember their creating provider and may be released
+ * after restore; opaque HAL handles likewise retain their provider.
+ * Optional operations report RNS_ERROR_UNSUPPORTED through their wrapper. */
 typedef struct rns_platform_ops {
     void *context;
     rns_status_t (*monotonic_ms)(void *context, uint64_t *milliseconds);
@@ -54,6 +59,7 @@ rns_status_t rns_hal_random_bytes(void *output, size_t length);
 void rns_hal_secure_zero(void *memory, size_t length);
 rns_status_t rns_hal_sleep_ms(uint64_t milliseconds);
 void *rns_hal_allocate(size_t size);
+/* Accepts only pointers returned by rns_hal_allocate(), or NULL. */
 void rns_hal_deallocate(void *memory);
 void rns_hal_log(rns_log_level_t level, const char *message);
 

@@ -30,6 +30,10 @@ typedef rns_status_t (*rns_interface_receive_fn)(void *context,
                                                  const uint8_t *packet,
                                                  size_t length);
 
+/* The receive packet span is immutable and valid only during the callback.
+ * The operation table and context are borrowed until destroy(); destroy is
+ * called exactly once and owns provider-context teardown. Destroy and stop
+ * must not race poll, send, or callbacks on the same handle. */
 typedef struct rns_interface_ops {
     rns_status_t (*start)(void *context);
     rns_status_t (*poll)(void *context, rns_interface_receive_fn receive,

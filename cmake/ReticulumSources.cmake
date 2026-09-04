@@ -4,6 +4,7 @@
 
 set(RETICULUM_PORTABLE_SOURCES
     src/announce/announce.c
+    src/crypto/provider.c
     src/destination/destination.c
     src/interfaces/auto.c
     src/interfaces/framing.c

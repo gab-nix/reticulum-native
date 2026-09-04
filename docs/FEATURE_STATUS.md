@@ -12,7 +12,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Feature | Status | Remaining work |
 | --- | --- | --- |
 | C17 library, injectable platform HAL, buffers and typed status API | IMPLEMENTED | ESP-IDF platform adapter and target validation |
-| Replaceable crypto provider API | IMPLEMENTED | ESP-IDF libsodium/mbedTLS backend and cross-backend vectors |
+| Replaceable crypto provider API | IMPLEMENTED | OpenSSL-free dispatcher link test passes; ESP-IDF backend and cross-backend vectors remain |
 | Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | NVS and native SX1262 providers |
 | Explicit platform-separated source manifests | WIP | ESP-IDF component must consume the portable manifest after provider separation |
 | Cryptography, identities, destinations and packets | IMPLEMENTED | Broader platform validation |
@@ -90,6 +90,6 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Node, messaging and diagnostics subcommands | WIP | Complete operational-tool coverage |
 | Headless TUI state tests | IMPLEMENTED | More layouts and terminal sizes |
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
-| Embedded platform, crypto, storage and interface boundaries | IMPLEMENTED | ESP-IDF adapters and physical-board validation |
+| Provider API boundaries for embedded ports | IMPLEMENTED | Full portable-core allocation conversion, ESP-IDF adapters and physical-board validation remain |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |

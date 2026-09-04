@@ -1,4 +1,5 @@
 #include "reticulum/crypto.h"
+#include "provider_internal.h"
 
 #include <limits.h>
 #include <string.h>
@@ -104,6 +105,13 @@ static int openssl_ed25519_verify(const uint8_t public_key[32], const uint8_t *m
     EVP_MD_CTX_free(ctx); EVP_PKEY_free(key); return ok;
 }
 
+static int openssl_constant_time_equal(const uint8_t *left,
+                                       const uint8_t *right, size_t length) {
+    if (length == 0U) return 1;
+    if (left == NULL || right == NULL) return 0;
+    return CRYPTO_memcmp(left, right, length) == 0;
+}
+
 static int openssl_token_encrypt(const uint8_t key[64], const uint8_t *plaintext, size_t plaintext_length,
                       uint8_t *out, size_t out_capacity, size_t *out_length) {
     EVP_CIPHER_CTX *ctx = NULL; uint8_t mac[32]; int n = 0, final_n = 0; size_t needed; int ok = 0;
@@ -126,7 +134,9 @@ static int openssl_token_decrypt(const uint8_t key[64], const uint8_t *token, si
     EVP_CIPHER_CTX *ctx = NULL; uint8_t mac[32]; size_t cipher_length; int n = 0, final_n = 0, ok = 0;
     if (!key || !token || !out || !out_length || token_length < 64 || (token_length - 48) % 16 != 0) return 0;
     cipher_length = token_length - 48; if (cipher_length > INT_MAX || out_capacity < cipher_length) return 0;
-    if (!openssl_hmac_sha256(key, 32, token, token_length - 32, mac) || CRYPTO_memcmp(mac, token + token_length - 32, 32) != 0) goto done;
+    if (!openssl_hmac_sha256(key, 32, token, token_length - 32, mac) ||
+        !openssl_constant_time_equal(mac, token + token_length - 32, 32U))
+        goto done;
     ctx = EVP_CIPHER_CTX_new();
     if (ctx && EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key + 32, token) == 1 &&
         EVP_DecryptUpdate(ctx, out, &n, token + 16, (int)cipher_length) == 1 &&
@@ -186,6 +196,11 @@ static int provider_ed_verify(void *context, const uint8_t public_key[32],
     (void)context;
     return openssl_ed25519_verify(public_key, message, message_length, signature);
 }
+static int provider_constant_time_equal(void *context, const uint8_t *left,
+                                        const uint8_t *right, size_t length) {
+    (void)context;
+    return openssl_constant_time_equal(left, right, length);
+}
 static int provider_token_encrypt(void *context, const uint8_t key[64],
                                   const uint8_t *plaintext, size_t plaintext_length,
                                   uint8_t *out, size_t out_capacity, size_t *out_length) {
@@ -200,104 +215,14 @@ static int provider_token_decrypt(void *context, const uint8_t key[64],
     return openssl_token_decrypt(key, token, token_length, out, out_capacity, out_length);
 }
 
-static const rns_crypto_provider_t default_provider = {
+static const rns_crypto_provider_t openssl_provider = {
     NULL, provider_sha256, provider_hmac, provider_hkdf, provider_random,
     provider_x_generate, provider_x_public, provider_x_exchange,
     provider_ed_generate, provider_ed_public, provider_ed_sign, provider_ed_verify,
+    provider_constant_time_equal,
     provider_token_encrypt, provider_token_decrypt
 };
-static const rns_crypto_provider_t *installed_provider = NULL;
 
-static const rns_crypto_provider_t *crypto_provider(void) {
-    return installed_provider != NULL ? installed_provider : &default_provider;
-}
-
-rns_status_t rns_crypto_provider_install(const rns_crypto_provider_t *provider) {
-    if (provider == NULL || provider->sha256 == NULL ||
-        provider->hmac_sha256 == NULL || provider->hkdf_sha256 == NULL ||
-        provider->random_bytes == NULL || provider->x25519_generate == NULL ||
-        provider->x25519_public_from_private == NULL ||
-        provider->x25519_exchange == NULL || provider->ed25519_generate == NULL ||
-        provider->ed25519_public_from_private == NULL ||
-        provider->ed25519_sign == NULL || provider->ed25519_verify == NULL ||
-        provider->token_encrypt == NULL || provider->token_decrypt == NULL) {
-        return RNS_ERROR_INVALID_ARGUMENT;
-    }
-    installed_provider = provider;
-    return RNS_OK;
-}
-
-void rns_crypto_provider_restore_default(void) { installed_provider = NULL; }
-
-const rns_crypto_provider_t *rns_crypto_provider_current(void) {
-    return crypto_provider();
-}
-
-int rns_sha256(const uint8_t *data, size_t length, uint8_t out[32]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->sha256(provider->context, data, length, out);
-}
-int rns_hmac_sha256(const uint8_t *key, size_t key_length, const uint8_t *data,
-                    size_t data_length, uint8_t out[32]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->hmac_sha256(provider->context, key, key_length,
-                                 data, data_length, out);
-}
-int rns_hkdf_sha256(const uint8_t *input, size_t input_length, const uint8_t *salt,
-                    size_t salt_length, const uint8_t *context, size_t context_length,
-                    uint8_t *out, size_t out_length) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->hkdf_sha256(provider->context, input, input_length,
-                                 salt, salt_length, context, context_length,
-                                 out, out_length);
-}
-int rns_random_bytes(uint8_t *out, size_t length) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->random_bytes(provider->context, out, length);
-}
-int rns_x25519_generate(uint8_t private_key[32], uint8_t public_key[32]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->x25519_generate(provider->context, private_key, public_key);
-}
-int rns_x25519_public_from_private(const uint8_t private_key[32], uint8_t public_key[32]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->x25519_public_from_private(provider->context, private_key, public_key);
-}
-int rns_x25519_exchange(const uint8_t private_key[32], const uint8_t peer_public[32], uint8_t shared[32]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->x25519_exchange(provider->context, private_key, peer_public, shared);
-}
-int rns_ed25519_generate(uint8_t private_key[32], uint8_t public_key[32]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->ed25519_generate(provider->context, private_key, public_key);
-}
-int rns_ed25519_public_from_private(const uint8_t private_key[32], uint8_t public_key[32]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->ed25519_public_from_private(provider->context, private_key, public_key);
-}
-int rns_ed25519_sign(const uint8_t private_key[32], const uint8_t *message,
-                     size_t message_length, uint8_t signature[64]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->ed25519_sign(provider->context, private_key, message,
-                                  message_length, signature);
-}
-int rns_ed25519_verify(const uint8_t public_key[32], const uint8_t *message,
-                       size_t message_length, const uint8_t signature[64]) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->ed25519_verify(provider->context, public_key, message,
-                                    message_length, signature);
-}
-int rns_token_encrypt(const uint8_t key[64], const uint8_t *plaintext,
-                      size_t plaintext_length, uint8_t *out, size_t out_capacity,
-                      size_t *out_length) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->token_encrypt(provider->context, key, plaintext,
-                                   plaintext_length, out, out_capacity, out_length);
-}
-int rns_token_decrypt(const uint8_t key[64], const uint8_t *token,
-                      size_t token_length, uint8_t *out, size_t out_capacity,
-                      size_t *out_length) {
-    const rns_crypto_provider_t *provider = crypto_provider();
-    return provider->token_decrypt(provider->context, key, token, token_length,
-                                   out, out_capacity, out_length);
+const rns_crypto_provider_t *rns_openssl_crypto_provider(void) {
+    return &openssl_provider;
 }

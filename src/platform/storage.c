@@ -29,6 +29,7 @@ rns_status_t rns_storage_create(const rns_storage_ops_t *ops, void *context,
     }
     *storage = NULL;
     platform = rns_platform_current();
+    if (platform == NULL) return RNS_ERROR_INVALID_STATE;
     created = platform->allocate(platform->context, sizeof(*created));
     if (created == NULL) return RNS_ERROR_NO_MEMORY;
     created->ops = ops;

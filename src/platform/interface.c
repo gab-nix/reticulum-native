@@ -20,6 +20,7 @@ rns_status_t rns_interface_create(const rns_interface_ops_t *ops, void *context,
         ops->stop == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     *interface_out = NULL;
     platform = rns_platform_current();
+    if (platform == NULL) return RNS_ERROR_INVALID_STATE;
     created = platform->allocate(platform->context, sizeof(*created));
     if (created == NULL) return RNS_ERROR_NO_MEMORY;
     memset(created, 0, sizeof(*created));

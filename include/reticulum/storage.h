@@ -12,6 +12,10 @@ extern "C" {
 
 typedef struct rns_storage rns_storage_t;
 
+/* The operation table and context are borrowed until rns_storage_destroy().
+ * destroy(), when present, is called exactly once and is responsible for
+ * releasing the provider context. Read output remains caller-owned. Destroy
+ * must not race another operation on the same handle. */
 typedef struct rns_storage_ops {
     rns_status_t (*read)(void *context, const char *key, uint8_t *output,
                          size_t capacity, size_t *length);

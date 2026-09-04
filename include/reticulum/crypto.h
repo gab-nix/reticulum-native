@@ -42,6 +42,8 @@ typedef struct rns_crypto_provider {
     int (*ed25519_verify)(void *context, const uint8_t public_key[32],
                           const uint8_t *message, size_t message_length,
                           const uint8_t signature[64]);
+    int (*constant_time_equal)(void *context, const uint8_t *left,
+                               const uint8_t *right, size_t length);
     int (*token_encrypt)(void *context, const uint8_t key[64],
                          const uint8_t *plaintext, size_t plaintext_length,
                          uint8_t *out, size_t out_capacity, size_t *out_length);
@@ -51,7 +53,9 @@ typedef struct rns_crypto_provider {
 } rns_crypto_provider_t;
 
 /* The provider is borrowed and must remain valid until reset. Install it
- * before protocol objects are created. */
+ * before protocol objects are created. Replacing an active provider with a
+ * different table is rejected; restore the default only after active crypto
+ * operations and objects have quiesced. */
 rns_status_t rns_crypto_provider_install(const rns_crypto_provider_t *provider);
 void rns_crypto_provider_restore_default(void);
 const rns_crypto_provider_t *rns_crypto_provider_current(void);
@@ -75,6 +79,8 @@ int rns_ed25519_sign(const uint8_t private_key[32], const uint8_t *message, size
                      uint8_t signature[64]);
 int rns_ed25519_verify(const uint8_t public_key[32], const uint8_t *message, size_t message_length,
                        const uint8_t signature[64]);
+int rns_constant_time_equal(const uint8_t *left, const uint8_t *right,
+                            size_t length);
 
 /* Reticulum's modified Fernet token: IV || AES-256-CBC(PKCS7) || HMAC-SHA256. */
 int rns_token_encrypt(const uint8_t key[64], const uint8_t *plaintext, size_t plaintext_length,
