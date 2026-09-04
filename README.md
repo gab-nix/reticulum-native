@@ -7,9 +7,12 @@ has not passed. This is not yet a drop-in replacement for Nomad Network.
 
 > **Development disclosure:** Reticulum C was designed and implemented with
 > extensive assistance from [OpenAI Codex](https://openai.com/codex/), under
-> human direction and review. It is an independent clean-room project and is
-> not affiliated with or endorsed by the Reticulum, LXMF, Nomad Network, or
-> OpenAI maintainers.
+> human direction and review. It is an independent compatibility project and
+> is not affiliated with or endorsed by the Reticulum, LXMF, Nomad Network, or
+> OpenAI maintainers. Its exact implementation provenance—including the
+> source-reviewed Resource protocol—is documented in
+> [COMPATIBILITY.md](docs/COMPATIBILITY.md) and
+> [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 See the [release summary](docs/IMPLEMENTATION_STATUS.md) and canonical
 [feature ledger](docs/FEATURE_STATUS.md) for implemented behavior, evidence and
