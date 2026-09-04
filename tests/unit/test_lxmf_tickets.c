@@ -6,7 +6,29 @@
 
 #include "reticulum/lxmf_tickets.h"
 
+static void test_fractional_expiry(void) {
+    /* Synthetic MessagePack FIELD_TICKET [1000.75, bin16]. */
+    uint8_t fields[30] = {0x81, LXMF_FIELD_TICKET, 0x92, 0xcb,
+        0x40, 0x8f, 0x46, 0, 0, 0, 0, 0, 0xc4, 16};
+    lxmf_ticket_field_t ticket;
+    assert(lxmf_fields_parse_ticket(fields, sizeof fields, &ticket) == LXMF_OK);
+    assert(ticket.present && ticket.expires_at == 1000u);
+    /* NaN, infinity, negative and 2^64 remain rejected before conversion. */
+    const uint64_t invalid[] = {UINT64_C(0x7ff8000000000000),
+        UINT64_C(0x7ff0000000000000), UINT64_C(0xbff0000000000000),
+        UINT64_C(0x43f0000000000000)};
+    for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
+        for (size_t b = 0; b < 8; ++b) fields[4 + b] = (uint8_t)(invalid[i] >> (56u - b * 8u));
+        assert(lxmf_fields_parse_ticket(fields, sizeof fields, &ticket) == LXMF_ERR_FORMAT);
+    }
+    uint8_t single[26] = {0x81, LXMF_FIELD_TICKET, 0x92, 0xca,
+        0x44, 0x7a, 0x30, 0, 0xc4, 16};
+    assert(lxmf_fields_parse_ticket(single, sizeof single, &ticket) == LXMF_OK);
+    assert(ticket.expires_at == 1000u);
+}
+
 int main(void) {
+    test_fractional_expiry();
     char path[] = "/tmp/lxmf-tickets-XXXXXX";
     int descriptor = mkstemp(path);
     assert(descriptor >= 0);
