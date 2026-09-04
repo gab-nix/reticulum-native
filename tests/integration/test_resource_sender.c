@@ -146,8 +146,29 @@ static void test_compression_and_bounds(void) {
     assert(rns_resource_advertisement_parse(
                advertisement_bytes, advertisement_length, &advertisement) ==
            RNS_OK);
-    if (rns_resource_decompression_available())
+    if (rns_resource_decompression_available()) {
         assert(advertisement.compressed);
+        rns_resource_advertisement_t bounded = advertisement;
+        bounded.data_size = 100U;
+        rns_resource_t *receiver = NULL;
+        assert(rns_resource_accept(&receiver, &bounded, 100U) == RNS_OK);
+        for (size_t i = 0U; i < rns_resource_sender_total_parts(sender); ++i) {
+            const uint8_t *part = NULL;
+            size_t part_length = 0U;
+            assert(rns_resource_sender_part(sender, i, &part, &part_length) ==
+                   RNS_OK);
+            assert(rns_resource_receive_part(receiver, part, part_length) ==
+                   RNS_OK);
+        }
+        uint8_t output[sizeof compressible];
+        memset(output, 0xa5, sizeof output);
+        size_t output_length = 0U;
+        assert(rns_resource_assemble(receiver, &link, output, sizeof output,
+                                     &output_length) == RNS_ERROR_OVERFLOW);
+        for (size_t i = bounded.data_size; i < sizeof output; ++i)
+            assert(output[i] == 0xa5U);
+        rns_resource_destroy(receiver);
+    }
     rns_resource_sender_destroy(sender);
 
     rns_resource_sender_options_t invalid = {
@@ -267,9 +288,22 @@ static void test_hashmap_updates_and_segments(void) {
                                 source_length - assembled_total,
                                 &segment_length);
         assembled_total += segment_length;
-        if (segment != 2u)
+        if (segment != 2u) {
+            rns_link inactive = link;
+            inactive.state = RNS_LINK_CLOSED;
+            uint8_t previous_hash[RNS_RESOURCE_HASH_SIZE];
+            memcpy(previous_hash, rns_resource_sender_hash(sender),
+                   sizeof previous_hash);
+            size_t previous_parts = rns_resource_sender_total_parts(sender);
+            assert(rns_resource_sender_advance_segment(sender, &inactive) ==
+                   RNS_ERROR_INVALID_ARGUMENT);
+            assert(rns_resource_sender_segment_index(sender) == segment);
+            assert(rns_resource_sender_total_parts(sender) == previous_parts);
+            assert(memcmp(rns_resource_sender_hash(sender), previous_hash,
+                          sizeof previous_hash) == 0);
             assert(rns_resource_sender_advance_segment(sender, &link) ==
                    RNS_OK);
+        }
     }
     assert(rns_resource_sender_advance_segment(sender, &link) ==
            RNS_ERROR_INVALID_STATE);
@@ -339,6 +373,25 @@ static void test_advertisement_hardening(void) {
     advertisement.parts = RNS_RESOURCE_MAX_PARTS;
     assert(rns_resource_accept(&receiver, &advertisement,
                                RNS_RESOURCE_MAX_SIZE) == RNS_ERROR_PROTOCOL);
+    assert(rns_resource_advertisement_parse(
+               advertisement_bytes, advertisement_length,
+               &advertisement) == RNS_OK);
+    advertisement.transfer_size -= 16U;
+    assert(rns_resource_accept(&receiver, &advertisement,
+                               RNS_RESOURCE_MAX_SIZE) == RNS_OK);
+    for (size_t i = 0U; i < rns_resource_sender_total_parts(sender); ++i) {
+        const uint8_t *part = NULL;
+        size_t part_length = 0U;
+        assert(rns_resource_sender_part(sender, i, &part, &part_length) ==
+               RNS_OK);
+        assert(rns_resource_receive_part(receiver, part, part_length) ==
+               RNS_OK);
+    }
+    uint8_t output[sizeof source];
+    size_t output_length = 0U;
+    assert(rns_resource_assemble(receiver, &link, output, sizeof output,
+                                 &output_length) == RNS_ERROR_PROTOCOL);
+    rns_resource_destroy(receiver);
     rns_resource_sender_destroy(sender);
 }
 

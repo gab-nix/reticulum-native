@@ -52,9 +52,11 @@ static size_t build_advertisement(uint8_t *out, size_t payload_length, size_t pa
                                   const uint8_t random_hash[4],
                                   const uint8_t hash[32], const uint8_t *hashmap) {
     size_t o = 0u;
+    size_t transfer_length = payload_length + RNS_RESOURCE_RANDOM_HASH_SIZE;
     out[o++] = 0x8bu; /* map of 11 */
     out[o++] = 0xa1u; out[o++] = 't'; out[o++] = 0xcdu;
-    out[o++] = (uint8_t)(payload_length >> 8); out[o++] = (uint8_t)payload_length;
+    out[o++] = (uint8_t)(transfer_length >> 8);
+    out[o++] = (uint8_t)transfer_length;
     out[o++] = 0xa1u; out[o++] = 'd'; out[o++] = 0xcdu;
     out[o++] = (uint8_t)(payload_length >> 8); out[o++] = (uint8_t)payload_length;
     out[o++] = 0xa1u; out[o++] = 'n'; out[o++] = (uint8_t)parts;
