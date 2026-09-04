@@ -25,4 +25,8 @@ idf_component_register(
         nvs_flash
 )
 
-target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+# ESP-IDF's public newlib wrappers intentionally use GCC's `#include_next`, so
+# compiling an IDF component with -Wpedantic would turn SDK headers into build
+# errors. Keep all ordinary component warnings fatal while using the GNU C17
+# dialect selected by ESP-IDF.
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)
