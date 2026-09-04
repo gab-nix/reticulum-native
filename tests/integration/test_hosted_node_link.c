@@ -1,5 +1,4 @@
 #define _POSIX_C_SOURCE 200809L
-#define _DARWIN_C_SOURCE
 #include "reticulum/hosted_node.h"
 #include "reticulum/crypto.h"
 #include "reticulum/udp.h"

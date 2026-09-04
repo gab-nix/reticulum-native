@@ -185,12 +185,46 @@ static bool reserve_records(rns_node_registry *r, size_t needed) {
 }
 
 int rns_node_registry_upsert(rns_node_registry *r, const rns_node_record *x) {
-    if (!r || !x) return 0; size_t i; for (i=0;i<r->count;i++) if (!memcmp(r->records[i].destination,x->destination,16)) break;
-    if (i==r->count) { if (!reserve_records(r, r->count + 1U)) return 0; r->count++; }
-    r->records[i]=*x; if (r->records[i].expires_at <= 0.0) r->records[i].expires_at=r->records[i].seen_at+r->lifetime; r->records[i].name[sizeof(r->records[i].name)-1]=0; return 1;
+    if (!r || !x) return 0;
+    size_t i;
+    for (i = 0; i < r->count; i++) {
+        if (!memcmp(r->records[i].destination, x->destination, 16)) break;
+    }
+    if (i == r->count) {
+        if (!reserve_records(r, r->count + 1U)) return 0;
+        r->count++;
+    }
+    r->records[i] = *x;
+    if (r->records[i].expires_at <= 0.0) {
+        r->records[i].expires_at = r->records[i].seen_at + r->lifetime;
+    }
+    r->records[i].name[sizeof(r->records[i].name) - 1] = 0;
+    return 1;
 }
-size_t rns_node_registry_expire(rns_node_registry *r, double now) { if (!r) return 0; size_t n=0; for(size_t i=0;i<r->count;) { if(r->records[i].expires_at>0&&r->records[i].expires_at<=now){r->records[i]=r->records[--r->count];n++;} else i++; } return n; }
-const rns_node_record *rns_node_registry_get(const rns_node_registry *r,const uint8_t d[16]) { if(!r||!d)return NULL; for(size_t i=0;i<r->count;i++)if(!memcmp(r->records[i].destination,d,16))return &r->records[i]; return NULL; }
+
+size_t rns_node_registry_expire(rns_node_registry *r, double now) {
+    if (!r) return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < r->count;) {
+        if (r->records[i].expires_at > 0 &&
+            r->records[i].expires_at <= now) {
+            r->records[i] = r->records[--r->count];
+            n++;
+        } else {
+            i++;
+        }
+    }
+    return n;
+}
+
+const rns_node_record *rns_node_registry_get(const rns_node_registry *r,
+                                             const uint8_t d[16]) {
+    if (!r || !d) return NULL;
+    for (size_t i = 0; i < r->count; i++) {
+        if (!memcmp(r->records[i].destination, d, 16)) return &r->records[i];
+    }
+    return NULL;
+}
 static bool contains_ascii_casefold(const char *haystack, const char *needle) {
     if (*needle == '\0') return true;
     for (size_t i = 0u; haystack[i] != '\0'; ++i) {

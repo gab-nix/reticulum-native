@@ -1,3 +1,13 @@
+if(UNIX)
+    # Strict C17 disables POSIX declarations unless a feature-test macro is
+    # requested before system headers. The test suite uses mkstemp(),
+    # mkdtemp(), nanosleep(), and related POSIX.1-2008 helpers.
+    add_compile_definitions(_POSIX_C_SOURCE=200809L)
+endif()
+if(APPLE)
+    add_compile_definitions(_DARWIN_C_SOURCE)
+endif()
+
 function(reticulum_add_test name source)
     add_executable(${name} ${source})
     target_link_libraries(${name} PRIVATE reticulum::reticulum)

@@ -143,7 +143,8 @@ static bool read_bytes(const uint8_t **cursor, const uint8_t *end,
     uint64_t size;
     if ((code & 0xe0U) == 0xa0U) size = code & 0x1fU;
     else if (code == 0xc4U || code == 0xd9U) {
-        if (*cursor >= end) return false; size = *(*cursor)++;
+        if (*cursor >= end) return false;
+        size = *(*cursor)++;
     } else if (code == 0xc5U || code == 0xdaU) {
         if ((size_t)(end - *cursor) < 2U) return false;
         size = ((uint64_t)(*cursor)[0] << 8) | (*cursor)[1]; *cursor += 2;

@@ -14,7 +14,8 @@ int rns_destination_name_hash(const char *app_name, const char *const *aspects, 
         if (!valid_component(aspects[i]) || strlen(aspects[i]) > SIZE_MAX - length - 1) return 0;
         length += 1 + strlen(aspects[i]);
     }
-    name = malloc(length + 1); if (!name) return 0;
+    name = malloc(length + 1);
+    if (!name) return 0;
     offset = strlen(app_name); memcpy(name, app_name, offset);
     for (size_t i = 0; i < aspect_count; ++i) {
         size_t n = strlen(aspects[i]); name[offset++] = '.'; memcpy(name + offset, aspects[i], n); offset += n;
@@ -29,5 +30,7 @@ int rns_destination_hash(const rns_identity *identity, const char *app_name, con
     uint8_t material[26], digest[32]; size_t length = 10;
     if (!out || !rns_destination_name_hash(app_name, aspects, aspect_count, material)) return 0;
     if (identity) { memcpy(material + 10, identity->hash, 16); length = 26; }
-    if (!rns_sha256(material, length, digest)) return 0; memcpy(out, digest, 16); return 1;
+    if (!rns_sha256(material, length, digest)) return 0;
+    memcpy(out, digest, 16);
+    return 1;
 }

@@ -125,7 +125,8 @@ int rns_token_decrypt(const uint8_t key[64], const uint8_t *token, size_t token_
                       uint8_t *out, size_t out_capacity, size_t *out_length) {
     EVP_CIPHER_CTX *ctx = NULL; uint8_t mac[32]; size_t cipher_length; int n = 0, final_n = 0, ok = 0;
     if (!key || !token || !out || !out_length || token_length < 64 || (token_length - 48) % 16 != 0) return 0;
-    cipher_length = token_length - 48; if (cipher_length > INT_MAX || out_capacity < cipher_length) return 0;
+    cipher_length = token_length - 48;
+    if (cipher_length > INT_MAX || out_capacity < cipher_length) return 0;
     if (!rns_hmac_sha256(key, 32, token, token_length - 32, mac) || CRYPTO_memcmp(mac, token + token_length - 32, 32) != 0) goto done;
     ctx = EVP_CIPHER_CTX_new();
     if (ctx && EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key + 32, token) == 1 &&

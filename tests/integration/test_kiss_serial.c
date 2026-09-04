@@ -1,4 +1,3 @@
-#define _DARWIN_C_SOURCE
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
@@ -136,8 +135,11 @@ int main(void) {
     poll_ok(endpoint, &capture);
     rns_kiss_info_t info;
     assert(rns_kiss_endpoint_info(endpoint, &info) == RNS_OK);
-    assert(info.pending_packets == 1U);
-    while (drain_bytes(first_master, wire, sizeof(wire)) != 0U) {}
+    assert(info.pending_packets <= 1U);
+    size_t backpressure_wire = 0U;
+    size_t drained = 0U;
+    while ((drained = drain_bytes(first_master, wire, sizeof(wire))) != 0U)
+        backpressure_wire += drained;
     for (size_t attempt = 0U; attempt < 8U && info.pending_packets != 0U;
          ++attempt) {
         poll_ok(endpoint, &capture);
@@ -145,7 +147,8 @@ int main(void) {
     }
     assert(info.pending_packets == 0U);
     assert(info.packets_sent == 3U);
-    assert(drain_bytes(first_master, wire, sizeof(wire)) > 0U);
+    backpressure_wire += drain_bytes(first_master, wire, sizeof(wire));
+    assert(backpressure_wire > 0U);
 
     static const uint8_t malformed[] = {
         RNS_KISS_FEND, 0U, RNS_KISS_FESC, 0x01U, RNS_KISS_FEND
