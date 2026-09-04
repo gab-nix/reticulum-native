@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "reticulum/esp_idf.h"
 
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/time.h>
 
 #include "bootloader_random.h"
+#include "esp_delay.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -30,8 +32,15 @@ typedef struct esp_thread {
 } esp_thread_t;
 
 static const char *TAG = "reticulum";
-static int entropy_enabled;
-static int wallclock_valid;
+enum {
+    ENTROPY_DISABLED = 0,
+    ENTROPY_ENABLING,
+    ENTROPY_ENABLED,
+    ENTROPY_DISABLING
+};
+
+static atomic_int entropy_state = ATOMIC_VAR_INIT(ENTROPY_DISABLED);
+static atomic_bool wallclock_valid = ATOMIC_VAR_INIT(0);
 
 static rns_status_t esp_monotonic_ms(void *context, uint64_t *milliseconds) {
     int64_t microseconds;
@@ -48,7 +57,8 @@ static rns_status_t esp_wallclock_ms(void *context, uint64_t *milliseconds) {
     uint64_t seconds;
     (void)context;
     if (milliseconds == NULL) return RNS_ERROR_INVALID_ARGUMENT;
-    if (!wallclock_valid) return RNS_ERROR_INVALID_STATE;
+    if (!atomic_load_explicit(&wallclock_valid, memory_order_acquire))
+        return RNS_ERROR_INVALID_STATE;
     if (gettimeofday(&value, NULL) != 0 || value.tv_sec < 0 || value.tv_usec < 0)
         return RNS_ERROR_IO;
     seconds = (uint64_t)value.tv_sec;
@@ -61,7 +71,9 @@ static rns_status_t esp_wallclock_ms(void *context, uint64_t *milliseconds) {
 static rns_status_t esp_random_bytes(void *context, void *output, size_t length) {
     (void)context;
     if (output == NULL && length != 0U) return RNS_ERROR_INVALID_ARGUMENT;
-    if (!entropy_enabled) return RNS_ERROR_INVALID_STATE;
+    if (atomic_load_explicit(&entropy_state, memory_order_acquire) !=
+        ENTROPY_ENABLED)
+        return RNS_ERROR_INVALID_STATE;
     if (length != 0U) esp_fill_random(output, length);
     return RNS_OK;
 }
@@ -76,12 +88,23 @@ static void esp_secure_zero(void *context, void *memory, size_t length) {
 }
 
 static rns_status_t esp_sleep_ms(void *context, uint64_t milliseconds) {
-    TickType_t ticks;
+    uint64_t remaining = milliseconds;
+    uint64_t consumed;
+    uint32_t ticks;
+    uint32_t maximum_ticks = (uint32_t)portMAX_DELAY;
+    rns_status_t status;
     (void)context;
-    if (milliseconds > (uint64_t)UINT32_MAX) return RNS_ERROR_OVERFLOW;
-    ticks = pdMS_TO_TICKS((uint32_t)milliseconds);
-    if (milliseconds != 0U && ticks == 0U) ticks = 1U;
-    vTaskDelay(ticks);
+    if (remaining == 0U) return RNS_OK;
+    /* Keep portMAX_DELAY out of vTaskDelay(), since some FreeRTOS
+     * configurations reserve it for an indefinite wait. */
+    if (maximum_ticks > 1U) maximum_ticks--;
+    while (remaining != 0U) {
+        status = rns_esp_delay_chunk(remaining, (uint32_t)configTICK_RATE_HZ,
+                                     maximum_ticks, &ticks, &consumed);
+        if (status != RNS_OK) return status;
+        vTaskDelay((TickType_t)ticks);
+        remaining -= consumed;
+    }
     return RNS_OK;
 }
 
@@ -216,7 +239,9 @@ rns_status_t rns_esp_platform_install(void) {
         esp_mutex_create, esp_mutex_destroy, esp_mutex_lock, esp_mutex_unlock,
         esp_thread_create, esp_thread_join, esp_thread_destroy, esp_log_message
     };
-    int entropy_was_enabled = entropy_enabled;
+    int entropy_was_enabled =
+        atomic_load_explicit(&entropy_state, memory_order_acquire) ==
+        ENTROPY_ENABLED;
     rns_status_t status = rns_esp_entropy_enable_radio_only();
     if (status != RNS_OK) return status;
     status = rns_platform_install(&ops);
@@ -225,16 +250,28 @@ rns_status_t rns_esp_platform_install(void) {
 }
 
 rns_status_t rns_esp_entropy_enable_radio_only(void) {
-    if (entropy_enabled) return RNS_OK;
+    int expected = ENTROPY_DISABLED;
+    if (atomic_load_explicit(&entropy_state, memory_order_acquire) ==
+        ENTROPY_ENABLED)
+        return RNS_OK;
+    if (!atomic_compare_exchange_strong_explicit(
+            &entropy_state, &expected, ENTROPY_ENABLING,
+            memory_order_acq_rel, memory_order_acquire))
+        return RNS_ERROR_INVALID_STATE;
     bootloader_random_enable();
-    entropy_enabled = 1;
+    atomic_store_explicit(&entropy_state, ENTROPY_ENABLED, memory_order_release);
     return RNS_OK;
 }
 
 void rns_esp_entropy_disable(void) {
-    if (!entropy_enabled) return;
+    int expected = ENTROPY_ENABLED;
+    if (!atomic_compare_exchange_strong_explicit(
+            &entropy_state, &expected, ENTROPY_DISABLING,
+            memory_order_acq_rel, memory_order_acquire))
+        return;
     bootloader_random_disable();
-    entropy_enabled = 0;
+    atomic_store_explicit(&entropy_state, ENTROPY_DISABLED,
+                          memory_order_release);
 }
 
 rns_status_t rns_esp_wallclock_set_ms(uint64_t milliseconds) {
@@ -246,6 +283,6 @@ rns_status_t rns_esp_wallclock_set_ms(uint64_t milliseconds) {
     value.tv_sec = (time_t)(milliseconds / 1000U);
     value.tv_usec = (suseconds_t)((milliseconds % 1000U) * 1000U);
     if (settimeofday(&value, NULL) != 0) return RNS_ERROR_IO;
-    wallclock_valid = 1;
+    atomic_store_explicit(&wallclock_valid, 1, memory_order_release);
     return RNS_OK;
 }

@@ -14,7 +14,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | --- | --- | --- |
 | C17 library, injectable platform HAL, buffers and typed status API | IMPLEMENTED | ESP-IDF provider is implemented; target build and physical validation remain |
 | Replaceable crypto provider API | IMPLEMENTED | OpenSSL-free dispatcher link test passes; ESP-IDF backend and cross-backend vectors remain |
-| Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | Bounded serialized dual-slot NVS has host fake-backend recovery tests; ESP-IDF target and SX1262 validation remain |
+| Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | Bounded serialized dual-slot NVS has host fake-backend transaction and corruption tests, including hypothetical buffered-commit recovery; pinned ESP-IDF 5.5 direct-set/commit-no-op target validation and SX1262 validation remain |
 | Explicit platform-separated source manifests | WIP | Platform/storage component uses an explicit embedded subset; full portable protocol-core consumption remains |
 | Cryptography, identities, destinations and packets | IMPLEMENTED | Broader platform validation |
 | Signed announces and path lookup | WIP | Complete persistence and routing compatibility |

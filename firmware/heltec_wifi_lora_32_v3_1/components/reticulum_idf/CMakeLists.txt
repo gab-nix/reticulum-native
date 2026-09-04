@@ -3,6 +3,7 @@ set(RETICULUM_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../..")
 idf_component_register(
     SRCS
         "esp_platform.c"
+        "esp_delay.c"
         "nvs_storage.c"
         "${RETICULUM_ROOT}/src/platform/platform.c"
         "${RETICULUM_ROOT}/src/platform/status.c"

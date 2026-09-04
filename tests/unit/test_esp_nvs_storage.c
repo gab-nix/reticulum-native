@@ -23,6 +23,8 @@ static fake_slot_t slots[4];
 static fake_slot_t pending;
 static int fail_commit;
 static int grow_second_read;
+static int grow_final_query;
+static int existing_length_queries;
 static atomic_int concurrent_nvs_calls;
 static atomic_int active_nvs_calls;
 static atomic_int writers_ready;
@@ -83,7 +85,13 @@ esp_err_t nvs_get_blob(nvs_handle_t handle, const char *key, void *output,
     if (slot == NULL) {
         result = ESP_ERR_NVS_NOT_FOUND;
     } else if (output == NULL) {
-        *length = slot->length;
+        existing_length_queries++;
+        if (grow_final_query && existing_length_queries == 2) {
+            grow_final_query = 0;
+            *length = slot->length + 1U;
+        } else {
+            *length = slot->length;
+        }
     } else if (grow_second_read) {
         grow_second_read = 0;
         *length = slot->length + 1U;
@@ -185,6 +193,10 @@ int main(void) {
                                     RNS_STORAGE_RECORD_MAX_PAYLOAD + 1U) ==
            RNS_ERROR_OVERFLOW);
 
+    /* This models a hypothetical buffered NVS implementation where a failed
+     * commit leaves the previously committed slot readable. ESP-IDF 5.5 writes
+     * directly and currently treats commit as a no-op; target validation is a
+     * separate release gate. */
     fail_commit = 1;
     assert(rns_storage_write_atomic(storage, "identity", second, sizeof(second)) ==
            RNS_ERROR_IO);
@@ -217,6 +229,11 @@ int main(void) {
     grow_second_read = 1;
     assert(rns_storage_read(storage, "identity", output, sizeof(output), &length) ==
            RNS_ERROR_OVERFLOW);
+
+    existing_length_queries = 0;
+    grow_final_query = 1;
+    assert(rns_storage_read(storage, "config", output, sizeof(output), &length) ==
+           RNS_ERROR_PROTOCOL);
 
     atomic_store(&writers_ready, 0);
     atomic_store(&writers_go, 0);

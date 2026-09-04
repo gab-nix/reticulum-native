@@ -73,6 +73,16 @@ reticulum_add_test(test_hal test_hal.c)
 reticulum_add_test(test_platform_api unit/test_platform_api.c)
 reticulum_add_test(test_storage_record unit/test_storage_record.c)
 
+add_executable(test_esp_delay
+    unit/test_esp_delay.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/reticulum_idf/esp_delay.c)
+target_include_directories(test_esp_delay PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/reticulum_idf)
+target_link_libraries(test_esp_delay PRIVATE reticulum::reticulum)
+target_compile_features(test_esp_delay PRIVATE c_std_17)
+reticulum_set_project_warnings(test_esp_delay)
+add_test(NAME test_esp_delay COMMAND test_esp_delay)
+
 add_executable(test_esp_nvs_storage
     unit/test_esp_nvs_storage.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/reticulum_idf/nvs_storage.c)

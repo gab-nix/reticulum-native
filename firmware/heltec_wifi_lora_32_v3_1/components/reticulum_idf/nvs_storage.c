@@ -136,6 +136,12 @@ static rns_status_t nvs_storage_read(void *context, const char *key,
         status = map_nvs_error(result);
         goto done;
     }
+    if (record_length != RNS_STORAGE_RECORD_HEADER_SIZE + *length ||
+        record_length > RNS_STORAGE_RECORD_HEADER_SIZE +
+                            storage->maximum_value_size) {
+        status = RNS_ERROR_PROTOCOL;
+        goto done;
+    }
     record = rns_hal_allocate(record_length);
     if (record == NULL) {
         status = RNS_ERROR_NO_MEMORY;
