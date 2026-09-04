@@ -77,7 +77,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Guide screen | IMPLEMENTED | Expanded contextual help |
 | Event log screen | IMPLEMENTED | Filtering and persistent diagnostics |
 | Channels and RRC | WIP | Complete rooms, moderation and reconnect workflows |
-| Directory workflows | PLANNED | Match pinned upstream directory behavior and contact actions |
+| Directory screen | PLANNED | Match upstream 1.2.0 placeholder; contact-directory behavior is covered by Network/contact workflows |
 | Map screen | PLANNED | Match upstream 1.2.0 placeholder; a full mapping system is outside this parity baseline |
 | Hosted propagation-node controls | PLANNED | Full implementation |
 | Hosted Node TUI screen | PLANNED | Replace unavailable action with hosting controls and headless acceptance tests |
@@ -94,11 +94,13 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Acceptance behavior | Status | Evidence and remaining work |
 | --- | --- | --- |
 | Repeatable pinned Python acceptance entry point | IMPLEMENTED | Five opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
-| Direct packet and multi-segment LXMF, UDP/TCP | WIP | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp`; run both before verification |
+| Direct packet and multi-segment LXMF, UDP/TCP | VERIFIED | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp` pass bidirectionally with pinned Python; loss/restart scenarios remain outside this evidence |
 | Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
 | RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |
 | Stock Nomad page/form/file acceptance | PLANNED | Add bidirectional client/host live drivers |
 | Complete keyboard workflow acceptance | WIP | Existing headless tests cover subsets; every screen/action needs mapped cases |
+| Remote hosted file transfer | PLANNED | Hosted files currently support local reads only; add upstream file metadata/resource exchange |
+| Large browser form requests | PLANNED | Browser currently caps encoded forms at 403 bytes; add resource-backed request acceptance |
 
 ## Tools and portability
 
