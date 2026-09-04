@@ -54,6 +54,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Stamps and asynchronous stamp generation | WIP | Complete cancellation and peer-policy behavior |
 | Tickets | WIP | Complete issuance and renewal workflows |
 | Trusted-contact outgoing tickets | IMPLEMENTED | `test_tui_fields_ui` checks issue/reuse before signing, no ticket for unknown/blocked recipients, and delivered-ticket throttling; pinned live ticket roundtrip remains |
+| Ticket delivery throttling | IMPLEMENTED | Packet/link/resource proof completion records included locally issued tickets; `test_lxmf_router_receipt` checks no throttling at socket-send, proof-only throttling, restart and one-day expiry; pinned ticket roundtrip remains |
 | Ticket fields composition | IMPLEMENTED | `test_lxmf_fields` covers add/replace/remove, opaque preservation, 64-bit expiry, output object-budget roundtrips, bounds and malformed input; issuance/delivery scheduling remains |
 | Propagation upload | WIP | Automatic scheduling and durable resume |
 | Propagation download and acknowledgement | WIP | Automatic synchronisation and recovery |

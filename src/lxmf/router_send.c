@@ -127,6 +127,53 @@ static uint64_t router_wall_time(const lxmf_router_t *router) {
     return router->config.wall_clock(router->config.wall_clock_context);
 }
 
+/* Only a proven outbound transfer counts as delivery of an issued ticket.
+ * A write to an interface, a received message, or a propagation upload does
+ * not establish that the intended recipient received the ticket. */
+static const rns_identity *local_ticket_identity(void *context, const uint8_t source[16]) {
+    lxmf_router_t *router = context;
+    static const char *const aspects[] = {"delivery"};
+    uint8_t destination[16];
+    return rns_destination_hash(router->config.identity, "lxmf", aspects, 1u, destination) &&
+           memcmp(source, destination, sizeof destination) == 0 ? router->config.identity : NULL;
+}
+
+static lxmf_status_t record_ticket_delivery(lxmf_router_t *router, const uint8_t id[32]) {
+    if (router->config.ticket_store == NULL) return LXMF_OK;
+    size_t length = 0u;
+    lxmf_status_t status = lxmf_store_packed_size(router->config.store, id, &length);
+    if (status == LXMF_ERR_FORMAT) return LXMF_OK; /* Legacy messages have no ticket fields. */
+    if (status != LXMF_OK) return status;
+    if (length == 0u || length > LXMF_STORE_MAX_PACKED) return LXMF_ERR_BOUNDS;
+    uint8_t *packed = malloc(length);
+    if (packed == NULL) return LXMF_ERR_BOUNDS;
+    size_t capacity = length;
+    status = lxmf_store_read_packed(router->config.store, id, packed, capacity, &length);
+    lxmf_message_t message;
+    lxmf_identity_verifier_context_t verifier = {local_ticket_identity, router};
+    if (status == LXMF_OK) status = lxmf_unpack(packed, length,
+        lxmf_identity_verifier, &verifier, &message);
+    if (status == LXMF_OK && memcmp(message.message_id, id, 32u) != 0) status = LXMF_ERR_FORMAT;
+    lxmf_ticket_field_t field = {0};
+    if (status == LXMF_OK) status = lxmf_fields_parse_ticket(
+        message.fields_msgpack.data, message.fields_msgpack.len, &field);
+    if (status == LXMF_OK && field.present) {
+        uint64_t now = router_wall_time(router);
+        uint8_t stamp[LXMF_STAMP_LENGTH];
+        lxmf_ticket_stamp(field.ticket, id, stamp);
+        /* Untracked/manual ticket fields must not throttle issuance. */
+        if (field.expires_at > now && lxmf_ticket_store_validate_inbound(router->config.ticket_store,
+            message.destination, now, id, stamp) == LXMF_OK)
+            status = lxmf_ticket_store_mark_delivered(router->config.ticket_store,
+                message.destination, now);
+        rns_hal_secure_zero(stamp, sizeof stamp);
+    }
+    rns_hal_secure_zero(packed, capacity);
+    rns_hal_secure_zero(&field, sizeof field);
+    free(packed);
+    return status;
+}
+
 static size_t inbound_message_limit(const lxmf_router_t *router) {
     return router->config.max_incoming_message_size != 0u
         ? router->config.max_incoming_message_size : LXMF_STORE_MAX_PACKED;
@@ -819,6 +866,7 @@ static void receipt_changed(rns_packet_receipt_t *receipt,
     }
     (void)lxmf_store_update_status(router->config.store, slot->message_id,
                                    delivery);
+    if (delivery == LXMF_DELIVERY_DELIVERED) result = record_ticket_delivery(router, slot->message_id);
     report(router, slot->message_id, delivery, result);
     report_event(router, slot->message_id,
                  slot->method, delivery,
@@ -892,9 +940,10 @@ static void resource_changed(rns_runtime_resource_transfer_t *transfer,
                      slot->attempt);
         (void)lxmf_store_update_status(router->config.store, slot->message_id,
                                        LXMF_DELIVERY_DELIVERED);
-        report(router, slot->message_id, LXMF_DELIVERY_DELIVERED, LXMF_OK);
+        lxmf_status_t ticket_status = record_ticket_delivery(router, slot->message_id);
+        report(router, slot->message_id, LXMF_DELIVERY_DELIVERED, ticket_status);
         report_event(router, slot->message_id, LXMF_DELIVERY_METHOD_DIRECT,
-                     LXMF_DELIVERY_DELIVERED, LXMF_QUEUE_REASON_NONE, LXMF_OK,
+                     LXMF_DELIVERY_DELIVERED, LXMF_QUEUE_REASON_NONE, ticket_status,
                      slot->attempt);
         if (slot->link != NULL)
             (void)rns_runtime_link_identify(slot->link,
