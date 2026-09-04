@@ -13,7 +13,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Feature | Status | Remaining work |
 | --- | --- | --- |
 | C17 library, injectable platform HAL, buffers and typed status API | IMPLEMENTED | ESP-IDF provider is implemented; target build and physical validation remain |
-| Replaceable crypto provider API | IMPLEMENTED | OpenSSL-free dispatcher link test passes; ESP-IDF backend and cross-backend vectors remain |
+| Replaceable crypto provider API | IMPLEMENTED | ESP-IDF mbedTLS/libsodium provider contract passes host RFC, boot self-test and cross-provider token vectors; an ESP-IDF 5.5.4/esp32s3 CI build gate is configured but has not run on this branch, and device validation remains |
 | Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | Bounded serialized dual-slot NVS has host fake-backend transaction and corruption tests, including hypothetical buffered-commit recovery; pinned ESP-IDF 5.5 direct-set/commit-no-op target validation and SX1262 validation remain |
 | Explicit platform-separated source manifests | WIP | Platform/storage component uses an explicit embedded subset; full portable protocol-core consumption remains |
 | Cryptography, identities, destinations and packets | IMPLEMENTED | Broader platform validation |
@@ -37,7 +37,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Channels | WIP | Complete channel behavior |
 | Requests and request handlers | IMPLEMENTED | Complete access-policy compatibility |
 | Resource sending and receiving | WIP | Persistent resume and adverse-network recovery |
-| Segmented large resources | IMPLEMENTED | Complete low-MTU and retry behavior |
+| Segmented large resources | IMPLEMENTED | Bounded four-part sliding windows and RTT/airtime-aware retry exhaustion have local unit and runtime coverage; persistent resume and pinned-upstream adverse-network verification remain |
 | Resource part-hash collision recovery | IMPLEMENTED | `test_resource_sender` injects a collision and validates remapped full transfer; repeated collisions fail after eight attempts with cleanup. Rare CI timeout cause remains unproven; direct test exposes bounded progress diagnostics |
 
 ## LXMF messaging
@@ -126,7 +126,7 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Node, messaging and diagnostics subcommands | WIP | Complete operational-tool coverage |
 | Headless TUI state tests | IMPLEMENTED | More layouts and terminal sizes |
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
-| Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform and NVS adapters exist; full portable-core conversion and physical-board validation remain |
+| Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform, NVS and crypto adapters exist; target CI compilation and a boot-time KAT are configured, but the crypto host test still uses an OpenSSL symmetric shim and no target/device result is recorded yet |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
 | Bounded RNode split-packet framing codec | IMPLEMENTED | Local boundary, malformed-fragment, duplicate, reorder, timeout, collision, sequence-reuse and callback-failure tests pass; stock RNode interoperability is not yet verified |
 | Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement drivers and validate on physical hardware |

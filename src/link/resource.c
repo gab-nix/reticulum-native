@@ -3,6 +3,7 @@
 #include "reticulum/crypto.h"
 
 #include <limits.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,7 +22,9 @@ struct rns_resource {
     size_t known_hashes;
     uint8_t **parts;
     size_t *part_lengths;
+    bool *requested;
     size_t received;
+    size_t retries_used;
     bool waiting;
     bool assembled;
     uint8_t proof[RNS_RESOURCE_PROOF_SIZE];
@@ -281,8 +284,9 @@ rns_status_t rns_resource_accept(rns_resource_t **out,
     resource->map_hashes = calloc(1U, map_bytes);
     resource->parts = calloc(adv->parts, sizeof *resource->parts);
     resource->part_lengths = calloc(adv->parts, sizeof *resource->part_lengths);
+    resource->requested = calloc(adv->parts, sizeof *resource->requested);
     if (resource->map_hashes == NULL || resource->parts == NULL ||
-        resource->part_lengths == NULL) {
+        resource->part_lengths == NULL || resource->requested == NULL) {
         rns_resource_destroy(resource);
         return RNS_ERROR_NO_MEMORY;
     }
@@ -315,6 +319,7 @@ void rns_resource_destroy(rns_resource_t *resource) {
     }
     free(resource->part_lengths);
     free(resource->parts);
+    free(resource->requested);
     free(resource->map_hashes);
     free(resource);
 }
@@ -325,6 +330,18 @@ size_t rns_resource_total_parts(const rns_resource_t *resource) {
 
 size_t rns_resource_received_parts(const rns_resource_t *resource) {
     return resource != NULL ? resource->received : 0U;
+}
+
+size_t rns_resource_outstanding_parts(const rns_resource_t *resource) {
+    if (resource == NULL) return 0U;
+    size_t outstanding = 0U;
+    for (size_t i = 0U; i < resource->known_hashes; ++i)
+        if (resource->parts[i] == NULL && resource->requested[i]) outstanding++;
+    return outstanding;
+}
+
+size_t rns_resource_retries_used(const rns_resource_t *resource) {
+    return resource != NULL ? resource->retries_used : 0U;
 }
 
 bool rns_resource_parts_complete(const rns_resource_t *resource) {
@@ -370,7 +387,9 @@ rns_status_t rns_resource_receive_part(rns_resource_t *resource,
         memcpy(copy, part, part_length);
         resource->parts[i] = copy;
         resource->part_lengths[i] = part_length;
+        resource->requested[i] = false;
         resource->received++;
+        resource->retries_used = 0U;
         return RNS_OK;
     }
     return RNS_ERROR_PROTOCOL;
@@ -384,22 +403,28 @@ rns_status_t rns_resource_build_request(rns_resource_t *resource,
     if (rns_resource_parts_complete(resource)) return RNS_ERROR_INVALID_STATE;
     size_t missing[RNS_RESOURCE_WINDOW];
     size_t count = 0U;
-    for (size_t i = 0U; i < resource->known_hashes && count < RNS_RESOURCE_WINDOW;
-         ++i) {
-        if (resource->parts[i] == NULL) missing[count++] = i;
-    }
+    size_t outstanding = rns_resource_outstanding_parts(resource);
+    size_t available = outstanding < RNS_RESOURCE_WINDOW
+                           ? RNS_RESOURCE_WINDOW - outstanding : 0U;
+    for (size_t i = 0U;
+         i < resource->known_hashes && count < available; ++i)
+        if (resource->parts[i] == NULL && !resource->requested[i])
+            missing[count++] = i;
     if (count != 0U) {
         size_t needed = 1U + RNS_RESOURCE_HASH_SIZE + count * 4U;
         if (capacity < needed) return RNS_ERROR_OVERFLOW;
         out[0] = 0x00U;
         memcpy(out + 1U, resource->advertisement.hash, RNS_RESOURCE_HASH_SIZE);
-        for (size_t i = 0U; i < count; ++i)
+        for (size_t i = 0U; i < count; ++i) {
             memcpy(out + 33U + i * 4U,
                    resource->map_hashes + missing[i] * 4U, 4U);
+            resource->requested[missing[i]] = true;
+        }
         *out_length = needed;
         resource->waiting = false;
         return RNS_OK;
     }
+    if (outstanding != 0U) return RNS_ERROR_INVALID_STATE;
     if (resource->known_hashes >= resource->advertisement.parts)
         return RNS_ERROR_INVALID_STATE;
     size_t repeat = resource->known_hashes < RNS_RESOURCE_WINDOW
@@ -415,6 +440,57 @@ rns_status_t rns_resource_build_request(rns_resource_t *resource,
     *out_length = needed;
     resource->waiting = true;
     return RNS_OK;
+}
+
+rns_status_t rns_resource_build_retry_request(rns_resource_t *resource,
+                                              uint8_t *out, size_t capacity,
+                                              size_t *out_length) {
+    if (resource == NULL || out == NULL || out_length == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    if (resource->retries_used >= RNS_RESOURCE_MAX_RETRIES)
+        return RNS_ERROR_TIMEOUT;
+    size_t previous[RNS_RESOURCE_WINDOW];
+    size_t previous_count = 0U;
+    if (rns_resource_outstanding_parts(resource) > RNS_RESOURCE_WINDOW)
+        return RNS_ERROR_PROTOCOL;
+    for (size_t i = 0U; i < resource->known_hashes; ++i) {
+        if (resource->parts[i] == NULL && resource->requested[i]) {
+            if (previous_count < RNS_RESOURCE_WINDOW)
+                previous[previous_count++] = i;
+            resource->requested[i] = false;
+        }
+    }
+    rns_status_t status = rns_resource_build_request(
+        resource, out, capacity, out_length);
+    if (status != RNS_OK) {
+        for (size_t i = 0U; i < previous_count; ++i)
+            resource->requested[previous[i]] = true;
+        return status;
+    }
+    resource->retries_used++;
+    return RNS_OK;
+}
+
+double rns_resource_retry_timeout(double rtt_seconds,
+                                  double part_airtime_seconds,
+                                  size_t outstanding_parts,
+                                  size_t retries_used) {
+    if (!isfinite(rtt_seconds) || rtt_seconds < 0.0) rtt_seconds = 0.0;
+    if (!isfinite(part_airtime_seconds) || part_airtime_seconds < 0.0)
+        part_airtime_seconds = 0.0;
+    if (outstanding_parts > RNS_RESOURCE_WINDOW)
+        outstanding_parts = RNS_RESOURCE_WINDOW;
+    if (retries_used > RNS_RESOURCE_MAX_RETRIES)
+        retries_used = RNS_RESOURCE_MAX_RETRIES;
+    double round_trip = 2.0 * rtt_seconds;
+    double airtime = 2.0 * part_airtime_seconds * (double)outstanding_parts;
+    double transport = round_trip > airtime ? round_trip : airtime;
+    double result = transport + RNS_RESOURCE_RETRY_GRACE_SECONDS +
+                    (double)retries_used *
+                        RNS_RESOURCE_RETRY_BACKOFF_SECONDS;
+    if (!isfinite(result) || result > RNS_RESOURCE_RETRY_MAX_SECONDS)
+        result = RNS_RESOURCE_RETRY_MAX_SECONDS;
+    return result;
 }
 
 static rns_status_t parse_hashmap_update(const uint8_t *update,
@@ -466,6 +542,7 @@ rns_status_t rns_resource_apply_hashmap_update(rns_resource_t *resource,
     memcpy(resource->map_hashes + page_start * 4U, map, length);
     resource->known_hashes += entries;
     resource->waiting = false;
+    resource->retries_used = 0U;
     return RNS_OK;
 }
 

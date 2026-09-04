@@ -148,7 +148,8 @@ void lxmf_sha256(const uint8_t *data, size_t len, uint8_t digest[32]) {
 static bool put(writer_t *w, const void *p, size_t n) {
   if (n > w->left)
     return false;
-  memcpy(w->p, p, n);
+  if (n != 0U)
+    memcpy(w->p, p, n);
   w->p += n;
   w->left -= n;
   return true;

@@ -25,6 +25,15 @@ typedef struct rns_esp_nvs_storage_config {
  * identity generation or any Reticulum object is created. */
 rns_status_t rns_esp_platform_install(void);
 
+/* Install the process-wide ESP-IDF crypto provider after the platform
+ * provider. Hashing and AES use mbedTLS; Ed25519 and X25519 use the pinned
+ * ESP Component Registry libsodium component. */
+rns_status_t rns_esp_crypto_install(void);
+
+/* Run deterministic known-answer checks through the installed provider.
+ * Firmware calls this at boot before loading identity material. */
+rns_status_t rns_esp_crypto_self_test(void);
+
 /* Disable the radio-only entropy source before initializing ADC, Wi-Fi or
  * Bluetooth. Random requests fail closed afterwards. The caller must first
  * quiesce cryptographic users. Re-enabling is allowed only when those

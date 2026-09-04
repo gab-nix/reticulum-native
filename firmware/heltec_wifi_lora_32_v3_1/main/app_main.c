@@ -26,6 +26,14 @@ void app_main(void) {
         ESP_LOGE(TAG, "Reticulum ESP-IDF platform installation failed");
         return;
     }
+    if (rns_esp_crypto_install() != RNS_OK) {
+        ESP_LOGE(TAG, "Reticulum ESP-IDF crypto provider installation failed");
+        return;
+    }
+    if (rns_esp_crypto_self_test() != RNS_OK) {
+        ESP_LOGE(TAG, "Reticulum ESP-IDF crypto known-answer test failed");
+        return;
+    }
     if (rns_esp_nvs_storage_open(NULL, &storage) != RNS_OK) {
         ESP_LOGE(TAG, "Reticulum NVS storage provider could not be opened");
         return;
@@ -35,6 +43,6 @@ void app_main(void) {
     ESP_LOGI(TAG, "UART%d console at %lu baud on TX GPIO%d/RX GPIO%d",
              board->console_uart, (unsigned long)board->console_baud,
              board->uart_tx, board->uart_rx);
-    ESP_LOGI(TAG, "ESP-IDF platform and bounded NVS storage providers are ready");
+    ESP_LOGI(TAG, "ESP-IDF platform, crypto and bounded NVS storage providers are ready");
     ESP_LOGW(TAG, "Radio, OLED, identity and LXMF services are not enabled in this scaffold");
 }
