@@ -451,6 +451,48 @@ static void test_browser_form_keyboard_and_dump(void) {
     state_destroy(state);
 }
 
+static void test_browser_message_handoff(void) {
+    const char *prefixes[] = {"lxmf@", "lxmf.delivery@", "lxmf:", "lxmf://"};
+    for (size_t i = 0u; i < sizeof prefixes / sizeof prefixes[0]; ++i) {
+        tui_state_t *state = state_create();
+        state->contacts[1].trust = TUI_TRUST_TRUSTED;
+        state->contacts[1].blocked = true;
+        state->contacts[1].pinned = true;
+        strcpy(state->contacts[1].note, "Keep this note");
+        memcpy(state->contacts[1].draft, "destination draft", 17u);
+        state->contacts[1].draft_len = 17u;
+        assert(tui_editor_insert(&state->composer, "source draft", 12u));
+        state->screen = TUI_SCREEN_BROWSER;
+        char markup[128];
+        (void)snprintf(markup, sizeof markup,
+                       "`[Message`%s22000000000000000000000000000000]", prefixes[i]);
+        assert(rns_micron_parse(&state->page, (const uint8_t *)markup, strlen(markup)));
+        assert(tui_dispatch_key(state, '\n'));
+        assert(state->screen == TUI_SCREEN_CONVERSATIONS && state->selected == 1u);
+        assert(state->tab == TUI_TRUST_TRUSTED && state->contacts[1].trust == TUI_TRUST_TRUSTED);
+        assert(state->contacts[1].blocked && state->contacts[1].pinned);
+        assert(strcmp(state->contacts[1].note, "Keep this note") == 0);
+        assert(state->contact_count == 2u && !state->send_attempted);
+        assert(state->contacts[0].draft_len == 12u &&
+               memcmp(state->contacts[0].draft, "source draft", 12u) == 0);
+        assert(strcmp(tui_editor_text(&state->composer), "destination draft") == 0);
+        state_destroy(state);
+    }
+    const char *invalid[] = {"lxmf:123", "lxmf://22000000000000000000000000000000/path",
+        "lxmf@zz000000000000000000000000000000", "lxmf.delivery@"};
+    for (size_t i = 0u; i < sizeof invalid / sizeof invalid[0]; ++i) {
+        tui_state_t *state = state_create();
+        state->screen = TUI_SCREEN_BROWSER;
+        char markup[128];
+        (void)snprintf(markup, sizeof markup, "`[Message`%s]", invalid[i]);
+        assert(rns_micron_parse(&state->page, (const uint8_t *)markup, strlen(markup)));
+        assert(tui_dispatch_key(state, '\n'));
+        assert(state->screen == TUI_SCREEN_BROWSER && state->contact_count == 2u);
+        assert(strstr(state->status, "malformed LXMF address") != NULL);
+        state_destroy(state);
+    }
+}
+
 static void test_browser_anchor_navigation(void) {
     static const char markup[] =
         "`[Later`#later] `[Missing`#missing]\n"
@@ -580,6 +622,7 @@ int main(void) {
     test_browser_terminal_escape();
     test_browser_form_keyboard_and_dump();
     test_browser_anchor_navigation();
+    test_browser_message_handoff();
     test_network_popup_reasons();
     test_rrc_headless_dump();
     return 0;
