@@ -39,6 +39,32 @@ interface configuration:
 Never commit identities, private keys, message stores, local configuration,
 packet captures or logs containing private traffic.
 
+## Python interoperability tests
+
+The optional live test group uses local Python peers and temporary synthetic
+identities. Supply clean checkouts at these exact revisions:
+
+- Reticulum: `ea98db4f53dcf0defc0e71a16e60d28b1229c4e6`
+- LXMF: `795fdaa2b0777c13033787d933d1afc94a2377cb`
+- NomadNet: `475c0ee2a0388cf8470e7f1e90d5decb67b579ea`
+
+Install their Python dependencies in your test environment, then configure:
+
+```sh
+cmake -S . -B build -DRETICULUM_PYTHON_INTEROP=ON \
+  -DRETICULUM_PYTHON_RNS=/path/to/Reticulum \
+  -DRETICULUM_PYTHON_LXMF=/path/to/LXMF \
+  -DRETICULUM_PYTHON_NOMADNET=/path/to/NomadNet
+cmake --build build
+ctest --test-dir build -L interop --output-on-failure
+```
+
+These tests require loopback socket access and may take several minutes each.
+They cover direct and propagated LXMF over UDP/TCP, plus an RRC schema fixture
+hub using upstream codecs. The RRC test does not certify a stock RRC server.
+Use `ctest --test-dir build -LE interop` for the ordinary suite. Offline builds
+leave `RETICULUM_PYTHON_INTEROP` disabled and require no Python installation.
+
 ## License
 
 Copyright (C) 2026 Gabriele Fumagalli.
