@@ -72,6 +72,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Persistent node registry | IMPLEMENTED | Long-running expiry and migration coverage |
 | Native Micron browser | WIP | Complete remote forms, files and caching behavior |
 | Opt-in browser link identification | IMPLEMENTED | Pinned UDP/TCP tests check anonymous denial and identified access to `.allowed` pages; Browser `i` asks confirmation, scope is one node/session and cross-node navigation resets anonymity; headless consent/scope tests |
+| Browser LXMF conversation handoff | IMPLEMENTED | Headless keyboard tests cover upstream `lxmf@`/`lxmf.delivery@` and explicit `lxmf:`/`lxmf://` address forms, malformed input, preserved trust/block/notes/drafts, and no automatic send |
 | Retained browser page after load failure | IMPLEMENTED | `test_browser_retained` covers loading, malformed UTF-8, cancellation, timeout and subsequent success; page URL remains tied to its successful document |
 | TUI retained-page link origin | IMPLEMENTED | `test_tui_state` resolves relative and root links against the displayed page rather than a failed destination; error screen and headless output expose retained URL |
 | Browser same-node link reuse | IMPLEMENTED | Python UDP/TCP page tests require two pages over one authenticated link; destination or public identity change opens a fresh link |
