@@ -78,6 +78,7 @@ static void emit_line(micron_parser *parser, uint8_t heading, bool divider,
         page->truncated = true;
         return;
     }
+    uint16_t line_index = page->line_count;
     rns_micron_line *line = &page->lines[page->line_count++];
     memset(line, 0, sizeof *line);
     line->first_span = parser->line_first_span;
@@ -88,6 +89,9 @@ static void emit_line(micron_parser *parser, uint8_t heading, bool divider,
     line->divider = divider;
     if (divider && divider_char != NULL)
         (void)snprintf(line->divider_char, sizeof line->divider_char, "%s", divider_char);
+    for (uint16_t i = 0u; i < page->anchor_count; ++i)
+        if (page->anchors[i].line_index == UINT16_MAX)
+            page->anchors[i].line_index = line_index;
 }
 
 /* --------------------------------------------------------------- primitives */
@@ -118,6 +122,29 @@ static bool parse_color(const char *digits, size_t count, uint32_t *color) {
 static bool name_char(char c) {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
            (c >= '0' && c <= '9') || c == '_' || c == '-';
+}
+
+static void add_anchor(micron_parser *parser, const char *name,
+                       size_t name_length) {
+    rns_micron_page *page = parser->page;
+    if (name_length == 0u) return;
+    if (name_length > RNS_MICRON_ANCHOR_NAME_MAX ||
+        page->anchor_count >= RNS_MICRON_MAX_ANCHORS) {
+        page->truncated = true;
+        return;
+    }
+    for (uint16_t i = 0u; i < page->anchor_count; ++i) {
+        const rns_micron_anchor *anchor = &page->anchors[i];
+        if (anchor->name_length == name_length &&
+            memcmp(page->pool + anchor->name_offset, name, name_length) == 0)
+            return;
+    }
+    rns_micron_anchor *anchor = &page->anchors[page->anchor_count];
+    memset(anchor, 0, sizeof *anchor);
+    if (!pool_add(parser, name, name_length, &anchor->name_offset,
+                  &anchor->name_length)) return;
+    anchor->line_index = UINT16_MAX;
+    ++page->anchor_count;
 }
 
 /* Length of the UTF-8 sequence starting at text, or 0 when it is not one. */
@@ -294,9 +321,9 @@ static size_t apply_formatting(micron_parser *parser, const char *line, size_t l
             return 0u;
         }
         case ':': {
-            /* Anchor declaration. Anchors are parsed away but not yet linkable. */
             size_t end = index + 1u;
             while (end < length && name_char(line[end])) ++end;
+            add_anchor(parser, line + index + 1u, end - index - 1u);
             return end - index - 1u;
         }
         default: return 0u;
@@ -521,6 +548,25 @@ size_t rns_micron_link_index(const rns_micron_page *page, size_t nth) {
 const rns_micron_span *rns_micron_link(const rns_micron_page *page, size_t nth) {
     size_t index = rns_micron_link_index(page, nth);
     return index == SIZE_MAX ? NULL : &page->spans[index];
+}
+
+int rns_micron_anchor_line(const rns_micron_page *page, const char *name,
+                           size_t name_length, size_t *line_index) {
+    if (page == NULL || (name == NULL && name_length != 0u) ||
+        line_index == NULL || name_length == 0u ||
+        name_length > RNS_MICRON_ANCHOR_NAME_MAX) return 0;
+    for (uint16_t i = 0u; i < page->anchor_count; ++i) {
+        const rns_micron_anchor *anchor = &page->anchors[i];
+        if (anchor->line_index >= page->line_count ||
+            anchor->name_length != name_length ||
+            (size_t)anchor->name_offset + anchor->name_length >=
+                RNS_MICRON_POOL_SIZE) continue;
+        if (memcmp(page->pool + anchor->name_offset, name, name_length) == 0) {
+            *line_index = anchor->line_index;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* -------------------------------------------------------------------- forms */

@@ -354,6 +354,8 @@ const rns_micron_span *tui_state_browser_selected_span(
     const tui_state_t *state, size_t *span_index);
 void tui_state_browser_move(tui_state_t *state, int delta);
 void tui_state_browser_activate(tui_state_t *state);
+bool tui_state_browser_jump_anchor(tui_state_t *state, const char *target,
+                                   size_t target_length);
 bool tui_state_browser_form_apply(tui_state_t *state);
 void tui_state_browser_form_cancel(tui_state_t *state);
 bool tui_state_browse(tui_state_t *state, const char *url, bool push_history);

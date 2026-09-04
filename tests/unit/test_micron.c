@@ -313,6 +313,20 @@ static void test_form_state_and_encoding(void) {
     assert(rns_micron_form_control_at(&form, form.count) == NULL);
 }
 
+static void test_anchors(void) {
+    parse("`[Jump`#later]\n`:later Later\n`:later Duplicate\n");
+    assert(page.anchor_count == 1u);
+    size_t line = SIZE_MAX;
+    assert(rns_micron_anchor_line(&page, "later", 5u, &line));
+    assert(line == 1u);
+    assert(!rns_micron_anchor_line(&page, "missing", 7u, &line));
+
+    /* An anchor-only source line remains pending until rendered content. */
+    parse("`:pending\nText\n");
+    assert(rns_micron_anchor_line(&page, "pending", 7u, &line));
+    assert(line == 0u);
+}
+
 int main(void) {
     test_sections();
     test_formatting();
@@ -327,5 +341,6 @@ int main(void) {
     test_bounds();
     test_urls_and_history();
     test_form_state_and_encoding();
+    test_anchors();
     return 0;
 }

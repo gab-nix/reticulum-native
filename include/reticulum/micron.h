@@ -28,6 +28,8 @@
 #define RNS_MICRON_FORM_MAX_CONTROLS 128u
 #define RNS_MICRON_FORM_NAME_MAX 64u
 #define RNS_MICRON_FORM_VALUE_MAX 256u
+#define RNS_MICRON_MAX_ANCHORS 128u
+#define RNS_MICRON_ANCHOR_NAME_MAX 64u
 
 /* Packed 0xRRGGBB, or the theme default when the page sets no colour. */
 #define RNS_MICRON_COLOR_DEFAULT UINT32_C(0xFF000000)
@@ -71,7 +73,7 @@ typedef struct {
     uint16_t width;
     bool masked;
     bool prechecked;
-    bool has_selector; /* link has an explicit third component, even if empty */
+    bool has_selector; /* link has a non-empty third selector component */
 } rns_micron_span;
 
 typedef struct {
@@ -85,11 +87,19 @@ typedef struct {
 } rns_micron_line;
 
 typedef struct {
+    uint16_t name_offset;
+    uint16_t name_length;
+    uint16_t line_index;
+} rns_micron_anchor;
+
+typedef struct {
     rns_micron_line lines[RNS_MICRON_MAX_LINES];
     rns_micron_span spans[RNS_MICRON_MAX_SPANS];
+    rns_micron_anchor anchors[RNS_MICRON_MAX_ANCHORS];
     char pool[RNS_MICRON_POOL_SIZE];
     uint16_t line_count;
     uint16_t span_count;
+    uint16_t anchor_count;
     uint16_t pool_used;
     bool truncated;    /* the document exceeded one of the bounds above */
     bool unsupported;  /* tables or partials were flattened, not rendered */
@@ -131,6 +141,11 @@ size_t rns_micron_link_count(const rns_micron_page *page);
 /* Index of the nth link in page->spans, or SIZE_MAX when out of range. */
 size_t rns_micron_link_index(const rns_micron_page *page, size_t nth);
 const rns_micron_span *rns_micron_link(const rns_micron_page *page, size_t nth);
+
+/* Returns the rendered line bound to a named zero-width anchor. Duplicate
+ * declarations retain the first binding, matching pinned NomadNet. */
+int rns_micron_anchor_line(const rns_micron_page *page, const char *name,
+                           size_t name_length, size_t *line_index);
 
 /* Initialises mutable form state from a parsed page. Values are copied and do
  * not borrow page storage. Controls beyond the public bound set truncated. */

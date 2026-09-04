@@ -1471,7 +1471,19 @@ static void poll_browser(tui_state_t *state) {
         }
         state->link_selected = 0u;
         state->page_scroll = 0u;
-        tui_state_set_status(state, "Remote Nomad page loaded");
+        const char *fragment = strchr(state->url, '#');
+        if (fragment != NULL && fragment[1] != '\0') {
+            size_t fragment_length = strlen(fragment);
+            if (!tui_state_browser_jump_anchor(state, fragment,
+                                                fragment_length))
+                tui_state_set_status(state,
+                                     "Remote page loaded; anchor is unavailable");
+            else
+                tui_state_set_status(state, "Remote Nomad page loaded at %s",
+                                     fragment);
+        } else {
+            tui_state_set_status(state, "Remote Nomad page loaded");
+        }
     } else if (current == RNS_BROWSER_FAILED) {
         tui_state_set_status(state, "Page load failed: %s",
                              rns_status_string(rns_browser_error(state->browser)));
@@ -2396,6 +2408,11 @@ void tui_state_browse_selected(tui_state_t *state) {
     const rns_micron_span *item = tui_state_browser_selected_span(state, NULL);
     if (item == NULL || item->kind != RNS_MICRON_SPAN_LINK) return;
     const char *target = rns_micron_span_target(&state->page, item);
+    if (target[0] == '#') {
+        (void)tui_state_browser_jump_anchor(state, target,
+                                            item->target_length);
+        return;
+    }
     /* Pages advertise their author as lxmf@<hash>; following one is a
      * handoff to the conversation screen, not a page fetch. */
     if (strncmp(target, "lxmf@", 5u) == 0) {
@@ -2428,6 +2445,36 @@ void tui_state_browse_selected(tui_state_t *state) {
     (void)browse_request(state, url, true,
                          item->has_selector ? form_msgpack : NULL,
                          item->has_selector ? form_length : 0u);
+}
+
+bool tui_state_browser_jump_anchor(tui_state_t *state, const char *target,
+                                   size_t target_length) {
+    if (state == NULL || target == NULL || target_length == 0u ||
+        target[0] != '#' || target_length > RNS_MICRON_ANCHOR_NAME_MAX + 1u)
+        return false;
+    size_t line = state->page_scroll;
+    if (target_length == 1u) {
+        bool found = false;
+        for (size_t i = state->page_scroll + 1u;
+             i < state->page.line_count; ++i) {
+            if (state->page.lines[i].heading == 0u) continue;
+            line = i;
+            found = true;
+            break;
+        }
+        if (!found) {
+            tui_state_set_status(state, "No later heading on this page");
+            return false;
+        }
+    } else if (!rns_micron_anchor_line(&state->page, target + 1u,
+                                       target_length - 1u, &line)) {
+        tui_state_set_status(state, "Unknown page anchor: %.*s",
+                             (int)target_length, target);
+        return false;
+    }
+    state->page_scroll = line;
+    tui_state_set_status(state, "Moved to %.*s", (int)target_length, target);
+    return true;
 }
 
 void tui_state_browser_activate(tui_state_t *state) {

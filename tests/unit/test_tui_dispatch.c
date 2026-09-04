@@ -448,6 +448,29 @@ static void test_browser_form_keyboard_and_dump(void) {
     free(state);
 }
 
+static void test_browser_anchor_navigation(void) {
+    static const char markup[] =
+        "`[Later`#later] `[Missing`#missing]\n"
+        ">Heading\n"
+        "`:later Destination\n";
+    tui_state_t *state = state_create();
+    state->screen = TUI_SCREEN_BROWSER;
+    assert(rns_micron_parse(&state->page, (const uint8_t *)markup,
+                            sizeof markup - 1u));
+    rns_micron_form_init(&state->form, &state->page);
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->page_scroll == 2u);
+    assert(strstr(state->status, "Moved to #later") != NULL);
+    assert(tui_dispatch_key(state, 'j'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->page_scroll == 2u);
+    assert(strstr(state->status, "Unknown page anchor") != NULL);
+    state->page_scroll = 0u;
+    assert(tui_state_browser_jump_anchor(state, "#", 1u));
+    assert(state->page_scroll == 1u);
+    state_destroy(state);
+}
+
 static void test_network_popup_reasons(void) {
     tui_state_t *state = state_create();
     state->screen = TUI_SCREEN_NETWORK;
@@ -553,6 +576,7 @@ int main(void) {
     test_shortcuts_drafts_and_node_action();
     test_browser_terminal_escape();
     test_browser_form_keyboard_and_dump();
+    test_browser_anchor_navigation();
     test_network_popup_reasons();
     test_rrc_headless_dump();
     return 0;
