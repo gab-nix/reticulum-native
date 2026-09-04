@@ -12,10 +12,10 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 
 | Feature | Status | Remaining work |
 | --- | --- | --- |
-| C17 library, injectable platform HAL, buffers and typed status API | IMPLEMENTED | ESP-IDF platform adapter and target validation |
+| C17 library, injectable platform HAL, buffers and typed status API | IMPLEMENTED | ESP-IDF provider is implemented; target build and physical validation remain |
 | Replaceable crypto provider API | IMPLEMENTED | OpenSSL-free dispatcher link test passes; ESP-IDF backend and cross-backend vectors remain |
-| Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | NVS and native SX1262 providers |
-| Explicit platform-separated source manifests | WIP | ESP-IDF component must consume the portable manifest after provider separation |
+| Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | Bounded serialized dual-slot NVS has host fake-backend recovery tests; ESP-IDF target and SX1262 validation remain |
+| Explicit platform-separated source manifests | WIP | Platform/storage component uses an explicit embedded subset; full portable protocol-core consumption remains |
 | Cryptography, identities, destinations and packets | IMPLEMENTED | Broader platform validation |
 | Signed announces and path lookup | WIP | Complete persistence and routing compatibility |
 | UDP interfaces | IMPLEMENTED | Adverse-network hardening |
@@ -113,7 +113,7 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Node, messaging and diagnostics subcommands | WIP | Complete operational-tool coverage |
 | Headless TUI state tests | IMPLEMENTED | More layouts and terminal sizes |
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
-| Provider API boundaries for embedded ports | IMPLEMENTED | Full portable-core allocation conversion, ESP-IDF adapters and physical-board validation remain |
+| Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform and NVS adapters exist; full portable-core conversion and physical-board validation remain |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
 | Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement drivers and validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |

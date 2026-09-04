@@ -71,6 +71,18 @@ endif()
 reticulum_add_test(test_buffer test_buffer.c)
 reticulum_add_test(test_hal test_hal.c)
 reticulum_add_test(test_platform_api unit/test_platform_api.c)
+reticulum_add_test(test_storage_record unit/test_storage_record.c)
+
+add_executable(test_esp_nvs_storage
+    unit/test_esp_nvs_storage.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/reticulum_idf/nvs_storage.c)
+target_include_directories(test_esp_nvs_storage PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/fakes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/reticulum_idf/include)
+target_link_libraries(test_esp_nvs_storage PRIVATE reticulum::reticulum Threads::Threads)
+target_compile_features(test_esp_nvs_storage PRIVATE c_std_17)
+reticulum_set_project_warnings(test_esp_nvs_storage)
+add_test(NAME test_esp_nvs_storage COMMAND test_esp_nvs_storage)
 
 add_executable(test_platform_no_default
     unit/test_platform_no_default.c

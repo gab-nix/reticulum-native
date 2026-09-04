@@ -4,8 +4,10 @@
 #include "nvs_flash.h"
 
 #include "reticulum/boards/heltec_wifi_lora_32_v3_1.h"
+#include "reticulum/esp_idf.h"
 
 static const char *TAG = "reticulum";
+static rns_storage_t *storage;
 
 void app_main(void) {
     const rns_heltec_v3_1_board_t *board = rns_heltec_v3_1_board();
@@ -20,10 +22,19 @@ void app_main(void) {
         ESP_LOGE(TAG, "NVS initialisation failed: %s", esp_err_to_name(status));
         return;
     }
+    if (rns_esp_platform_install() != RNS_OK) {
+        ESP_LOGE(TAG, "Reticulum ESP-IDF platform installation failed");
+        return;
+    }
+    if (rns_esp_nvs_storage_open(NULL, &storage) != RNS_OK) {
+        ESP_LOGE(TAG, "Reticulum NVS storage provider could not be opened");
+        return;
+    }
 
     ESP_LOGI(TAG, "Reticulum firmware scaffold for %s", board->name);
     ESP_LOGI(TAG, "UART%d console at %lu baud on TX GPIO%d/RX GPIO%d",
              board->console_uart, (unsigned long)board->console_baud,
              board->uart_tx, board->uart_rx);
+    ESP_LOGI(TAG, "ESP-IDF platform and bounded NVS storage providers are ready");
     ESP_LOGW(TAG, "Radio, OLED, identity and LXMF services are not enabled in this scaffold");
 }
