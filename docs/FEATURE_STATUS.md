@@ -91,5 +91,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Headless TUI state tests | IMPLEMENTED | More layouts and terminal sizes |
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
 | Provider API boundaries for embedded ports | IMPLEMENTED | Full portable-core allocation conversion, ESP-IDF adapters and physical-board validation remain |
+| Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
+| Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement drivers and validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |

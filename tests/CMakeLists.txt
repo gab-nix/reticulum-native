@@ -48,6 +48,18 @@ target_include_directories(test_platform_no_default PRIVATE
 target_compile_features(test_platform_no_default PRIVATE c_std_17)
 reticulum_set_project_warnings(test_platform_no_default)
 add_test(NAME test_platform_no_default COMMAND test_platform_no_default)
+
+# The descriptor deliberately has no ESP-IDF dependency, allowing the desktop
+# build to catch pin and display power-sequencing regressions.
+add_executable(test_heltec_v3_1_bsp
+    unit/test_heltec_v3_1_bsp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_v3_1_bsp/heltec_wifi_lora_32_v3_1.c)
+target_include_directories(test_heltec_v3_1_bsp PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_v3_1_bsp/include)
+target_compile_features(test_heltec_v3_1_bsp PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_v3_1_bsp)
+add_test(NAME test_heltec_v3_1_bsp COMMAND test_heltec_v3_1_bsp)
+
 reticulum_add_test(test_crypto unit/test_crypto.c)
 
 # Prove the portable dispatcher links without OpenSSL and fails closed before

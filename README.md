@@ -39,6 +39,27 @@ interface configuration:
 Never commit identities, private keys, message stores, local configuration,
 packet captures or logs containing private traffic.
 
+## Heltec WiFi LoRa 32 V3.1 firmware
+
+An early ESP-IDF project scaffold lives in
+`firmware/heltec_wifi_lora_32_v3_1`. It currently provides the immutable board
+descriptor and a safe OLED power/reset sequence; it does not yet drive the
+SX1262, OLED, Reticulum runtime or LXMF services.
+
+The firmware pins ESP-IDF 5.5.4 and the `esp32s3` target. After installing
+and activating ESP-IDF 5.5.4, configure and build it separately from the desktop
+project:
+
+```sh
+cd firmware/heltec_wifi_lora_32_v3_1
+idf.py set-target esp32s3
+idf.py -D SDKCONFIG_DEFAULTS=sdkconfig.defaults build
+```
+
+Do not flash or transmit without a suitable 868 MHz antenna. The host test
+suite validates the V3.1 descriptor, but an ESP-IDF firmware build and physical
+board validation remain required before the board support is operational.
+
 ## License
 
 Copyright (C) 2026 Gabriele Fumagalli.
