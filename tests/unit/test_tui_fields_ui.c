@@ -7,6 +7,7 @@
 #include "reticulum/identity.h"
 #include "reticulum/lxmf.h"
 #include "reticulum/lxmf_store.h"
+#include "reticulum/hal.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -89,6 +90,20 @@ static void remove_state_files(const char *store_path) {
         assert(length > 0 && (size_t)length < sizeof path);
         (void)unlink(path);
     }
+}
+
+static lxmf_ticket_field_t newest_ticket(tui_state_t *state) {
+    uint8_t packed[8192]; size_t length = 0u;
+    assert(state->message_count != 0u);
+    assert(lxmf_store_read_packed(&state->store,
+        state->messages[state->message_count - 1u].value.message_id,
+        packed, sizeof packed, &length) == LXMF_OK);
+    lxmf_message_t message;
+    assert(lxmf_unpack(packed, length, NULL, NULL, &message) == LXMF_OK);
+    lxmf_ticket_field_t ticket;
+    assert(lxmf_fields_parse_ticket(message.fields_msgpack.data,
+        message.fields_msgpack.len, &ticket) == LXMF_OK);
+    return ticket;
 }
 
 int main(void) {
@@ -276,6 +291,33 @@ int main(void) {
     assert(reference_narrow.output[sizeof reference_narrow.output - 1u] ==
            '\0');
     assert(reference_narrow.guard == 0xa5u);
+
+    /* Only trusted, unblocked recipients receive a reusable reply ticket.
+     * Inclusion happens before signing and does not bypass the queue. */
+    tui_contact_t *recipient = &state.contacts[state.selected];
+    recipient->trust = TUI_TRUST_TRUSTED;
+    recipient->blocked = false;
+    tui_editor_clear(&state.composer);
+    assert(tui_editor_insert(&state.composer, "ticket test", 11u));
+    assert(tui_state_queue_message(&state) == LXMF_OK);
+    lxmf_ticket_field_t first_ticket = newest_ticket(&state);
+    assert(first_ticket.present);
+    assert(tui_state_queue_message(&state) == LXMF_OK);
+    lxmf_ticket_field_t repeated = newest_ticket(&state);
+    assert(repeated.present && memcmp(repeated.ticket, first_ticket.ticket, LXMF_TICKET_LENGTH) == 0);
+    recipient->trust = TUI_TRUST_UNKNOWN;
+    assert(tui_state_queue_message(&state) == LXMF_OK);
+    assert(!newest_ticket(&state).present);
+    recipient->trust = TUI_TRUST_TRUSTED;
+    recipient->blocked = true;
+    assert(tui_state_queue_message(&state) == LXMF_OK);
+    assert(!newest_ticket(&state).present);
+    recipient->blocked = false;
+    uint64_t now_ms = 0u;
+    assert(rns_hal_wallclock_ms(&now_ms) == RNS_OK);
+    assert(lxmf_ticket_store_mark_delivered(state.ticket_store, recipient->peer, now_ms / 1000u) == LXMF_OK);
+    assert(tui_state_queue_message(&state) == LXMF_OK);
+    assert(!newest_ticket(&state).present);
 
     tui_state_close(&state);
     assert(unlink(saved_path) == 0);
