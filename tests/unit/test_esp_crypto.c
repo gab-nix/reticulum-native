@@ -100,6 +100,7 @@ int main(void) {
 
     assert(rns_platform_install(&platform) == RNS_OK);
     assert(rns_esp_crypto_install() == RNS_OK);
+    assert(rns_esp_crypto_self_test() == RNS_OK);
 
     decode_hex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
                expected, 32U);

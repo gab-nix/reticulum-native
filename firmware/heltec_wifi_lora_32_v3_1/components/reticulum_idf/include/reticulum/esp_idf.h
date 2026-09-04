@@ -30,6 +30,10 @@ rns_status_t rns_esp_platform_install(void);
  * ESP Component Registry libsodium component. */
 rns_status_t rns_esp_crypto_install(void);
 
+/* Run deterministic known-answer checks through the installed provider.
+ * Firmware calls this at boot before loading identity material. */
+rns_status_t rns_esp_crypto_self_test(void);
+
 /* Disable the radio-only entropy source before initializing ADC, Wi-Fi or
  * Bluetooth. Random requests fail closed afterwards. The caller must first
  * quiesce cryptographic users. Re-enabling is allowed only when those

@@ -9,6 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  esp-idf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Heltec V3.1 firmware with ESP-IDF 5.5.4
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.4
+          target: esp32s3
+          path: firmware/heltec_wifi_lora_32_v3_1
+      - name: Preserve resolved component dependencies
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: heltec-v3.1-dependencies-lock
+          path: firmware/heltec_wifi_lora_32_v3_1/dependencies.lock
+          if-no-files-found: warn
+
   build:
     strategy:
       matrix:

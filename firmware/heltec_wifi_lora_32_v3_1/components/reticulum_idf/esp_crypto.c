@@ -214,9 +214,12 @@ static int esp_random(void *context, uint8_t *out, size_t length) {
 
 static int esp_x_public(void *context, const uint8_t private_key[32],
                         uint8_t public_key[32]) {
+    int result;
     (void)context;
     if (private_key == NULL || public_key == NULL) return 0;
-    return crypto_scalarmult_curve25519_base(public_key, private_key) == 0;
+    result = crypto_scalarmult_curve25519_base(public_key, private_key);
+    if (result != 0) sodium_memzero(public_key, 32U);
+    return result == 0;
 }
 
 static int esp_x_generate(void *context, uint8_t private_key[32],
@@ -250,6 +253,7 @@ static int esp_ed_public(void *context, const uint8_t private_key[32],
     (void)context;
     if (private_key == NULL || public_key == NULL) return 0;
     result = crypto_sign_seed_keypair(public_key, secret_key, private_key);
+    if (result != 0) sodium_memzero(public_key, 32U);
     sodium_memzero(secret_key, sizeof(secret_key));
     return result == 0;
 }
@@ -278,9 +282,16 @@ static int esp_ed_sign(void *context, const uint8_t private_key[32],
     (void)context;
     if (private_key == NULL || signature == NULL ||
         !valid_buffer(message, message_length)) return 0;
-    if (crypto_sign_seed_keypair(public_key, secret_key, private_key) != 0) return 0;
+    if (crypto_sign_seed_keypair(public_key, secret_key, private_key) != 0) {
+        sodium_memzero(public_key, sizeof(public_key));
+        sodium_memzero(secret_key, sizeof(secret_key));
+        sodium_memzero(signature, 64U);
+        return 0;
+    }
     result = crypto_sign_detached(signature, &signature_length, message,
                                   (unsigned long long)message_length, secret_key);
+    if (result != 0 || signature_length != 64U)
+        sodium_memzero(signature, 64U);
     sodium_memzero(public_key, sizeof(public_key));
     sodium_memzero(secret_key, sizeof(secret_key));
     return result == 0 && signature_length == 64U;
@@ -411,4 +422,94 @@ static const rns_crypto_provider_t provider = {
 rns_status_t rns_esp_crypto_install(void) {
     if (sodium_init() < 0) return RNS_ERROR_CRYPTO;
     return rns_crypto_provider_install(&provider);
+}
+
+rns_status_t rns_esp_crypto_self_test(void) {
+    static const uint8_t sha_expected[32] = {
+        0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+        0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+        0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+        0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad
+    };
+    static const uint8_t hmac_expected[32] = {
+        0xb6, 0x13, 0x67, 0x9a, 0x08, 0x14, 0xd9, 0xec,
+        0x77, 0x2f, 0x95, 0xd7, 0x78, 0xc3, 0x5f, 0xc5,
+        0xff, 0x16, 0x97, 0xc4, 0x93, 0x71, 0x56, 0x53,
+        0xc6, 0xc7, 0x12, 0x14, 0x42, 0x92, 0xc5, 0xad
+    };
+    static const uint8_t hkdf_expected[32] = {
+        0x3c, 0xb2, 0x5f, 0x25, 0xfa, 0xac, 0xd5, 0x7a,
+        0x90, 0x43, 0x4f, 0x64, 0xd0, 0x36, 0x2f, 0x2a,
+        0x2d, 0x2d, 0x0a, 0x90, 0xcf, 0x1a, 0x5a, 0x4c,
+        0x5d, 0xb0, 0x2d, 0x56, 0xec, 0xc4, 0xc5, 0xbf
+    };
+    static const uint8_t ed_private[32] = {
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+        0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+        0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+        0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60
+    };
+    static const uint8_t ed_public_expected[32] = {
+        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7,
+        0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+        0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+        0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a
+    };
+    static const uint8_t token[64] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x17, 0xdc, 0x52, 0x1d, 0x7a, 0x86, 0x75, 0x37,
+        0x9b, 0x43, 0xbb, 0x7c, 0x72, 0x16, 0x06, 0xa7,
+        0xff, 0xe6, 0x7e, 0x9f, 0x64, 0x3f, 0xe2, 0xaa,
+        0x94, 0x97, 0xda, 0xb6, 0x7a, 0xc7, 0x0d, 0x36,
+        0x58, 0x9a, 0xef, 0x9c, 0x24, 0x0f, 0x7f, 0xe2,
+        0x65, 0x7b, 0xe0, 0x5c, 0x0a, 0xd7, 0xa3, 0xe1
+    };
+    uint8_t digest[32];
+    uint8_t hkdf_input[22];
+    uint8_t hkdf_salt[13];
+    uint8_t hkdf_info[10];
+    uint8_t public_key[32];
+    uint8_t signature[64];
+    uint8_t key[64];
+    uint8_t plaintext[16];
+    size_t plaintext_length = 0U;
+    int ok;
+
+    memset(key, 0x5a, sizeof(key));
+    memset(hkdf_input, 0x0b, sizeof(hkdf_input));
+    {
+        size_t index;
+        for (index = 0U; index < sizeof(hkdf_salt); index++)
+            hkdf_salt[index] = (uint8_t)index;
+        for (index = 0U; index < sizeof(hkdf_info); index++)
+            hkdf_info[index] = (uint8_t)(0xf0U + index);
+    }
+    ok = rns_sha256((const uint8_t *)"abc", 3U, digest) &&
+         rns_constant_time_equal(digest, sha_expected, sizeof(digest)) &&
+         rns_hmac_sha256(NULL, 0U, NULL, 0U, digest) &&
+         rns_constant_time_equal(digest, hmac_expected, sizeof(digest)) &&
+         rns_hkdf_sha256(hkdf_input, sizeof(hkdf_input), hkdf_salt,
+                         sizeof(hkdf_salt), hkdf_info, sizeof(hkdf_info),
+                         digest, sizeof(digest)) &&
+         rns_constant_time_equal(digest, hkdf_expected, sizeof(digest)) &&
+         rns_ed25519_public_from_private(ed_private, public_key) &&
+         rns_constant_time_equal(public_key, ed_public_expected,
+                                 sizeof(public_key)) &&
+         rns_ed25519_sign(ed_private, NULL, 0U, signature) &&
+         rns_ed25519_verify(public_key, NULL, 0U, signature) &&
+         rns_token_decrypt(key, token, sizeof(token), plaintext,
+                           sizeof(plaintext), &plaintext_length) &&
+         plaintext_length == 13U &&
+         rns_constant_time_equal(plaintext,
+                                 (const uint8_t *)"cross-backend", 13U);
+    sodium_memzero(digest, sizeof(digest));
+    sodium_memzero(hkdf_input, sizeof(hkdf_input));
+    sodium_memzero(hkdf_salt, sizeof(hkdf_salt));
+    sodium_memzero(hkdf_info, sizeof(hkdf_info));
+    sodium_memzero(public_key, sizeof(public_key));
+    sodium_memzero(signature, sizeof(signature));
+    sodium_memzero(key, sizeof(key));
+    sodium_memzero(plaintext, sizeof(plaintext));
+    return ok ? RNS_OK : RNS_ERROR_CRYPTO;
 }

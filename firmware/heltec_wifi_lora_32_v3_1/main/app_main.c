@@ -30,6 +30,10 @@ void app_main(void) {
         ESP_LOGE(TAG, "Reticulum ESP-IDF crypto provider installation failed");
         return;
     }
+    if (rns_esp_crypto_self_test() != RNS_OK) {
+        ESP_LOGE(TAG, "Reticulum ESP-IDF crypto known-answer test failed");
+        return;
+    }
     if (rns_esp_nvs_storage_open(NULL, &storage) != RNS_OK) {
         ESP_LOGE(TAG, "Reticulum NVS storage provider could not be opened");
         return;

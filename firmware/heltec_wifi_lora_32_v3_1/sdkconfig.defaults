@@ -21,6 +21,11 @@ CONFIG_MBEDTLS_HKDF_C=y
 CONFIG_MBEDTLS_HARDWARE_AES=y
 CONFIG_MBEDTLS_HARDWARE_SHA=y
 
+# libsodium 1.0.22 must use its own SHA state implementation on ESP32-S3.
+# Its mbedTLS compatibility wrapper is unsafe with ESP-IDF hardware SHA state,
+# while Reticulum's direct one-shot mbedTLS provider can retain acceleration.
+CONFIG_LIBSODIUM_USE_MBEDTLS_SHA=n
+
 # Never enable flash encryption or eFuse operations from development defaults.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
