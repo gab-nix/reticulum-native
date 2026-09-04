@@ -399,7 +399,12 @@ int main(void) {
 
     /* A second message uses the already authenticated link rather than
      * opening another handshake. */
+    /* Keep every synthetic ID distinct from the original random wire hash,
+     * even when its first byte already equals one of our test markers. */
+    outbound.message_id[LXMF_MESSAGE_ID_LENGTH - 1U] ^= 1U;
     outbound.message_id[0] = 0x92U;
+    assert(memcmp(outbound.message_id, decoded.message_id,
+                   LXMF_MESSAGE_ID_LENGTH) != 0);
     outbound.timestamp = 92.0;
     outbound.packed = (lxmf_slice_t){0};
     inserted = false;
