@@ -1668,10 +1668,10 @@ bool tui_state_open_conversation(tui_state_t *state,
         tui_state_set_status(state, "Conversation limit reached");
         return false;
     }
+    tui_state_save_draft(state);
     tui_state_cancel_reference(state);
     state->selected = index;
-    state->contacts[index].trust = TUI_TRUST_UNKNOWN;
-    state->tab = TUI_TRUST_UNKNOWN;
+    state->tab = state->contacts[index].trust;
     state->screen = TUI_SCREEN_CONVERSATIONS;
     state->overlay = TUI_OVERLAY_NONE;
     state->field = TUI_FIELD_COMPOSE;
@@ -2413,20 +2413,22 @@ void tui_state_browse_selected(tui_state_t *state) {
                                             item->target_length);
         return;
     }
-    /* Pages advertise their author as lxmf@<hash>; following one is a
-     * handoff to the conversation screen, not a page fetch. */
-    if (strncmp(target, "lxmf@", 5u) == 0) {
+    /* NomadNet destination-type links support the shorthand and full name.
+     * Accept explicit lxmf: address links too; lxm:// paper messages are a
+     * different format and must not be interpreted as contact addresses. */
+    const char *message_address = NULL;
+    if (strncmp(target, "lxmf@", 5u) == 0) message_address = target + 5u;
+    else if (strncmp(target, "lxmf.delivery@", 14u) == 0) message_address = target + 14u;
+    else if (strncmp(target, "lxmf://", 7u) == 0) message_address = target + 7u;
+    else if (strncmp(target, "lxmf:", 5u) == 0) message_address = target + 5u;
+    if (message_address != NULL) {
         uint8_t peer[LXMF_DESTINATION_LENGTH];
-        if (!tui_hex_parse(target + 5u, peer, sizeof peer)) {
+        if (!tui_hex_parse(message_address, peer, sizeof peer)) {
             tui_state_set_status(state, "Link carries a malformed LXMF address");
             return;
         }
         if (tui_state_open_conversation(state, peer))
             state->screen = TUI_SCREEN_CONVERSATIONS;
-        return;
-    }
-    if (strncmp(target, "lxmf:", 5u) == 0) {
-        tui_state_set_status(state, "LXMF browser links require a destination handoff");
         return;
     }
     if (!rns_micron_normalize_url(state->url, target, url, sizeof url)) {
