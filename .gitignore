@@ -33,18 +33,28 @@
 
 # Local configuration, credentials and packet captures. Keep sanitized example
 # configurations under config/ with stable names such as public-tcp.conf.
-/.env
-/.env.*
-!/.env.example
+.env
+.env.*
+!.env.example
 /config/local*.conf
 /config/private*.conf
 /config/*.local.conf
+id_dsa
+id_ecdsa
+id_ed25519
+id_rsa
 *.key
 *.pem
 *.p12
 *.pfx
+*.db
+*.sqlite
+*.sqlite3
 *.pcap
 *.pcapng
+core
+core.*
+*.crash
 /captures/
 /logs/
 *.log
