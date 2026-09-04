@@ -127,6 +127,26 @@ target_compile_features(test_heltec_v3_1_bsp PRIVATE c_std_17)
 reticulum_set_project_warnings(test_heltec_v3_1_bsp)
 add_test(NAME test_heltec_v3_1_bsp COMMAND test_heltec_v3_1_bsp)
 
+# Compile the exact vendored Semtech sources on the host and exercise their
+# public command/HAL boundary. This is not a substitute for an ESP-IDF build or
+# physical SX1262 validation.
+add_library(semtech_sx126x_host STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/semtech/sx126x_driver/src/sx126x.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/semtech/sx126x_driver/src/sx126x_driver_version.c)
+target_include_directories(semtech_sx126x_host PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/semtech/sx126x_driver/src)
+target_compile_features(semtech_sx126x_host PUBLIC c_std_17)
+# Upstream is compiled unchanged. Keep standard warning groups fatal while not
+# imposing this project's additional conversion policy on third-party code.
+target_compile_options(semtech_sx126x_host PRIVATE
+    -Wall -Wextra -Wpedantic -Werror)
+
+add_executable(test_semtech_sx126x unit/test_semtech_sx126x.c)
+target_link_libraries(test_semtech_sx126x PRIVATE semtech_sx126x_host)
+target_compile_features(test_semtech_sx126x PRIVATE c_std_17)
+reticulum_set_project_warnings(test_semtech_sx126x)
+add_test(NAME test_semtech_sx126x COMMAND test_semtech_sx126x)
+
 reticulum_add_test(test_crypto unit/test_crypto.c)
 
 # The host shim exercises the complete provider table and libsodium key
