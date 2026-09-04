@@ -18,10 +18,10 @@ find_package(Threads REQUIRED)
 # rejected with RNS_ERROR_UNSUPPORTED rather than failing the build.
 find_package(BZip2)
 
-file(GLOB_RECURSE RETICULUM_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c")
+include(cmake/ReticulumSources.cmake)
+reticulum_validate_source_manifest()
 
-add_library(reticulum ${RETICULUM_SOURCES})
+add_library(reticulum ${RETICULUM_HOST_SOURCES})
 add_library(reticulum::reticulum ALIAS reticulum)
 
 target_compile_features(reticulum PUBLIC c_std_17)

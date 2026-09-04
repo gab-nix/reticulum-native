@@ -12,6 +12,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Feature | Status | Remaining work |
 | --- | --- | --- |
 | C17 library, HAL, buffers and typed status API | IMPLEMENTED | Additional embedded platform adapters |
+| Explicit platform-separated source manifests | WIP | ESP-IDF component must consume the portable manifest after provider separation |
 | Cryptography, identities, destinations and packets | IMPLEMENTED | Broader platform validation |
 | Signed announces and path lookup | WIP | Complete persistence and routing compatibility |
 | UDP interfaces | IMPLEMENTED | Adverse-network hardening |
