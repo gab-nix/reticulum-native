@@ -66,6 +66,8 @@ def main():
         identity = RNS.Identity()
         node.destination = RNS.Destination(identity, RNS.Destination.IN,
             RNS.Destination.SINGLE, "nomadnetwork", "node")
+        links = []
+        node.destination.set_link_established_callback(links.append)
         node.register_pages()
         process = subprocess.Popen([str(args.driver.resolve()), args.transport,
             str(c_port), str(py_port)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -80,9 +82,10 @@ def main():
             report = json.loads(stdout)
             report.update(transport=args.transport, rns_commit=RNS_COMMIT,
                           nomadnet_commit=NOMADNET_COMMIT,
+                          links=len(links),
                           served=node.app.peer_settings["served_page_requests"])
             report["ok"] = bool(report.get("ok") and process.returncode == 0 and
-                                not stderr and report["served"] >= 2)
+                                not stderr and report["served"] >= 2 and len(links) == 1)
             print(json.dumps(report, sort_keys=True))
             return 0 if report["ok"] else 1
         finally:
