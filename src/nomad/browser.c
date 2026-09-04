@@ -207,10 +207,17 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
     double now;
     status = browser_now(browser, &now);
     if (status != RNS_OK) return status;
+    bool reuse = browser->state == RNS_BROWSER_COMPLETE && browser->link != NULL &&
+        rns_runtime_link_state(browser->link) == RNS_LINK_ACTIVE &&
+        memcmp(browser->destination, destination, sizeof destination) == 0 &&
+        memcmp(browser->identity.encryption_public, node_identity->encryption_public, 32U) == 0 &&
+        memcmp(browser->identity.signing_public, node_identity->signing_public, 32U) == 0;
     rns_request_receipt_destroy(browser->receipt);
     browser->receipt = NULL;
-    rns_runtime_link_destroy(browser->link);
-    browser->link = NULL;
+    if (!reuse) {
+        rns_runtime_link_destroy(browser->link);
+        browser->link = NULL;
+    }
     memcpy(browser->destination, destination, sizeof destination);
     browser->identity = *node_identity;
     memcpy(browser->path, path, strlen(path) + 1U);
@@ -221,6 +228,10 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
     browser->error = RNS_OK;
     browser->state = RNS_BROWSER_PATH_DISCOVERY;
     browser->discovery_started = now;
+    if (reuse) {
+        link_changed(browser->link, RNS_LINK_ACTIVE, RNS_OK, browser);
+        return browser->state == RNS_BROWSER_FAILED ? browser->error : RNS_OK;
+    }
     rns_path_entry route;
     if (rns_runtime_path_lookup(browser->runtime, destination, &route) != RNS_OK) {
         status = rns_runtime_request_path(browser->runtime, destination);
