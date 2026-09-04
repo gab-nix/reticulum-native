@@ -2,6 +2,8 @@
 
 This is the source of truth for implementation progress. `IMPLEMENTED` means code and automated tests exist; `VERIFIED` additionally requires bidirectional upstream evidence. `WIP` names missing behavior, `PLANNED` has no complete implementation, and `BLOCKED` records an external dependency.
 
+Resource compatibility note: authenticated encrypted streams treat their leading four-byte random value independently from advertisement `r`; the latter continues to salt part-map and final Resource hashes. Deterministic coverage uses distinct values, and the privacy-safe pinned-Python UDP gate verifies packet, five-part Resource, and 2,260-part/two-segment Resource delivery in both directions.
+
 | Area | Status | Evidence and remaining work |
 | --- | --- | --- |
 | Built-in Guide screen | IMPLEMENTED | `G` opens a native keyboard/workflow guide, with narrow-terminal clipping, deterministic headless output and Escape/navigation isolation. Dispatcher and render-dump tests cover entry, content and return. Protocol tutorials and searchable long-form help remain. |

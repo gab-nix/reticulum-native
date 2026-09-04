@@ -518,8 +518,14 @@ rns_status_t rns_resource_assemble(rns_resource_t *resource,
         }
         plain = decrypted;
     }
-    if (plain_length < 4U ||
-        memcmp(plain, resource->advertisement.random_hash, 4U) != 0) {
+    /* Pinned peers can use an independently randomised four-byte prefix inside
+     * the authenticated encrypted stream. Advertisement r still salts the map
+     * and final Resource hashes. Plaintext Resources retain exact r-prefix
+     * validation because they do not have the token authentication layer. */
+    if (plain_length < RNS_RESOURCE_RANDOM_HASH_SIZE ||
+        (!resource->advertisement.encrypted &&
+         memcmp(plain, resource->advertisement.random_hash,
+                RNS_RESOURCE_RANDOM_HASH_SIZE) != 0)) {
         free(decrypted);
         free(wire);
         return RNS_ERROR_PROTOCOL;

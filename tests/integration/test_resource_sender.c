@@ -1,4 +1,5 @@
 #include "reticulum/resource.h"
+#include "reticulum/crypto.h"
 #include "reticulum/packet.h"
 
 #include <assert.h>
@@ -179,6 +180,64 @@ static void test_compression_and_bounds(void) {
     assert(rns_resource_sender_create(&sender, &link, compressible,
                                       RNS_RESOURCE_MAX_SIZE + 1u, NULL) ==
            RNS_ERROR_INVALID_ARGUMENT);
+}
+
+static void test_encrypted_stream_prefix_is_independent(void) {
+    rns_link link;
+    initialise_link(&link);
+    uint8_t source[100];
+    for (size_t i = 0U; i < sizeof source; ++i)
+        source[i] = (uint8_t)(i * 29U + 11U);
+    const uint8_t advertised_random[4] = {0x10U, 0x20U, 0x30U, 0x40U};
+    const uint8_t stream_prefix[4] = {0xa1U, 0xb2U, 0xc3U, 0xd4U};
+    uint8_t hash_input[sizeof source + 4U];
+    memcpy(hash_input, source, sizeof source);
+    memcpy(hash_input + sizeof source, advertised_random,
+           sizeof advertised_random);
+
+    rns_resource_advertisement_t advertisement = {0};
+    assert(rns_sha256(hash_input, sizeof hash_input, advertisement.hash));
+    memcpy(advertisement.original_hash, advertisement.hash,
+           sizeof advertisement.original_hash);
+    memcpy(advertisement.random_hash, advertised_random,
+           sizeof advertisement.random_hash);
+    advertisement.data_size = sizeof source;
+    advertisement.parts = 1U;
+    advertisement.segment_index = 1U;
+    advertisement.total_segments = 1U;
+    advertisement.flags = RNS_RESOURCE_FLAG_ENCRYPTED;
+
+    uint8_t token_plain[sizeof source + 4U];
+    memcpy(token_plain, stream_prefix, sizeof stream_prefix);
+    memcpy(token_plain + sizeof stream_prefix, source, sizeof source);
+    uint8_t wire[256];
+    assert(rns_link_encrypt(&link, token_plain, sizeof token_plain, wire,
+                            sizeof wire, &advertisement.transfer_size));
+    uint8_t part_hash_input[sizeof wire + 4U];
+    assert(advertisement.transfer_size + sizeof advertised_random <=
+           sizeof part_hash_input);
+    memcpy(part_hash_input, wire, advertisement.transfer_size);
+    memcpy(part_hash_input + advertisement.transfer_size, advertised_random,
+           sizeof advertised_random);
+    uint8_t part_digest[32];
+    assert(rns_sha256(part_hash_input,
+                      advertisement.transfer_size + sizeof advertised_random,
+                      part_digest));
+    advertisement.hashmap = part_digest;
+    advertisement.hashmap_length = RNS_RESOURCE_MAPHASH_LEN;
+
+    rns_resource_t *receiver = NULL;
+    assert(rns_resource_accept(&receiver, &advertisement, sizeof source) ==
+           RNS_OK);
+    assert(rns_resource_receive_part(receiver, wire,
+                                     advertisement.transfer_size) == RNS_OK);
+    uint8_t output[sizeof source];
+    size_t output_length = 0U;
+    assert(rns_resource_assemble(receiver, &link, output, sizeof output,
+                                 &output_length) == RNS_OK);
+    assert(output_length == sizeof source);
+    assert(memcmp(output, source, sizeof source) == 0);
+    rns_resource_destroy(receiver);
 }
 
 static void receive_current_segment(rns_resource_sender_t *sender,
@@ -399,6 +458,7 @@ int main(void) {
     transfer_resource(false);
     transfer_resource(true);
     test_compression_and_bounds();
+    test_encrypted_stream_prefix_is_independent();
     test_hashmap_updates_and_segments();
     test_advertisement_hardening();
     return 0;

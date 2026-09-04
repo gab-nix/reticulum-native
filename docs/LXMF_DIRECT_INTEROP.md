@@ -70,6 +70,16 @@ parts. Queue capacity is now derived from that pinned window maximum and the
 bounded number of active runtime links. The final exchange receives all six
 packet/Resource completion proofs.
 
+A clean-room receiver regression initially required the authenticated
+encrypted stream's four-byte prefix to equal advertisement `r`. Privacy-safe
+stage diagnostics showed that pinned Python independently randomises those
+values: all parts arrived, the assembled wire length matched `t`, token
+authentication/decryption succeeded, and the compressed payload began after
+the distinct four-byte prefix. The receiver now strips that authenticated
+prefix while continuing to use advertisement `r` for part-map and final
+Resource hash verification. A deterministic distinct-prefix test prevents the
+regression.
+
 Validation checkpoint: AppleClang warnings-as-errors and the complete offline
 suite pass. Focused link/direct-router/runtime-Resource state-machine tests pass
 with ASan/UBSan, and the normal committed driver passes both live UDP and TCP
