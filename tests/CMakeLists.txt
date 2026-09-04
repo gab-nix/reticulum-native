@@ -127,6 +127,26 @@ target_compile_features(test_heltec_v3_1_bsp PRIVATE c_std_17)
 reticulum_set_project_warnings(test_heltec_v3_1_bsp)
 add_test(NAME test_heltec_v3_1_bsp COMMAND test_heltec_v3_1_bsp)
 
+add_executable(test_heltec_status_ui
+    unit/test_heltec_status_ui.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_status_ui/heltec_status_ui.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_v3_1_bsp/heltec_wifi_lora_32_v3_1.c)
+target_include_directories(test_heltec_status_ui PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_status_ui/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_v3_1_bsp/include)
+target_compile_features(test_heltec_status_ui PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_status_ui)
+add_test(NAME test_heltec_status_ui COMMAND test_heltec_status_ui)
+
+add_executable(test_heltec_shell_core
+    unit/test_heltec_shell_core.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_shell_core/heltec_shell_core.c)
+target_include_directories(test_heltec_shell_core PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_shell_core/include)
+target_compile_features(test_heltec_shell_core PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_shell_core)
+add_test(NAME test_heltec_shell_core COMMAND test_heltec_shell_core)
+
 # Compile the exact vendored Semtech sources on the host and exercise their
 # public command/HAL boundary. This is not a substitute for an ESP-IDF build or
 # physical SX1262 validation.
