@@ -46,7 +46,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Message codec, signatures and unknown fields | IMPLEMENTED | Broader compatibility coverage |
 | Standard reply, reaction, thread and media fields | IMPLEMENTED | Complete user-facing workflows |
 | Opportunistic packet delivery | IMPLEMENTED | Complete ratchet and retry workflows |
-| Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior |
+| Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior; integration test IDs are distinct from random wire hashes |
 | Direct resource delivery | IMPLEMENTED | Persistent transfer resume |
 | Delivery proofs and durable queue state | IMPLEMENTED | Complete offline retry scheduling |
 | Incoming block, size and stamp policies | IMPLEMENTED | Complete policy controls |
