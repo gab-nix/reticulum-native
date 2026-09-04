@@ -659,8 +659,9 @@ static rns_status_t compressed_copy(const uint8_t *source, size_t length,
     return RNS_OK;
 }
 
-static rns_status_t sender_prepare_segment(rns_resource_sender_t *sender,
-                                           const rns_link *link) {
+static rns_status_t sender_prepare_segment_attempt(rns_resource_sender_t *sender,
+                                           const rns_link *link, bool *collision) {
+    *collision = false;
     free(sender->wire);
     free(sender->map_hashes);
     sender->wire = NULL;
@@ -738,9 +739,28 @@ static rns_status_t sender_prepare_segment(rns_resource_sender_t *sender,
         status = hash_part(sender->wire + part_offset, part_length,
                            sender->random_hash, digest);
         if (status != RNS_OK) return status;
+        for (size_t previous = 0U; previous < i; ++previous) {
+            if (memcmp(sender->map_hashes + previous * 4U, digest, 4U) == 0) {
+                *collision = true;
+                return RNS_OK;
+            }
+        }
         memcpy(sender->map_hashes + i * 4U, digest, 4U);
     }
     return RNS_OK;
+}
+
+static rns_status_t sender_prepare_segment(rns_resource_sender_t *sender,
+                                           const rns_link *link) {
+    /* Truncated map hashes must identify parts unambiguously. Regenerate
+     * salt, resource hash and encrypted stream before advertising a collision.
+     * Bound retries even if a broken crypto provider repeatedly collides. */
+    for (unsigned attempt = 0U; attempt < 8U; ++attempt) {
+        bool collision = false;
+        rns_status_t status = sender_prepare_segment_attempt(sender, link, &collision);
+        if (status != RNS_OK || !collision) return status;
+    }
+    return RNS_ERROR_CRYPTO;
 }
 
 static rns_status_t estimate_parts(const uint8_t *source, size_t length,
