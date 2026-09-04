@@ -256,6 +256,7 @@ typedef struct tui_state {
     tui_editor_t browser_editor;
     size_t page_scroll;
     char url[RNS_MICRON_TEXT_MAX];
+    char page_url[RNS_MICRON_TEXT_MAX];
 
     tui_settings_t settings;
     char settings_path[TUI_SETTINGS_PATH_MAX + 1u];
@@ -359,6 +360,9 @@ bool tui_state_browser_jump_anchor(tui_state_t *state, const char *target,
 bool tui_state_browser_form_apply(tui_state_t *state);
 void tui_state_browser_form_cancel(tui_state_t *state);
 bool tui_state_browse(tui_state_t *state, const char *url, bool push_history);
+/* Resolve against the displayed page, never a failed/pending navigation. */
+bool tui_state_browser_resolve(const tui_state_t *state, const char *target,
+                               char *output, size_t capacity);
 void tui_state_browse_selected(tui_state_t *state);
 void tui_state_browse_back(tui_state_t *state);
 void tui_state_browse_node(tui_state_t *state, const rns_node_record *node);

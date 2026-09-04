@@ -1167,8 +1167,6 @@ static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
             (void)snprintf(notice, sizeof notice, "Page load failed: %s",
                            tui_browser_error_text(state->browser));
             clipped(stdscr, 4, 2, layout->columns - 4, notice);
-            clipped(stdscr, 5, 2, layout->columns - 4,
-                    "Showing the previously loaded page:");
         }
     }
     /*
@@ -1180,7 +1178,13 @@ static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
                 "Esc cancel  Backspace back  N network  q quit");
         return;
     }
-    int body_top = failed ? 7 : 5;
+    bool retained = strcmp(state->url, state->page_url) != 0;
+    if (retained) {
+        clipped(stdscr, 5, 2, layout->columns - 4,
+                "Showing the previously loaded page:");
+        clipped(stdscr, 6, 2, layout->columns - 4, state->page_url);
+    }
+    int body_top = (failed || retained) ? 7 : 5;
     int body_rows = layout->hint_row - body_top - 1;
     if (body_rows < 1) return;
 
@@ -1422,8 +1426,8 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
         return ferror(output) ? -1 : 0;
     }
     if (state->screen == TUI_SCREEN_BROWSER) {
-        (void)fprintf(output, "Screen: Browser\nURL: %s\nControls: %zu\n",
-                      state->url, tui_state_browser_control_count(state));
+        (void)fprintf(output, "Screen: Browser\nURL: %s\nPage URL: %s\nControls: %zu\n",
+                      state->url, state->page_url, tui_state_browser_control_count(state));
         size_t ordinal = 0u;
         for (size_t i = 0u; i < state->page.span_count; ++i) {
             const rns_micron_span *span = &state->page.spans[i];
