@@ -39,6 +39,38 @@ interface configuration:
 Never commit identities, private keys, message stores, local configuration,
 packet captures or logs containing private traffic.
 
+## Heltec WiFi LoRa 32 V3.1 firmware
+
+An early ESP-IDF project scaffold lives in
+`firmware/heltec_wifi_lora_32_v3_1`. It currently provides the immutable board
+descriptor and a safe OLED power/reset sequence; it does not yet drive the
+SX1262, OLED, Reticulum runtime or LXMF services.
+
+The descriptor follows Heltec's official V3 board pin definition and the
+upstream RNode `BOARD_HELTEC32_V3` mapping. V3.1 keeps the V3 radio/display
+pinout but has distinct power circuitry. The V3.1 battery-sense circuit is
+recorded as present but unvalidated and remains disabled. This firmware does
+not assign GPIO37; Heltec documents that battery-control behavior for V3.2,
+not V3.1.
+
+- Heltec V3 pins: https://github.com/Heltec-Aaron-Lee/WiFi_Kit_series/blob/master/variants/heltec_wifi_lora_32_V3/pins_arduino.h
+- Heltec revision log: https://github.com/HelTecAutomation/HeltecDocs/blob/master/doc/node/esp32/source/wifi_lora_32/hardware_update_log.md
+- RNode board mapping: https://github.com/markqvist/RNode_Firmware/blob/master/Boards.h#L2633-L2699
+
+The firmware pins ESP-IDF 5.5.4 and the `esp32s3` target. After installing
+and activating ESP-IDF 5.5.4, configure and build it separately from the desktop
+project:
+
+```sh
+cd firmware/heltec_wifi_lora_32_v3_1
+idf.py set-target esp32s3
+idf.py -D SDKCONFIG_DEFAULTS=sdkconfig.defaults build
+```
+
+Do not flash or transmit without a suitable 868 MHz antenna. The host test
+suite validates the V3.1 descriptor, but an ESP-IDF firmware build and physical
+board validation remain required before the board support is operational.
+
 ## Python interoperability tests
 
 The optional live test group uses local Python peers and temporary synthetic
