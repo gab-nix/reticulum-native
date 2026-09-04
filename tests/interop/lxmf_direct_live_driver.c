@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "reticulum/lxmf_router.h"
+#include "reticulum/lxmf_fields.h"
 #include "reticulum/destination.h"
 #include "reticulum/hal.h"
 #include <errno.h>
@@ -21,6 +22,14 @@ typedef struct {
     uint32_t event_attempt;
     uint8_t event_message_id[LXMF_MESSAGE_ID_LENGTH];
 } state_t;
+static uint64_t wall_seconds(void *context) {
+    uint64_t now = 0; (void)context;
+    (void)rns_hal_wallclock_ms(&now); return now / 1000u;
+}
+static bool stamp_cost(void *context, const uint8_t destination[16], uint8_t *cost) {
+    state_t *s = context; (void)destination;
+    *cost = s->received > 0 ? 1u : 0u; return true;
+}
 static void make_body(uint8_t *body, size_t length, bool from_python) {
     uint32_t seed = from_python ? 0x2468ace1U : 0x13579bdfU;
     for (size_t i = 0; i < length; ++i) {
@@ -73,17 +82,27 @@ static void received(void *context, const lxmf_store_message_t *message) {
         memcmp(message->source, s->destination, 16) != 0) { s->failed = true; return; }
     uint8_t expected_body[2048]; make_body(expected_body, expected, true);
     if (memcmp(message->content.data, expected_body, expected) != 0) s->failed = true;
-    lxmf_message_t unpacked;
+    lxmf_message_t unpacked = {0};
+    uint8_t *plain_fields = malloc(message->packed.len);
+    size_t plain_length = 0;
     if (lxmf_unpack(message->packed.data, message->packed.len, NULL, NULL,
-        &unpacked) != LXMF_OK || unpacked.title.len != 11 ||
+        &unpacked) != LXMF_OK || plain_fields == NULL ||
+        !unpacked.has_stamp || unpacked.stamp_len != LXMF_STAMP_LENGTH ||
+        lxmf_fields_merge_ticket(unpacked.fields_msgpack.data, unpacked.fields_msgpack.len,
+            NULL, plain_fields, message->packed.len, &plain_length) != LXMF_OK ||
+        unpacked.title.len != 11 ||
         memcmp(unpacked.title.data, "python-live", 11) != 0 ||
         (s->received < 2 &&
-         (unpacked.fields_msgpack.len != sizeof(fields) ||
-          memcmp(unpacked.fields_msgpack.data, fields, sizeof(fields)) != 0)) ||
+         (plain_length != sizeof(fields) ||
+          memcmp(plain_fields, fields, sizeof(fields)) != 0)) ||
         (s->received == 2 &&
-         !segmented_fields_valid(unpacked.fields_msgpack.data,
-                                 unpacked.fields_msgpack.len)))
+         !segmented_fields_valid(plain_fields, plain_length)))
         s->metadata_failed = true;
+    lxmf_ticket_field_t ticket = {0};
+    if (lxmf_fields_parse_ticket(unpacked.fields_msgpack.data, unpacked.fields_msgpack.len,
+        &ticket) != LXMF_OK || ticket.present != (s->received == 0)) s->metadata_failed = true;
+    rns_hal_secure_zero(&ticket, sizeof ticket);
+    free(plain_fields);
     s->received++;
     printf("{\"event\":\"received\",\"size\":%zu,\"verified\":%s,\"id\":\"",
         expected, s->failed ? "false" : "true"); hex(message->message_id, 32); puts("\"}");
@@ -119,7 +138,8 @@ static void event(void *context, const lxmf_router_event_t *ev) {
     hex(ev->message_id, 32); puts("\"}");
 }
 static bool queue(lxmf_store_t *store, const rns_identity *identity,
-                  const uint8_t destination[16], size_t length) {
+                  const uint8_t destination[16], size_t length,
+                  lxmf_ticket_store_t *tickets) {
     uint8_t body[2048], packed[2400], source[16];
     const char *aspects[] = {"delivery"};
     if (!rns_destination_hash(identity, "lxmf", aspects, 1, source)) return false;
@@ -131,6 +151,20 @@ static bool queue(lxmf_store_t *store, const rns_identity *identity,
     m.title = (lxmf_slice_t){(const uint8_t *)"c-live", 6};
     m.content = (lxmf_slice_t){body, length};
     m.fields_msgpack = (lxmf_slice_t){fields, sizeof(fields)};
+    uint8_t ticket_fields[64];
+    if (length == 17u) {
+        lxmf_ticket_entry_t entry = {0};
+        if (lxmf_ticket_store_issue(tickets, destination, now / 1000u, &entry, NULL) != LXMF_OK)
+            return false;
+        lxmf_ticket_field_t ticket = {.present = true, .expires_at = entry.expires_at};
+        memcpy(ticket.ticket, entry.ticket, sizeof ticket.ticket);
+        size_t field_length = 0;
+        lxmf_status_t status = lxmf_fields_merge_ticket(fields, sizeof fields, &ticket,
+            ticket_fields, sizeof ticket_fields, &field_length);
+        rns_hal_secure_zero(&ticket, sizeof ticket); rns_hal_secure_zero(&entry, sizeof entry);
+        if (status != LXMF_OK) return false;
+        m.fields_msgpack = (lxmf_slice_t){ticket_fields, field_length};
+    }
     size_t size;
     if (lxmf_pack(&m, lxmf_identity_signer, (void *)identity, packed,
         sizeof(packed), &size) != LXMF_OK ||
@@ -225,6 +259,10 @@ int main(int argc, char **argv) {
     const char *path = argv[3]; lxmf_store_t store = {0};
     if (lxmf_store_open(&store, path) != LXMF_OK) { rns_runtime_destroy(runtime); return 5; }
     lxmf_router_t router;
+    char ticket_path[1200]; lxmf_ticket_store_t *tickets = NULL;
+    int ticket_path_size = snprintf(ticket_path, sizeof ticket_path, "%s.tickets", path);
+    if (ticket_path_size < 0 || (size_t)ticket_path_size >= sizeof ticket_path ||
+        lxmf_ticket_store_open(&tickets, ticket_path) != LXMF_OK) return 6;
     lxmf_router_config_t options = {0};
     options.identity = &identity; options.store = &store; options.runtime = runtime;
     options.resolve_identity = resolve; options.resolve_context = &state;
@@ -233,6 +271,9 @@ int main(int argc, char **argv) {
     options.event_callback = event; options.event_context = &state;
     options.preferred_delivery_method = LXMF_DELIVERY_METHOD_DIRECT;
     options.accept_inbound_links = true;
+    options.ticket_store = tickets; options.wall_clock = wall_seconds;
+    options.inbound_stamp_cost = 1u;
+    options.resolve_stamp_cost = stamp_cost; options.stamp_cost_context = &state;
     if (lxmf_router_init(&router, &options) != LXMF_OK) return 6;
     uint8_t destination[16]; const char *aspects[] = {"delivery"};
     if (!rns_destination_hash(&identity, "lxmf", aspects, 1, destination)) return 7;
@@ -245,10 +286,10 @@ int main(int argc, char **argv) {
             (void)rns_runtime_announce(runtime, &identity, "lxmf", aspects, 1, NULL, 0);
             last_announce = now;
         }
-        if (state.known && queued < 3 && state.delivered == queued) {
+        if (state.known && queued < 3 && state.delivered == queued && state.received == queued) {
             bool queued_ok = queued < 2
                 ? queue(&store, &identity, state.destination,
-                        queued == 0 ? 17 : 2048)
+                        queued == 0 ? 17 : 2048, tickets)
                 : queue_segmented(&store, &identity, state.destination);
             if (!queued_ok) {
                 state.failed = true; break;
@@ -280,6 +321,7 @@ int main(int argc, char **argv) {
     /* Drain final Resource proof before shutting down. */
     (void)rns_hal_sleep_ms(100);
     lxmf_router_destroy(&router); lxmf_store_close(&store);
+    lxmf_ticket_store_close(tickets); unlink(ticket_path);
     rns_runtime_destroy(runtime); unlink(path);
     return success ? 0 : 1;
 }
