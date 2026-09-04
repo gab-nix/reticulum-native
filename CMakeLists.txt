@@ -21,6 +21,11 @@ find_package(BZip2)
 include(cmake/ReticulumSources.cmake)
 reticulum_validate_source_manifest()
 
+set(SEMTECH_SX126X_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/semtech/sx126x_driver")
+include("${SEMTECH_SX126X_ROOT}/verify.cmake")
+reticulum_verify_semtech_sx126x("${SEMTECH_SX126X_ROOT}")
+
 add_library(reticulum ${RETICULUM_HOST_SOURCES})
 add_library(reticulum::reticulum ALIAS reticulum)
 

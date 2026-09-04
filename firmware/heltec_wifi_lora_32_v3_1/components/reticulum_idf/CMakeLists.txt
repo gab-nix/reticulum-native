@@ -12,7 +12,14 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
         "${RETICULUM_ROOT}/include"
-    REQUIRES bootloader_support esp_timer esp_system freertos heap nvs_flash
+    REQUIRES
+        bootloader_support
+        esp_timer
+        esp_system
+        freertos
+        heap
+        nvs_flash
+        semtech_sx126x
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Wpedantic -Werror)

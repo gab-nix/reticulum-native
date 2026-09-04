@@ -123,6 +123,7 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
 | Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform and NVS adapters exist; full portable-core conversion and physical-board validation remain |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
-| Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement drivers and validate on physical hardware |
+| Pinned Semtech SX126x command driver dependency | IMPLEMENTED | Exact v2.5.0 sources, license, provenance and checksums are recorded; host command/HAL-boundary test passes, but the Heltec backend and hardware remain unverified |
+| Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement the SPI/BUSY/DIO1/DIO2/DIO3 backend, radio owner task, OLED and shell; validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |
