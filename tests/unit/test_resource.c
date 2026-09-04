@@ -80,8 +80,9 @@ static size_t build_advertisement(uint8_t *out, size_t payload_length, size_t pa
 static void test_plain_transfer(void) {
     /* stream = random hash || payload, split into parts. */
     const uint8_t random_hash[4] = {0xde, 0xad, 0xbe, 0xef};
-    uint8_t payload[300];
-    for (size_t i = 0u; i < sizeof payload; ++i) payload[i] = (uint8_t)(i * 7u + 3u);
+    uint8_t payload[700];
+    for (size_t i = 0u; i < sizeof payload; ++i)
+        payload[i] = (uint8_t)(i * 7u + i / 11u + 3u);
     uint8_t stream[sizeof payload + 4u];
     memcpy(stream, random_hash, 4u);
     memcpy(stream + 4u, payload, sizeof payload);
@@ -124,12 +125,80 @@ static void test_plain_transfer(void) {
     size_t requested = (request_length - 33u) / RNS_RESOURCE_MAPHASH_LEN;
     assert(requested == RNS_RESOURCE_WINDOW || requested == parts);
 
+    /* Receiving one part advances the sliding window by one instead of
+     * requesting every still-outstanding part again. */
+    assert(parts > 2u * RNS_RESOURCE_WINDOW);
+    assert(rns_resource_receive_part(resource, stream, part_size) == RNS_OK);
+    assert(rns_resource_build_request(resource, request, sizeof request,
+                                      &request_length) == RNS_OK);
+    assert((request_length - 33u) / RNS_RESOURCE_MAPHASH_LEN == 1u);
+    assert(memcmp(request + 33u,
+                  hashmap + RNS_RESOURCE_WINDOW * RNS_RESOURCE_MAPHASH_LEN,
+                  RNS_RESOURCE_MAPHASH_LEN) == 0);
+    assert(rns_resource_outstanding_parts(resource) == RNS_RESOURCE_WINDOW);
+    for (size_t part = 1u; part <= RNS_RESOURCE_WINDOW; ++part) {
+        assert(rns_resource_receive_part(resource, stream + part * part_size,
+                                         part_size) == RNS_OK);
+        assert(rns_resource_build_request(resource, request, sizeof request,
+                                          &request_length) == RNS_OK);
+        assert((request_length - 33u) / RNS_RESOURCE_MAPHASH_LEN == 1u);
+        assert(memcmp(request + 33u,
+                      hashmap + (RNS_RESOURCE_WINDOW + part) *
+                                    RNS_RESOURCE_MAPHASH_LEN,
+                      RNS_RESOURCE_MAPHASH_LEN) == 0);
+        assert(rns_resource_outstanding_parts(resource) ==
+               RNS_RESOURCE_WINDOW);
+    }
+
+    /* A duplicate does not open another slot or expand the in-flight window. */
+    size_t received = rns_resource_received_parts(resource);
+    assert(rns_resource_receive_part(resource, stream, part_size) == RNS_OK);
+    assert(rns_resource_received_parts(resource) == received);
+    assert(rns_resource_outstanding_parts(resource) == RNS_RESOURCE_WINDOW);
+    assert(rns_resource_build_request(resource, request, sizeof request,
+                                      &request_length) ==
+           RNS_ERROR_INVALID_STATE);
+    assert(rns_resource_outstanding_parts(resource) == RNS_RESOURCE_WINDOW);
+
+    /* A caller buffer failure is transactional: the existing request window
+     * and retry budget remain intact for the next polling attempt. */
+    assert(rns_resource_build_retry_request(resource, request, 1u,
+                                            &request_length) ==
+           RNS_ERROR_OVERFLOW);
+    assert(rns_resource_outstanding_parts(resource) == RNS_RESOURCE_WINDOW);
+    assert(rns_resource_retries_used(resource) == 0u);
+
+    /* A timed retry repeats only one bounded window, recovering a lost
+     * request or any part lost from the previous window. */
+    assert(rns_resource_build_retry_request(resource, request, sizeof request,
+                                            &request_length) == RNS_OK);
+    assert((request_length - 33u) / RNS_RESOURCE_MAPHASH_LEN ==
+           RNS_RESOURCE_WINDOW);
+    assert(rns_resource_outstanding_parts(resource) == RNS_RESOURCE_WINDOW);
+    assert(rns_resource_retries_used(resource) == 1u);
+    for (size_t retry = 1u; retry < RNS_RESOURCE_MAX_RETRIES; ++retry)
+        assert(rns_resource_build_retry_request(
+                   resource, request, sizeof request, &request_length) ==
+               RNS_OK);
+    assert(rns_resource_retries_used(resource) == RNS_RESOURCE_MAX_RETRIES);
+    assert(rns_resource_build_retry_request(resource, request, sizeof request,
+                                            &request_length) ==
+           RNS_ERROR_TIMEOUT);
+
+    /* Retry timing incorporates measured RTT, constrained-medium airtime and
+     * the pinned 16-retry additive backoff without accepting unbounded input. */
+    assert(RNS_RESOURCE_MAX_RETRIES == 16u);
+    assert(rns_resource_retry_timeout(2.0, 0.0, 4u, 0u) == 4.25);
+    assert(rns_resource_retry_timeout(0.4, 1.5, 4u, 0u) == 12.25);
+    assert(rns_resource_retry_timeout(0.4, 1.5, 4u, 100u) == 20.25);
+
     /* Deliver the parts out of order; matching is by map hash, not arrival. */
     for (size_t k = 0u; k < parts; ++k) {
-        size_t i = (k * 3u) % parts;
+        size_t i = parts - 1u - k;
         size_t len = i + 1u == parts ? sizeof stream - i * part_size : part_size;
         assert(rns_resource_receive_part(resource, stream + i * part_size, len) == RNS_OK);
     }
+    assert(rns_resource_retries_used(resource) == 0u);
     assert(rns_resource_parts_complete(resource));
     assert(rns_resource_received_parts(resource) == parts);
 

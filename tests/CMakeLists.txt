@@ -149,6 +149,33 @@ add_test(NAME test_semtech_sx126x COMMAND test_semtech_sx126x)
 
 reticulum_add_test(test_crypto unit/test_crypto.c)
 
+# The host shim exercises the complete provider table and libsodium key
+# semantics. CI requires this target; local builds without libsodium report an
+# explicit skip unless RETICULUM_REQUIRE_ESP_CRYPTO_HOST_TESTS is enabled.
+find_path(RETICULUM_SODIUM_INCLUDE_DIR sodium.h)
+find_library(RETICULUM_SODIUM_LIBRARY sodium)
+if(RETICULUM_SODIUM_INCLUDE_DIR AND RETICULUM_SODIUM_LIBRARY AND
+   EXISTS "${RETICULUM_SODIUM_INCLUDE_DIR}/sodium.h" AND
+   EXISTS "${RETICULUM_SODIUM_LIBRARY}")
+    add_executable(test_esp_crypto
+        unit/test_esp_crypto.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/reticulum_idf/esp_crypto.c)
+    target_include_directories(test_esp_crypto PRIVATE
+        ${RETICULUM_SODIUM_INCLUDE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/reticulum_idf/include)
+    target_link_libraries(test_esp_crypto PRIVATE
+        reticulum::reticulum ${RETICULUM_SODIUM_LIBRARY})
+    target_compile_features(test_esp_crypto PRIVATE c_std_17)
+    reticulum_set_project_warnings(test_esp_crypto)
+    add_test(NAME test_esp_crypto COMMAND test_esp_crypto)
+elseif(RETICULUM_REQUIRE_ESP_CRYPTO_HOST_TESTS)
+    message(FATAL_ERROR
+        "ESP crypto host tests are required, but libsodium headers/library were not found")
+else()
+    message(STATUS
+        "ESP crypto host tests disabled: install libsodium or require the gate explicitly")
+endif()
+
 # Prove the portable dispatcher links without OpenSSL and fails closed before
 # an embedded crypto backend is installed.
 add_executable(test_crypto_no_default
@@ -173,6 +200,7 @@ reticulum_add_test(test_lxmf_uri_fuzz unit/test_lxmf_uri_fuzz.c)
 target_sources(test_lxmf_uri_fuzz PRIVATE fuzz/fuzz_lxmf_uri.c)
 reticulum_add_test(test_announce unit/test_announce.c)
 reticulum_add_test(test_framing unit/test_framing.c)
+reticulum_add_test(test_radio_framing unit/test_radio_framing.c)
 reticulum_add_test(test_auto unit/test_auto.c)
 reticulum_add_test(test_transport unit/test_transport.c)
 reticulum_add_test(test_reverse_path unit/test_reverse_path.c)

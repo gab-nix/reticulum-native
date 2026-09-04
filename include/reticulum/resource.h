@@ -19,6 +19,10 @@ extern "C" {
 #define RNS_RESOURCE_PROOF_SIZE 64u
 #define RNS_RESOURCE_WINDOW 4u
 #define RNS_RESOURCE_WINDOW_MAX 75u
+#define RNS_RESOURCE_MAX_RETRIES 16u
+#define RNS_RESOURCE_RETRY_GRACE_SECONDS 0.25
+#define RNS_RESOURCE_RETRY_BACKOFF_SECONDS 0.5
+#define RNS_RESOURCE_RETRY_MAX_SECONDS 3600.0
 #define RNS_RESOURCE_HASHMAP_MAX_ENTRIES 74u
 #define RNS_RESOURCE_MAX_PARTS 18000u
 #define RNS_RESOURCE_PART_OVERHEAD 36u
@@ -74,11 +78,20 @@ rns_status_t rns_resource_accept(rns_resource_t **out,
 void rns_resource_destroy(rns_resource_t *resource);
 size_t rns_resource_total_parts(const rns_resource_t *resource);
 size_t rns_resource_received_parts(const rns_resource_t *resource);
+size_t rns_resource_outstanding_parts(const rns_resource_t *resource);
+size_t rns_resource_retries_used(const rns_resource_t *resource);
 bool rns_resource_parts_complete(const rns_resource_t *resource);
 bool rns_resource_waiting_for_hashmap(const rns_resource_t *resource);
 rns_status_t rns_resource_build_request(rns_resource_t *resource,
                                         uint8_t *out, size_t capacity,
                                         size_t *out_length);
+rns_status_t rns_resource_build_retry_request(rns_resource_t *resource,
+                                              uint8_t *out, size_t capacity,
+                                              size_t *out_length);
+double rns_resource_retry_timeout(double rtt_seconds,
+                                  double part_airtime_seconds,
+                                  size_t outstanding_parts,
+                                  size_t retries_used);
 rns_status_t rns_resource_receive_part(rns_resource_t *resource,
                                        const uint8_t *part,
                                        size_t part_length);

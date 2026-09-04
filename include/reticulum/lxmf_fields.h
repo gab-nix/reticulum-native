@@ -115,6 +115,15 @@ lxmf_status_t lxmf_standard_fields_merge(
     uint32_t remove_mask, uint8_t *output, size_t output_capacity,
     size_t *output_length);
 
+/* Adds/replaces FIELD_TICKET, or removes it when ticket is NULL. A supplied
+ * ticket must have present=true. Other entries are preserved byte-for-byte.
+ * Empty input means an empty map. Output may not overlap existing_fields.
+ * Compose fields before signing: changing a ticket changes the message ID. */
+lxmf_status_t lxmf_fields_merge_ticket(
+    const uint8_t *existing_fields, size_t existing_length,
+    const lxmf_ticket_field_t *ticket, uint8_t *output, size_t output_capacity,
+    size_t *output_length);
+
 /* Derives a display/save candidate without path separators, control bytes,
  * drive/URI prefixes or leading dots. This does not write any file. */
 lxmf_status_t lxmf_attachment_safe_name(lxmf_slice_t name, uint8_t *output,

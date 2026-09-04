@@ -148,7 +148,8 @@ void lxmf_sha256(const uint8_t *data, size_t len, uint8_t digest[32]) {
 static bool put(writer_t *w, const void *p, size_t n) {
   if (n > w->left)
     return false;
-  memcpy(w->p, p, n);
+  if (n != 0U)
+    memcpy(w->p, p, n);
   w->p += n;
   w->left -= n;
   return true;
@@ -428,10 +429,9 @@ static bool get_expiry(reader_t *r, uint64_t *expiry) {
    * makes the conversion defined even though UINT64_MAX itself rounds up. */
   if (!(value >= 0.0) || value >= 18446744073709551616.0)
     return false;
-  uint64_t converted = (uint64_t)value;
-  if ((double)converted != value)
-    return false;
-  *expiry = converted;
+  /* Python generates ticket expiry with time.time(), including fractions.
+   * The durable store uses seconds: round down, never extend validity. */
+  *expiry = (uint64_t)value;
   return true;
 }
 
