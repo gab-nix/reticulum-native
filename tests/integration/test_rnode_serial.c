@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <util.h>
@@ -434,8 +435,18 @@ static void test_old_firmware_rejected(void) {
     write_frame(master, CMD_DETECT, &detect, 1U);
     write_frame(master, CMD_FW_VERSION, firmware, sizeof(firmware));
     size_t processed = 0U;
-    assert(rns_rnode_endpoint_poll(endpoint, 8U, capture_frame, &capture,
-                                   &processed) == RNS_ERROR_UNSUPPORTED);
+    rns_status_t status = RNS_OK;
+    /* PTYs may expose the detect response before the firmware frame. Keep
+     * polling until rejection, allowing the kernel to publish queued bytes. */
+    for (size_t attempt = 0U; attempt < 1000U && status == RNS_OK; ++attempt) {
+        status = rns_rnode_endpoint_poll(endpoint, 8U, capture_frame, &capture,
+                                         &processed);
+        if (status == RNS_OK) {
+            const struct timespec pause = {0, 1000000L};
+            (void)nanosleep(&pause, NULL);
+        }
+    }
+    assert(status == RNS_ERROR_UNSUPPORTED);
     rns_rnode_info_t info;
     assert(rns_rnode_endpoint_info(endpoint, &info) == RNS_OK);
     assert(info.state == RNS_RNODE_DOWN &&
