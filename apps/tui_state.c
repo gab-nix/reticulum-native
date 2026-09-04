@@ -1694,6 +1694,8 @@ static lxmf_status_t queue_outbound(tui_state_t *state, lxmf_slice_t content,
     lxmf_message_t source = {0};
     lxmf_message_t decoded;
     uint8_t *packed = NULL;
+    uint8_t *ticket_fields = NULL;
+    size_t ticket_capacity = 0u, packed_capacity = 0u;
     size_t packed_length = 0u;
     memcpy(source.destination, state->contacts[state->selected].peer,
            LXMF_DESTINATION_LENGTH);
@@ -1708,12 +1710,39 @@ static lxmf_status_t queue_outbound(tui_state_t *state, lxmf_slice_t content,
     source.timestamp = (double)now_ms / 1000.0;
     source.content = content;
     source.fields_msgpack = fields;
-    size_t packed_capacity = lxmf_pack_bound(&source);
-    if (packed_capacity == 0u || packed_capacity > LXMF_STORE_MAX_PACKED)
-        return LXMF_ERR_BOUNDS;
+    lxmf_status_t status = LXMF_OK;
+    const tui_contact_t *recipient = &state->contacts[state->selected];
+    if (recipient->trust == TUI_TRUST_TRUSTED && !recipient->blocked && state->ticket_store != NULL) {
+        lxmf_ticket_entry_t entry = {0};
+        status = lxmf_ticket_store_issue(state->ticket_store, source.destination,
+                                         now_ms / 1000u, &entry, NULL);
+        if (status == LXMF_OK) {
+            if (fields.len > LXMF_MAX_MESSAGE_SIZE - 40u) status = LXMF_ERR_BOUNDS;
+            else {
+                ticket_capacity = fields.len + 40u;
+                ticket_fields = malloc(ticket_capacity);
+                if (ticket_fields == NULL) status = LXMF_ERR_BOUNDS;
+                else {
+                    lxmf_ticket_field_t ticket = {.present = true, .expires_at = entry.expires_at};
+                    memcpy(ticket.ticket, entry.ticket, sizeof ticket.ticket);
+                    size_t length = 0u;
+                    status = lxmf_fields_merge_ticket(fields.data, fields.len, &ticket,
+                        ticket_fields, ticket_capacity, &length);
+                    if (status == LXMF_OK) source.fields_msgpack = (lxmf_slice_t){ticket_fields, length};
+                    rns_hal_secure_zero(&ticket, sizeof ticket);
+                }
+            }
+        } else if (status == LXMF_ERR_PENDING) status = LXMF_OK;
+        rns_hal_secure_zero(&entry, sizeof entry);
+        if (status != LXMF_OK) goto done;
+    }
+    packed_capacity = lxmf_pack_bound(&source);
+    if (packed_capacity == 0u || packed_capacity > LXMF_STORE_MAX_PACKED) {
+        status = LXMF_ERR_BOUNDS; goto done;
+    }
     packed = malloc(packed_capacity);
-    if (packed == NULL) return LXMF_ERR_BOUNDS;
-    lxmf_status_t status = lxmf_pack(&source, lxmf_identity_signer, &state->identity,
+    if (packed == NULL) { status = LXMF_ERR_BOUNDS; goto done; }
+    status = lxmf_pack(&source, lxmf_identity_signer, &state->identity,
                                      packed, packed_capacity, &packed_length);
     if (status != LXMF_OK) goto done;
     status = lxmf_unpack(packed, packed_length, NULL, NULL, &decoded);
@@ -1760,6 +1789,10 @@ static lxmf_status_t queue_outbound(tui_state_t *state, lxmf_slice_t content,
     }
     (void)ingest_message(state, &stored);
 done:
+    if (ticket_fields != NULL) {
+        rns_hal_secure_zero(ticket_fields, ticket_capacity);
+        free(ticket_fields);
+    }
     if (packed != NULL) {
         rns_hal_secure_zero(packed, packed_capacity);
         free(packed);
