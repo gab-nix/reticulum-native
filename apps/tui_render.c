@@ -322,7 +322,7 @@ static void draw_rrc(const tui_state_t *state, const tui_layout_t *layout) {
             state->rrc.info.welcome.hub_name_length, hub_name,
             sizeof hub_name);
         (void)snprintf(caps, sizeof caps,
-            "Hub %s  msg:%zuB room:%zuB rooms:%zu rate:%zu/min resource:%s",
+            "Hub %.96s  msg:%zuB room:%zuB rooms:%zu rate:%zu/min resource:%s",
             hub_name[0] != '\0' ? hub_name : "(unnamed)",
             state->rrc.info.welcome.max_message_bytes,
             state->rrc.info.welcome.max_room_bytes,
@@ -447,17 +447,18 @@ static void draw_config(const tui_state_t *state,
                 "No configuration loaded. Start nomad-chat with --config PATH.");
     } else if (!state->config_valid) {
         char line[TUI_STATUS_MAX];
-        (void)snprintf(line, sizeof line, "Invalid: %s", state->config_path);
+        (void)snprintf(line, sizeof line, "Invalid: %.150s",
+                       state->config_path);
         clipped(stdscr, 5, 2, layout->columns - 4, line);
         if (state->config_diagnostic.message[0] != '\0') {
-            (void)snprintf(line, sizeof line, "Line %zu: %s",
+            (void)snprintf(line, sizeof line, "Line %zu: %.128s",
                            state->config_diagnostic.line,
                            state->config_diagnostic.message);
             clipped(stdscr, 6, 2, layout->columns - 4, line);
         }
     } else {
         char line[384];
-        (void)snprintf(line, sizeof line, "File: %s", state->config_path);
+        (void)snprintf(line, sizeof line, "File: %.376s", state->config_path);
         clipped(stdscr, 5, 2, layout->columns - 4, line);
         (void)snprintf(line, sizeof line,
                        "Transport: %s   Shared instance: %s   Panic on error: %s",

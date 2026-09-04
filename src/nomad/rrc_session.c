@@ -411,7 +411,7 @@ static rns_status_t send_join_record(rns_rrc_session_t *session,
 
 static rns_status_t normalized_room(const rns_rrc_session_t *session,
                                     const uint8_t *input, size_t input_length,
-                                    uint8_t output[RNS_RRC_MAX_ROOM_BYTES],
+                                    uint8_t *output,
                                     size_t *output_length);
 
 static void apply_room_event(rns_rrc_session_t *session,
@@ -765,7 +765,7 @@ rns_status_t rns_rrc_session_member_snapshot(
 
 static rns_status_t normalized_room(const rns_rrc_session_t *session,
                                     const uint8_t *input, size_t input_length,
-                                    uint8_t output[RNS_RRC_MAX_ROOM_BYTES],
+                                    uint8_t *output,
                                     size_t *output_length) {
     if (input == NULL || input_length == 0u || output_length == NULL)
         return RNS_ERROR_INVALID_ARGUMENT;
