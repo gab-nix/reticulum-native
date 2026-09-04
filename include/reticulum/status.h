@@ -4,7 +4,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 typedef enum rns_status {
     RNS_OK = 0,
     RNS_ERROR_INVALID_ARGUMENT,
@@ -26,4 +25,3 @@ const char *rns_status_string(rns_status_t status);
 #endif
 
 #endif
-

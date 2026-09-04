@@ -20,4 +20,3 @@ function(reticulum_set_project_warnings target)
     endif()
     target_compile_options(${target} PRIVATE ${warnings})
 endfunction()
-

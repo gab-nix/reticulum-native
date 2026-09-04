@@ -16,4 +16,3 @@ const char *rns_status_string(rns_status_t status) {
         default: return "unknown error";
     }
 }
-

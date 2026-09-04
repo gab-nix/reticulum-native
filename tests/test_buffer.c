@@ -22,4 +22,3 @@ int main(void) {
     assert(buffer.data == NULL && buffer.len == 0U && buffer.capacity == 0U);
     return 0;
 }
-

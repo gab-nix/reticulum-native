@@ -36,7 +36,6 @@ static rns_status_t clock_ms(clockid_t clock_id, uint64_t *milliseconds) {
     *milliseconds = seconds * 1000U + (uint64_t)value.tv_nsec / 1000000U;
     return RNS_OK;
 }
-
 rns_status_t rns_hal_monotonic_ms(uint64_t *milliseconds) {
     return clock_ms(CLOCK_MONOTONIC, milliseconds);
 }
@@ -165,4 +164,3 @@ void rns_hal_thread_destroy(rns_hal_thread_t *thread) {
         free(thread);
     }
 }
-

@@ -11,7 +11,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 typedef struct rns_tcp_endpoint rns_tcp_endpoint_t;
 
 typedef enum rns_tcp_state {
@@ -68,4 +67,3 @@ rns_status_t rns_tcp_poll_receive(rns_tcp_endpoint_t *endpoint,
 #endif
 
 #endif
-

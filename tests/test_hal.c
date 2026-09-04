@@ -9,7 +9,6 @@ static void *thread_entry(void *context) {
     *value = 42;
     return context;
 }
-
 int main(void) {
     rns_hal_mutex_t *mutex = NULL;
     rns_hal_thread_t *thread = NULL;
@@ -38,4 +37,3 @@ int main(void) {
     rns_hal_thread_destroy(thread);
     return 0;
 }
-

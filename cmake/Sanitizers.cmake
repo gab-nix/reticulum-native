@@ -9,4 +9,3 @@ function(reticulum_enable_sanitizers target sanitizers)
         -fsanitize=${sanitizers} -fno-omit-frame-pointer)
     target_link_options(${target} PUBLIC -fsanitize=${sanitizers})
 endfunction()
-

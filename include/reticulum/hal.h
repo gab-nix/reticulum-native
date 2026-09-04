@@ -9,7 +9,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 typedef struct rns_hal_mutex rns_hal_mutex_t;
 typedef struct rns_hal_thread rns_hal_thread_t;
 typedef void *(*rns_hal_thread_fn)(void *context);
@@ -36,4 +35,3 @@ void rns_hal_thread_destroy(rns_hal_thread_t *thread);
 #endif
 
 #endif
-

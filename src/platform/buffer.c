@@ -11,7 +11,6 @@ void rns_buffer_init(rns_buffer_t *buffer) {
         buffer->capacity = 0U;
     }
 }
-
 void rns_buffer_clear(rns_buffer_t *buffer) {
     if (buffer != NULL) {
         free(buffer->data);
@@ -87,4 +86,3 @@ rns_status_t rns_buffer_append(rns_buffer_t *buffer, const void *data, size_t le
     buffer->len = required;
     return RNS_OK;
 }
-

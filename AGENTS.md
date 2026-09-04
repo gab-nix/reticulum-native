@@ -10,4 +10,3 @@
 - Before each checkpoint run:
   `cmake -S . -B build -G Ninja -DRETICULUM_BUILD_TESTS=ON -DRETICULUM_BUILD_APPS=ON -DRETICULUM_WARNINGS_AS_ERRORS=ON`,
   `cmake --build build`, and `ctest --test-dir build --output-on-failure` where socket permissions permit.
-

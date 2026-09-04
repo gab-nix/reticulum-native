@@ -9,7 +9,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
 typedef struct rns_buffer {
     uint8_t *data;
     size_t len;
@@ -27,4 +26,3 @@ rns_status_t rns_buffer_append(rns_buffer_t *buffer, const void *data, size_t le
 #endif
 
 #endif
-
