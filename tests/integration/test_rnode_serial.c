@@ -352,7 +352,10 @@ static void test_endpoint(void) {
     endpoint_poll_ok(endpoint, &capture);
     rns_rnode_info_t info;
     assert(rns_rnode_endpoint_info(endpoint, &info) == RNS_OK);
-    assert(info.pending_packets == 1U);
+    /* A fast PTY consumer may free enough space for the entire frame during
+     * this poll.  Both retained and fully-drained states are valid, but more
+     * than one queued packet would indicate duplication. */
+    assert(info.pending_packets <= 1U);
     while (peer_process(first_master, &peer) != 0U) {}
     for (size_t attempt = 0U; attempt < 8U && info.pending_packets != 0U;
          ++attempt) {
