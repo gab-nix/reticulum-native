@@ -155,6 +155,25 @@ int main(void) {
         output, sizeof output, &output_length) == LXMF_ERR_FORMAT);
     ticket.present = false;
     assert(lxmf_fields_merge_ticket(NULL, 0u, &ticket, output, sizeof output, &output_length) == LXMF_ERR_ARGUMENT);
+    ticket.present = true;
+    uint8_t crowded[3u + 127u * 2u], crowded_ticket[512], roundtrip[512];
+    crowded[0] = 0xdeu; crowded[1] = 0u;
+    for (size_t i = 0u; i < 127u; ++i) {
+        crowded[3u + 2u*i] = 0xffu; /* Unrelated scalar key and nil value. */
+        crowded[4u + 2u*i] = 0xc0u;
+    }
+    for (size_t count = 125u; count <= 127u; ++count) {
+        crowded[2] = (uint8_t)count;
+        size_t input_length = 3u + count * 2u;
+        lxmf_status_t result = lxmf_fields_merge_ticket(crowded, input_length, &ticket,
+            crowded_ticket, sizeof crowded_ticket, &output_length);
+        if (count == 125u) {
+            assert(result == LXMF_OK);
+            assert(lxmf_fields_merge_ticket(crowded_ticket, output_length, NULL,
+                roundtrip, sizeof roundtrip, &removed_length) == LXMF_OK);
+            assert(removed_length == input_length && memcmp(roundtrip, crowded, input_length) == 0);
+        } else assert(result == LXMF_ERR_BOUNDS && output_length == 0u);
+    }
 
     uint8_t safe[32];
     size_t safe_length = 0u;

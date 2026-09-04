@@ -631,15 +631,22 @@ lxmf_status_t lxmf_fields_merge_ticket(
     if (new_count > FIELDS_MAX_ITEMS) return LXMF_ERR_BOUNDS;
     writer_t writer = {output, capacity};
     if (!put_head(&writer, 5u, new_count)) return LXMF_ERR_BOUNDS;
+    size_t kept_items = 1u; /* Result map header. */
     for (size_t i = 0u; i < count; ++i) {
         const uint8_t *start = reader.p;
+        size_t before_items = reader.items;
         reader_t key_reader = reader;
         uint64_t key = UINT64_MAX;
         bool integer = unsigned_value(&key_reader, &key);
         if (!skip(&reader, 0u) || !skip(&reader, 0u)) return LXMF_ERR_FORMAT;
-        if ((!integer || key != LXMF_FIELD_TICKET) &&
-            !put(&writer, start, (size_t)(reader.p - start))) return LXMF_ERR_BOUNDS;
+        if (!integer || key != LXMF_FIELD_TICKET) {
+            kept_items += reader.items - before_items;
+            if (!put(&writer, start, (size_t)(reader.p - start))) return LXMF_ERR_BOUNDS;
+        }
     }
+    /* Key, array, expiry and ticket bytes add four parsed objects. Do not
+     * generate a map which our bounded reader cannot subsequently consume. */
+    if (kept_items > FIELDS_MAX_ITEMS - (ticket != NULL ? 4u : 0u)) return LXMF_ERR_BOUNDS;
     if (ticket != NULL &&
         (!put_head(&writer, 0u, LXMF_FIELD_TICKET) ||
          !put_head(&writer, 4u, 2u) || !put_head(&writer, 0u, replacement.expires_at) ||

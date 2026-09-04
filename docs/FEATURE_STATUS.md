@@ -53,7 +53,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Ratchet history | WIP | Rotation and enforcement parity |
 | Stamps and asynchronous stamp generation | WIP | Complete cancellation and peer-policy behavior |
 | Tickets | WIP | Complete issuance and renewal workflows |
-| Ticket fields composition | IMPLEMENTED | `test_lxmf_fields` covers add/replace/remove, opaque field preservation, 64-bit expiry, bounds and malformed input; issuance/delivery scheduling remains |
+| Ticket fields composition | IMPLEMENTED | `test_lxmf_fields` covers add/replace/remove, opaque preservation, 64-bit expiry, output object-budget roundtrips, bounds and malformed input; issuance/delivery scheduling remains |
 | Propagation upload | WIP | Automatic scheduling and durable resume |
 | Propagation download and acknowledgement | WIP | Automatic synchronisation and recovery |
 | Paper messages and `lxm://` URIs | IMPLEMENTED | QR rendering and scanning |
