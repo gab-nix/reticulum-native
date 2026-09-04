@@ -66,7 +66,9 @@ static void test_screen_scoping(void) {
         assert(state->screen == (tui_screen_t)screen);
         if (screen != TUI_SCREEN_CONVERSATIONS) {
             assert(tui_dispatch_key(state, 'i'));
-            assert(state->overlay == TUI_OVERLAY_NONE);
+            assert(state->overlay == (screen == TUI_SCREEN_BROWSER ?
+                TUI_OVERLAY_BROWSER_IDENTITY : TUI_OVERLAY_NONE));
+            if (screen == TUI_SCREEN_BROWSER) assert(tui_dispatch_key(state, 27));
             assert(tui_dispatch_key(state, 'p'));
             assert(tui_dispatch_key(state, 'x'));
             assert(tui_dispatch_key(state, 't'));
@@ -451,6 +453,96 @@ static void test_browser_form_keyboard_and_dump(void) {
     state_destroy(state);
 }
 
+static void test_browser_identity_consent(void) {
+    tui_state_t *state = state_create();
+    state->screen = TUI_SCREEN_BROWSER;
+    assert(tui_dispatch_key(state, 'i'));
+    assert(state->overlay == TUI_OVERLAY_BROWSER_IDENTITY && !state->browser_identified);
+    assert(tui_dispatch_key(state, 'N')); /* Modal consumes cross-screen keys. */
+    assert(state->screen == TUI_SCREEN_BROWSER);
+    assert(tui_dispatch_key(state, 27));
+    assert(!state->browser_identified && state->overlay == TUI_OVERLAY_NONE);
+    assert(tui_dispatch_key(state, 'i'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(!state->browser_identified); /* No verified destination or runtime. */
+
+    rns_config_t config;
+    rns_config_init(&config);
+    assert(rns_runtime_create(&state->runtime, &config, NULL) == RNS_OK);
+    assert(rns_browser_create(&state->browser, state->runtime, NULL) == RNS_OK);
+    assert(rns_identity_generate(&state->identity));
+    rns_node_record node = {0};
+    node.kind = RNS_NODE_KIND_NOMAD;
+    node.destination[0] = 0x33u;
+    rns_identity_export_public(&state->identity, node.public_key);
+    assert(rns_node_registry_upsert(&state->nodes, &node));
+    strcpy(state->url, "33000000000000000000000000000000:/page/index.mu");
+    assert(tui_dispatch_key(state, 'i'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->browser_identified && state->browser_identity_destination[0] == 0x33u);
+    assert(state->overlay == TUI_OVERLAY_NONE);
+    /* Disable creates a fresh anonymous browser even if reload is offline. */
+    assert(tui_dispatch_key(state, 'i'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(!state->browser_identified);
+    assert(tui_state_browser_identification(state, true));
+    node.destination[0] = 0x55u;
+    assert(rns_node_registry_upsert(&state->nodes, &node));
+    (void)tui_state_browse(state, "55000000000000000000000000000000:/page/index.mu", false);
+    assert(!state->browser_identified);
+    for (size_t i = 0u; i < sizeof state->browser_identity_destination; ++i)
+        assert(state->browser_identity_destination[i] == 0u);
+    state->overlay = TUI_OVERLAY_BROWSER_IDENTITY;
+    state->screen = TUI_SCREEN_CONVERSATIONS;
+    assert(tui_dispatch_key(state, '\n')); /* Hidden consent cannot identify. */
+    assert(state->overlay == TUI_OVERLAY_NONE && !state->browser_identified);
+    rns_browser_destroy(state->browser);
+    rns_runtime_destroy(state->runtime);
+    state_destroy(state);
+}
+
+static void test_browser_message_handoff(void) {
+    const char *prefixes[] = {"lxmf@", "lxmf.delivery@", "lxmf:", "lxmf://"};
+    for (size_t i = 0u; i < sizeof prefixes / sizeof prefixes[0]; ++i) {
+        tui_state_t *state = state_create();
+        state->contacts[1].trust = TUI_TRUST_TRUSTED;
+        state->contacts[1].blocked = true;
+        state->contacts[1].pinned = true;
+        strcpy(state->contacts[1].note, "Keep this note");
+        memcpy(state->contacts[1].draft, "destination draft", 17u);
+        state->contacts[1].draft_len = 17u;
+        assert(tui_editor_insert(&state->composer, "source draft", 12u));
+        state->screen = TUI_SCREEN_BROWSER;
+        char markup[128];
+        (void)snprintf(markup, sizeof markup,
+                       "`[Message`%s22000000000000000000000000000000]", prefixes[i]);
+        assert(rns_micron_parse(&state->page, (const uint8_t *)markup, strlen(markup)));
+        assert(tui_dispatch_key(state, '\n'));
+        assert(state->screen == TUI_SCREEN_CONVERSATIONS && state->selected == 1u);
+        assert(state->tab == TUI_TRUST_TRUSTED && state->contacts[1].trust == TUI_TRUST_TRUSTED);
+        assert(state->contacts[1].blocked && state->contacts[1].pinned);
+        assert(strcmp(state->contacts[1].note, "Keep this note") == 0);
+        assert(state->contact_count == 2u && !state->send_attempted);
+        assert(state->contacts[0].draft_len == 12u &&
+               memcmp(state->contacts[0].draft, "source draft", 12u) == 0);
+        assert(strcmp(tui_editor_text(&state->composer), "destination draft") == 0);
+        state_destroy(state);
+    }
+    const char *invalid[] = {"lxmf:123", "lxmf://22000000000000000000000000000000/path",
+        "lxmf@zz000000000000000000000000000000", "lxmf.delivery@"};
+    for (size_t i = 0u; i < sizeof invalid / sizeof invalid[0]; ++i) {
+        tui_state_t *state = state_create();
+        state->screen = TUI_SCREEN_BROWSER;
+        char markup[128];
+        (void)snprintf(markup, sizeof markup, "`[Message`%s]", invalid[i]);
+        assert(rns_micron_parse(&state->page, (const uint8_t *)markup, strlen(markup)));
+        assert(tui_dispatch_key(state, '\n'));
+        assert(state->screen == TUI_SCREEN_BROWSER && state->contact_count == 2u);
+        assert(strstr(state->status, "malformed LXMF address") != NULL);
+        state_destroy(state);
+    }
+}
+
 static void test_browser_anchor_navigation(void) {
     static const char markup[] =
         "`[Later`#later] `[Missing`#missing]\n"
@@ -580,6 +672,8 @@ int main(void) {
     test_browser_terminal_escape();
     test_browser_form_keyboard_and_dump();
     test_browser_anchor_navigation();
+    test_browser_identity_consent();
+    test_browser_message_handoff();
     test_network_popup_reasons();
     test_rrc_headless_dump();
     return 0;

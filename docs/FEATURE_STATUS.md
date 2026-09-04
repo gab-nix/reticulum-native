@@ -53,6 +53,8 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Ratchet history | WIP | Rotation and enforcement parity |
 | Stamps and asynchronous stamp generation | WIP | Complete cancellation and peer-policy behavior |
 | Tickets | WIP | Complete issuance and renewal workflows |
+| Ticket delivery throttling | IMPLEMENTED | Packet/link/resource proof completion records included locally issued tickets; `test_lxmf_router_receipt` checks no throttling at socket-send, proof-only throttling, restart and one-day expiry; trusted-contact issuance remains |
+| Ticket fields composition | IMPLEMENTED | `test_lxmf_fields` covers add/replace/remove, opaque preservation, 64-bit expiry, output object-budget roundtrips, bounds and malformed input; issuance/delivery scheduling remains |
 | Propagation upload | WIP | Automatic scheduling and durable resume |
 | Propagation download and acknowledgement | WIP | Automatic synchronisation and recovery |
 | Paper messages and `lxm://` URIs | IMPLEMENTED | QR rendering and scanning |
@@ -71,7 +73,8 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Network discovery and active-node list | WIP | Complete diagnostics and action availability |
 | Persistent node registry | IMPLEMENTED | Long-running expiry and migration coverage |
 | Native Micron browser | WIP | Complete remote forms, files and caching behavior |
-| Opt-in browser link identification | IMPLEMENTED | Pinned UDP/TCP tests check anonymous denial and identified access to `.allowed` pages; credentials copied and erased by the library; explicit TUI identity controls remain |
+| Opt-in browser link identification | IMPLEMENTED | Pinned UDP/TCP tests check anonymous denial and identified access to `.allowed` pages; Browser `i` asks confirmation, scope is one node/session and cross-node navigation resets anonymity; headless consent/scope tests |
+| Browser LXMF conversation handoff | IMPLEMENTED | Headless keyboard tests cover upstream `lxmf@`/`lxmf.delivery@` and explicit `lxmf:`/`lxmf://` address forms, malformed input, preserved trust/block/notes/drafts, and no automatic send |
 | Retained browser page after load failure | IMPLEMENTED | `test_browser_retained` covers loading, malformed UTF-8, cancellation, timeout and subsequent success; page URL remains tied to its successful document |
 | TUI retained-page link origin | IMPLEMENTED | `test_tui_state` resolves relative and root links against the displayed page rather than a failed destination; error screen and headless output expose retained URL |
 | Browser same-node link reuse | IMPLEMENTED | Python UDP/TCP page tests require two pages over one authenticated link; destination or public identity change opens a fresh link |
@@ -122,6 +125,7 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
 | Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform, NVS and crypto adapters exist; target CI compilation and a boot-time KAT are configured, but the crypto host test still uses an OpenSSL symmetric shim and no target/device result is recorded yet |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
+| Bounded RNode split-packet framing codec | IMPLEMENTED | Local boundary, malformed-fragment, duplicate, reorder, timeout, collision, sequence-reuse and callback-failure tests pass; stock RNode interoperability is not yet verified |
 | Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement drivers and validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |

@@ -8,6 +8,7 @@ set(RETICULUM_PORTABLE_SOURCES
     src/destination/destination.c
     src/interfaces/auto.c
     src/interfaces/framing.c
+    src/interfaces/radio_framing.c
     src/link/channel.c
     src/link/link.c
     src/link/request.c

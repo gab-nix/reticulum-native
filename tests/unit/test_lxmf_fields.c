@@ -111,6 +111,70 @@ int main(void) {
                LXMF_STANDARD_ATTACHMENTS, 0u, output, sizeof output,
                &output_length) == LXMF_ERR_ARGUMENT);
 
+    /* Ticket composition preserves opaque extensions, replaces rather than
+     * duplicates a ticket, and can remove it without rewriting other values. */
+    static const uint8_t opaque[] = {0x81u, 0x7fu, 0xd4u, 0x01u, 0x42u};
+    lxmf_ticket_field_t ticket = {.present = true, .expires_at = 1000u};
+    for (size_t i = 0u; i < LXMF_TICKET_LENGTH; ++i) ticket.ticket[i] = (uint8_t)i;
+    uint8_t with_ticket[128], replaced[128], removed[128];
+    size_t with_length = 0u, replaced_length = 0u, removed_length = 0u;
+    assert(lxmf_fields_merge_ticket(opaque, sizeof opaque, &ticket,
+        with_ticket, sizeof with_ticket, &with_length) == LXMF_OK);
+    assert(with_ticket[0] == 0x82u && memcmp(with_ticket + 1u, opaque + 1u, sizeof opaque - 1u) == 0);
+    lxmf_ticket_field_t parsed_ticket;
+    assert(lxmf_fields_parse_ticket(with_ticket, with_length, &parsed_ticket) == LXMF_OK);
+    assert(parsed_ticket.present && parsed_ticket.expires_at == 1000u &&
+           memcmp(parsed_ticket.ticket, ticket.ticket, LXMF_TICKET_LENGTH) == 0);
+    uint8_t duplicate_ticket[128];
+    memcpy(duplicate_ticket, with_ticket, with_length);
+    duplicate_ticket[0] = 0x83u;
+    size_t ticket_pair_length = with_length - sizeof opaque;
+    memcpy(duplicate_ticket + with_length, with_ticket + sizeof opaque, ticket_pair_length);
+    assert(lxmf_fields_merge_ticket(duplicate_ticket, with_length + ticket_pair_length, &ticket,
+        output, sizeof output, &output_length) == LXMF_ERR_FORMAT);
+    ticket.expires_at = UINT64_C(0x100000000);
+    ticket.ticket[0] = 0xa5u;
+    assert(lxmf_fields_merge_ticket(with_ticket, with_length, &ticket,
+        replaced, sizeof replaced, &replaced_length) == LXMF_OK);
+    assert(replaced[0] == 0x82u);
+    assert(lxmf_fields_parse_ticket(replaced, replaced_length, &parsed_ticket) == LXMF_OK);
+    assert(parsed_ticket.expires_at == ticket.expires_at && parsed_ticket.ticket[0] == 0xa5u);
+    assert(lxmf_fields_merge_ticket(replaced, replaced_length, NULL,
+        removed, sizeof removed, &removed_length) == LXMF_OK);
+    assert(removed_length == sizeof opaque && memcmp(removed, opaque, sizeof opaque) == 0);
+    assert(lxmf_fields_merge_ticket(NULL, 0u, &ticket, output, sizeof output, &output_length) == LXMF_OK);
+    assert(lxmf_fields_merge_ticket(with_ticket, with_length, &ticket,
+        with_ticket, sizeof with_ticket, &output_length) == LXMF_ERR_ARGUMENT);
+    for (size_t cap = 0u; cap < with_length; ++cap) {
+        ticket.expires_at = 1000u;
+        assert(lxmf_fields_merge_ticket(opaque, sizeof opaque, &ticket,
+            output, cap, &output_length) == LXMF_ERR_BOUNDS && output_length == 0u);
+    }
+    static const uint8_t malformed_ticket[] = {0x81u, LXMF_FIELD_TICKET, 0xc0u};
+    assert(lxmf_fields_merge_ticket(malformed_ticket, sizeof malformed_ticket, &ticket,
+        output, sizeof output, &output_length) == LXMF_ERR_FORMAT);
+    ticket.present = false;
+    assert(lxmf_fields_merge_ticket(NULL, 0u, &ticket, output, sizeof output, &output_length) == LXMF_ERR_ARGUMENT);
+    ticket.present = true;
+    uint8_t crowded[3u + 127u * 2u], crowded_ticket[512], roundtrip[512];
+    crowded[0] = 0xdeu; crowded[1] = 0u;
+    for (size_t i = 0u; i < 127u; ++i) {
+        crowded[3u + 2u*i] = 0xffu; /* Unrelated scalar key and nil value. */
+        crowded[4u + 2u*i] = 0xc0u;
+    }
+    for (size_t count = 125u; count <= 127u; ++count) {
+        crowded[2] = (uint8_t)count;
+        size_t input_length = 3u + count * 2u;
+        lxmf_status_t result = lxmf_fields_merge_ticket(crowded, input_length, &ticket,
+            crowded_ticket, sizeof crowded_ticket, &output_length);
+        if (count == 125u) {
+            assert(result == LXMF_OK);
+            assert(lxmf_fields_merge_ticket(crowded_ticket, output_length, NULL,
+                roundtrip, sizeof roundtrip, &removed_length) == LXMF_OK);
+            assert(removed_length == input_length && memcmp(roundtrip, crowded, input_length) == 0);
+        } else assert(result == LXMF_ERR_BOUNDS && output_length == 0u);
+    }
+
     uint8_t safe[32];
     size_t safe_length = 0u;
     static const uint8_t unsafe[] = "../../C:\\secret.txt";

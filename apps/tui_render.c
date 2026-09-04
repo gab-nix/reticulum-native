@@ -1147,7 +1147,8 @@ static void draw_micron_line(const tui_state_t *state, const rns_micron_line *li
 
 static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
     char title[RNS_MICRON_TEXT_MAX + 32u];
-    (void)snprintf(title, sizeof title, "Browser  %s", state->url);
+    (void)snprintf(title, sizeof title, "Browser [%s] %s",
+                   state->browser_identified ? "identified" : "anonymous", state->url);
     (void)attron(A_BOLD);
     clipped(stdscr, 3, 1, layout->columns - 2, title);
     (void)attroff(A_BOLD);
@@ -1235,7 +1236,7 @@ static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
                 "Enter apply  Esc cancel  arrows edit");
     } else
         clipped(stdscr, layout->hint_row, 0, layout->columns,
-                "j/k control  Enter edit/toggle/open  Backspace back  r reload  N network");
+                "j/k control  Enter open  Backspace back  r reload  i identity  N network");
 }
 
 static void draw_guide(const tui_layout_t *layout) {
@@ -1317,6 +1318,16 @@ void tui_render_draw(tui_state_t *state) {
     }
     if (state->screen == TUI_SCREEN_BROWSER) {
         draw_browser(state, &layout);
+        if (state->overlay == TUI_OVERLAY_BROWSER_IDENTITY) {
+            const char *lines[] = {
+                state->browser_identified ? "Stop identifying and create a fresh anonymous link?" :
+                    "Reveal your public identity to this node and reload?",
+                state->url,
+                "Applies only to this node, for this session.",
+                "Other nodes remain anonymous. No private keys are sent.",
+                "Enter confirm   Esc cancel"};
+            centered_box("Browser identity", lines, sizeof lines / sizeof lines[0]);
+        }
         (void)refresh();
         return;
     }
@@ -1426,6 +1437,10 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
         return ferror(output) ? -1 : 0;
     }
     if (state->screen == TUI_SCREEN_BROWSER) {
+        (void)fprintf(output, "Browser identity: %s\n",
+                      state->browser_identified ? "identified" : "anonymous");
+        if (state->overlay == TUI_OVERLAY_BROWSER_IDENTITY)
+            (void)fprintf(output, "Confirm browser identity change: Enter confirm, Esc cancel\n");
         (void)fprintf(output, "Screen: Browser\nURL: %s\nPage URL: %s\nControls: %zu\n",
                       state->url, state->page_url, tui_state_browser_control_count(state));
         size_t ordinal = 0u;
