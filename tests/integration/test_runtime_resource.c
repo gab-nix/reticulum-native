@@ -294,7 +294,9 @@ static void test_success_reject_cancel_and_malformed(void) {
         fixture_poll(&fixture);
     assert(rns_runtime_resource_transfer_state(transfer) ==
            RNS_RUNTIME_RESOURCE_COMPLETE);
-    assert(fixture.sender.transfer_callbacks > 2U);
+    /* One bounded request sends this three-part Resource, followed by its
+     * terminal completion callback; duplicate requests are not progress. */
+    assert(fixture.sender.transfer_callbacks == 2U);
     assert(fixture.sender.transfer_status == RNS_OK);
     assert(fixture.receiver.received == 1U);
     assert(fixture.receiver.received_length == sizeof message);

@@ -37,7 +37,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Channels | WIP | Complete channel behavior |
 | Requests and request handlers | IMPLEMENTED | Complete access-policy compatibility |
 | Resource sending and receiving | WIP | Persistent resume and adverse-network recovery |
-| Segmented large resources | IMPLEMENTED | Complete low-MTU and retry behavior |
+| Segmented large resources | IMPLEMENTED | Bounded four-part sliding windows and RTT/airtime-aware retry exhaustion have local unit and runtime coverage; persistent resume and pinned-upstream adverse-network verification remain |
 
 ## LXMF messaging
 
