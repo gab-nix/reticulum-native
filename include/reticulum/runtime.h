@@ -84,6 +84,9 @@ typedef struct rns_runtime_link_options {
     rns_runtime_resource_receive_callback_t resource_receive_callback;
     size_t max_incoming_resource_size;
     void *callback_context;
+    /* Estimated on-air time of one Resource part on constrained media. The
+     * receiver combines this with measured link RTT for retry scheduling. */
+    double resource_part_airtime_seconds;
 } rns_runtime_link_options_t;
 
 typedef enum rns_runtime_resource_state {

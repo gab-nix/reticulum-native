@@ -73,6 +73,16 @@ idf.py set-target esp32s3
 idf.py -D SDKCONFIG_DEFAULTS=sdkconfig.defaults build
 ```
 
+Embedded cryptography uses ESP-IDF 5.5.4 and its Apache-2.0-licensed mbedTLS
+component for SHA-256, HMAC, HKDF and AES-CBC. Ed25519, X25519 and constant-time
+comparison use the ISC-licensed `espressif/libsodium` 1.0.22 component from the
+[ESP Component Registry](https://components.espressif.com/component/espressif/libsodium).
+Neither dependency is vendored. The component manifests pin both versions.
+ESP-IDF generates `dependencies.lock` while resolving registry components; the
+target CI job preserves that generated lock as an artifact until it can be
+reviewed and committed from an actual ESP-IDF build rather than fabricated on a
+host without the ESP-IDF toolchain.
+
 Do not flash or transmit without a suitable 868 MHz antenna. The host test
 suite validates the V3.1 descriptor, but an ESP-IDF firmware build and physical
 board validation remain required before the board support is operational.

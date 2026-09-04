@@ -116,7 +116,7 @@ def main():
         reticulum = RNS.Reticulum(configdir=str(root / "rns"), loglevel=0)
         identity = RNS.Identity()
         router = LXMF.LXMRouter(identity=identity, storagepath=str(root),
-                                 autopeer=False, enforce_stamps=False,
+                                 autopeer=False, enforce_stamps=True,
                                  delivery_limit=2000)
         source = router.register_delivery_identity(identity, "Python live test", stamp_cost=None)
         segmented_field = make_segmented_field()
@@ -127,12 +127,23 @@ def main():
             expected = make_body(expected_size, False)
             expected_fields = ({0x1234: bytes([1, 2, 3])} if index < 2
                                else {0x1234: segmented_field})
+            ordinary_fields = dict(message.fields)
+            ticket = ordinary_fields.pop(LXMF.FIELD_TICKET, None)
+            ticket_valid = (isinstance(ticket, list) and len(ticket) == 2
+                            and ticket[0] > time.time() and isinstance(ticket[1], bytes)
+                            and len(ticket[1]) == LXMF.LXMessage.TICKET_LENGTH) if index == 0 else ticket is None
+            stamp_valid = index == 0 or (message.stamp_valid and
+                message.stamp is not None and len(message.stamp) == LXMF.LXMessage.TICKET_LENGTH)
             valid = (message.signature_validated and message.content == expected
-                     and message.title == b"c-live" and message.fields == expected_fields
+                     and message.title == b"c-live" and ordinary_fields == expected_fields
+                     and ticket_valid and stamp_valid
                      and message.method == LXMF.LXMessage.DIRECT)
             report["python_received"].append({"size": len(message.content),
                 "verified": bool(message.signature_validated), "id": message.hash.hex(),
-                "representation": message.representation, "valid": bool(valid)})
+                "representation": message.representation, "valid": bool(valid),
+                "ticket_present": ticket is not None, "ticket_stamp_valid": bool(index > 0 and stamp_valid)})
+            # Bootstrap with one unstamped ticket offer, then require stamps.
+            source.stamp_cost = 1
             if not valid:
                 report["errors"].append("Python rejected content/signature/method expectations")
 
@@ -181,7 +192,7 @@ def main():
                 if remote and now - last_announce > 3:
                     router.announce(source.hash)
                     last_announce = now
-                if (remote and peer_verified and c_delivered >= 3 and
+                if (remote and peer_verified and c_delivered > len(outbound) and
                         len(outbound) < 3 and
                         len(report["python_proved"]) == len(outbound)):
                     destination = RNS.Destination(remote, RNS.Destination.OUT,
@@ -193,7 +204,8 @@ def main():
                                        else {0x1234: segmented_field})
                     message = LXMF.LXMessage(destination, source, content,
                         title="python-live", fields=outbound_fields,
-                        desired_method=LXMF.LXMessage.DIRECT)
+                        desired_method=LXMF.LXMessage.DIRECT,
+                        include_ticket=len(outbound) == 0, stamp_cost=1)
 
                     def proved(sent):
                         report["python_proved"].append({"id": sent.hash.hex(),
