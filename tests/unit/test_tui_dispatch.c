@@ -276,7 +276,8 @@ static void test_modal_isolation(void) {
             state->overlay = (tui_overlay_t)overlay;
             bool visible = overlay == TUI_OVERLAY_NODE_ACTIONS
                              ? screen == TUI_SCREEN_NETWORK
-                             : screen == TUI_SCREEN_CONVERSATIONS;
+                             : screen == TUI_SCREEN_CONVERSATIONS ||
+                               (overlay == TUI_OVERLAY_LOCAL_QR && screen == TUI_SCREEN_SETTINGS);
             size_t selected = state->selected;
             assert(tui_dispatch_key(state, 'j'));
             assert(state->selected == selected);
@@ -285,7 +286,8 @@ static void test_modal_isolation(void) {
                 assert(tui_dispatch_key(state, 'N'));
                 assert(state->screen == (tui_screen_t)screen);
                 assert(tui_dispatch_key(state, 27));
-                assert(state->overlay == TUI_OVERLAY_NONE);
+                assert(state->overlay == (overlay == TUI_OVERLAY_PEER_QR ?
+                    TUI_OVERLAY_PEER : TUI_OVERLAY_NONE));
             }
             assert(state->field == TUI_FIELD_NONE);
             state_destroy(state);
@@ -658,7 +660,26 @@ static void test_rrc_headless_dump(void) {
     state_destroy(state);
 }
 
+static void test_address_qr_shortcuts(void) {
+    tui_state_t *state = state_create();
+    assert(tui_dispatch_key(state, 'U'));
+    assert(state->overlay == TUI_OVERLAY_LOCAL_QR);
+    assert(tui_dispatch_key(state, '\n') && state->overlay == TUI_OVERLAY_LOCAL_QR);
+    assert(tui_dispatch_key(state, 27) && state->overlay == TUI_OVERLAY_NONE);
+    assert(tui_dispatch_key(state, 'i') && state->overlay == TUI_OVERLAY_PEER);
+    assert(tui_dispatch_key(state, 'q') && state->overlay == TUI_OVERLAY_PEER_QR);
+    assert(tui_dispatch_key(state, 27) && state->overlay == TUI_OVERLAY_PEER);
+    assert(tui_dispatch_key(state, 27) && state->overlay == TUI_OVERLAY_NONE);
+    state->screen = TUI_SCREEN_SETTINGS;
+    assert(tui_dispatch_key(state, 'U') && state->overlay == TUI_OVERLAY_LOCAL_QR);
+    state->screen = TUI_SCREEN_NETWORK;
+    assert(tui_dispatch_key(state, '\n') && state->overlay == TUI_OVERLAY_NONE);
+    assert(tui_dispatch_key(state, 'U') && state->overlay == TUI_OVERLAY_NONE);
+    state_destroy(state);
+}
+
 int main(void) {
+    test_address_qr_shortcuts();
     assert(!tui_dispatch_key(NULL, '\n'));
     test_screen_scoping();
     test_empty_network_and_filtered_contact();

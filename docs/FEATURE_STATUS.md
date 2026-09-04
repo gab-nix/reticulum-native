@@ -91,7 +91,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Map screen | PLANNED | Match upstream 1.2.0 placeholder; a full mapping system is outside this parity baseline |
 | Hosted propagation-node controls | PLANNED | Full implementation |
 | Hosted Node TUI screen | PLANNED | Replace unavailable action with hosting controls and headless acceptance tests |
-| Terminal QR address display | PLANNED | Replace placeholder with actual QR encoding and terminal rendering |
+| Terminal QR address display | IMPLEMENTED | Bounded public-address QR, four-module quiet zone and half-block rendering; `test_tui_qr` checks bounds/rows/layout, headless dispatcher checks modal keys, `tools/test_tui_qr_decode.py` independently decodes synthetic output with pinned zxing-cpp; physical phone scan and paper-message QR remain |
 | RRC persistent room history | PLANNED | Bounded persistence, restart recovery and history UI tests |
 | RRC Resource envelopes | PLANNED | Oversized channel envelope exchange and upstream acceptance |
 
