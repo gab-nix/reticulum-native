@@ -15,6 +15,8 @@ struct rns_browser {
     rns_browser_state_t state;
     rns_status_t error;
     rns_identity identity;
+    rns_identity request_identity;
+    bool link_identified;
     uint8_t destination[16];
     char url[RNS_BROWSER_URL_MAX + 1U];
     char path[RNS_BROWSER_PATH_MAX + 1U];
@@ -149,6 +151,14 @@ static void link_changed(rns_runtime_link_t *link, rns_link_state state,
                          rns_status_t reason, void *context) {
     rns_browser_t *browser = context;
     if (state == RNS_LINK_ACTIVE && browser->receipt == NULL) {
+        if (browser->request_identity.has_private && !browser->link_identified) {
+            rns_status_t identified = rns_runtime_link_identify(link, &browser->request_identity);
+            if (identified != RNS_OK) {
+                browser_fail(browser, identified);
+                return;
+            }
+            browser->link_identified = true;
+        }
         rns_request_options_t options = {
             .timeout_seconds = browser->options.request_timeout_seconds,
             .max_response_size = browser->options.max_response_size,
@@ -170,6 +180,8 @@ rns_status_t rns_browser_create(rns_browser_t **output, rns_runtime_t *runtime,
     if (output == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     *output = NULL;
     if (runtime == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (options != NULL && options->request_identity != NULL &&
+        !options->request_identity->has_private) return RNS_ERROR_INVALID_ARGUMENT;
     if (options != NULL && (!isfinite(options->path_timeout_seconds) ||
                             options->path_timeout_seconds < 0.0))
         return RNS_ERROR_INVALID_ARGUMENT;
@@ -177,6 +189,10 @@ rns_status_t rns_browser_create(rns_browser_t **output, rns_runtime_t *runtime,
     if (browser == NULL) return RNS_ERROR_NO_MEMORY;
     browser->runtime = runtime;
     if (options != NULL) browser->options = *options;
+    if (browser->options.request_identity != NULL) {
+        browser->request_identity = *browser->options.request_identity;
+        browser->options.request_identity = NULL;
+    }
     if (browser->options.path_timeout_seconds == 0.0)
         browser->options.path_timeout_seconds = 10.0;
     if (browser->options.max_response_size == 0U)
@@ -190,6 +206,7 @@ void rns_browser_destroy(rns_browser_t *browser) {
     if (browser == NULL) return;
     rns_request_receipt_destroy(browser->receipt);
     rns_runtime_link_destroy(browser->link);
+    rns_hal_secure_zero(&browser->request_identity, sizeof browser->request_identity);
     free(browser);
 }
 
@@ -217,6 +234,7 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
     if (!reuse) {
         rns_runtime_link_destroy(browser->link);
         browser->link = NULL;
+        browser->link_identified = false;
     }
     memcpy(browser->destination, destination, sizeof destination);
     browser->identity = *node_identity;
