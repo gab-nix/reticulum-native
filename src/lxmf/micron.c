@@ -5,11 +5,9 @@
 #include <string.h>
 
 /*
- * Micron parser. The grammar is the one implemented by the pinned Nomad
- * Network release recorded in docs/COMPATIBILITY.md: an escape character
- * (backtick) introduces a single-character formatting command, and line
- * leading characters select block behaviour. Formatting, alignment, section
- * depth and literal mode latch across lines for the whole document.
+ * Micron parser. A backtick introduces a single-character formatting command,
+ * while leading characters select block behaviour. Formatting, alignment,
+ * section depth and literal mode latch across lines for the whole document.
  */
 
 #define MICRON_DIVIDER_DEFAULT "\xE2\x94\x80" /* U+2500 BOX DRAWINGS LIGHT HORIZONTAL */

@@ -1248,7 +1248,7 @@ static void draw_guide(const tui_layout_t *layout) {
         "Settings: j/k select, Enter edit, announce, start or cancel propagation sync",
         "",
         "Delivery is proof-backed. A queued message is not shown as delivered.",
-        "See docs/TUI.md for setup, persistence, bounds and current limitations."
+        "Feature availability is listed in docs/FEATURE_STATUS.md."
     };
     for (size_t i = 0u; i < sizeof lines / sizeof lines[0]; ++i) {
         int row = 3 + (int)i;
