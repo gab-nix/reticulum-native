@@ -87,6 +87,16 @@ int main(void) {
                                                  request_length));
 
     rns_node_result result;
+    request.data_length = 64;
+    assert(rns_packet_encode(&request, request_raw, sizeof request_raw,
+                             &request_length));
+    assert(rns_node_ingress(&node, request_raw, request_length, 11, 0,
+                            forwarded_raw, sizeof forwarded_raw, &result));
+    assert(result.action == RNS_NODE_DROP &&
+           result.reason == RNS_NODE_REASON_NO_PATH);
+    request.data_length = sizeof request_payload;
+    assert(rns_packet_encode(&request, request_raw, sizeof request_raw,
+                             &request_length));
     assert(rns_node_ingress(&node, request_raw, request_length, 11, 0,
                             forwarded_raw, sizeof forwarded_raw, &result));
     assert(result.action == RNS_NODE_FORWARD &&
@@ -96,6 +106,19 @@ int main(void) {
         &node.transport, initiator.link_id);
     assert(entry != NULL && !entry->validated && entry->taken_hops == 1 &&
            entry->remaining_hops == 1);
+    /* Simulate the selected interface rejecting the request. The pending
+     * route must disappear. */
+    assert(rns_node_complete_forward(&node, &result, 0));
+    assert(rns_transport_link_lookup(&node.transport, initiator.link_id) ==
+           NULL);
+    now += 61;
+    assert(rns_node_ingress(&node, request_raw, request_length, 11, 0,
+                            forwarded_raw, sizeof forwarded_raw, &result));
+    assert(result.action == RNS_NODE_FORWARD);
+    forwarded_length = result.output_length;
+    assert(rns_node_complete_forward(&node, &result, 1));
+    entry = rns_transport_link_lookup(&node.transport, initiator.link_id);
+    assert(entry != NULL && !entry->validated);
 
     /* Link traffic cannot pass before the destination proof authenticates it. */
     uint8_t link_raw[RNS_MTU], output[RNS_MTU];
@@ -129,6 +152,12 @@ int main(void) {
     proof[0] ^= 1;
     assert(rns_packet_encode(&proof_packet, proof_raw, sizeof proof_raw,
                              &proof_length));
+    assert(rns_node_ingress(&node, proof_raw, proof_length, 22, 0, output, 1,
+                            &result));
+    assert(result.action == RNS_NODE_DROP &&
+           result.reason == RNS_NODE_REASON_OUTPUT_TOO_SMALL);
+    entry = rns_transport_link_lookup(&node.transport, initiator.link_id);
+    assert(entry != NULL && !entry->validated);
     assert(rns_node_ingress(&node, proof_raw, proof_length, 22, 0, output,
                             sizeof output, &result));
     assert(result.reason == RNS_NODE_REASON_INVALID_LINK_PROOF);
@@ -139,6 +168,14 @@ int main(void) {
                             sizeof output, &result));
     assert(result.action == RNS_NODE_FORWARD &&
            result.forward_interface_id == 11);
+    assert(rns_node_complete_forward(&node, &result, 0));
+    entry = rns_transport_link_lookup(&node.transport, initiator.link_id);
+    assert(entry != NULL && !entry->validated);
+    assert(rns_node_ingress(&node, proof_raw, proof_length, 22, 0, output,
+                            sizeof output, &result));
+    assert(result.action == RNS_NODE_FORWARD &&
+           result.forward_interface_id == 11);
+    assert(rns_node_complete_forward(&node, &result, 1));
     entry = rns_transport_link_lookup(&node.transport, initiator.link_id);
     assert(entry != NULL && entry->validated);
 
@@ -188,6 +225,12 @@ int main(void) {
     assert(rns_transport_record_link_request(&node.transport, second_id, path,
                                              11, 1));
     now += 0.1;
+    rns_transport_transaction transaction;
+    assert(rns_transport_record_link_request_transaction(
+        &node.transport, third_id, path, 11, 1, &transaction));
+    assert(rns_transport_transaction_rollback(&node.transport, &transaction));
+    assert(rns_transport_link_lookup(&node.transport, first_id) != NULL);
+    assert(rns_transport_link_lookup(&node.transport, third_id) == NULL);
     assert(rns_transport_record_link_request(&node.transport, third_id, path,
                                              11, 1));
     assert(rns_transport_link_lookup(&node.transport, first_id) == NULL);

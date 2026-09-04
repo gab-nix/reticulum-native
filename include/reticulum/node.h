@@ -4,11 +4,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "reticulum/transport.h"
 #include "reticulum/identity.h"
+#include "reticulum/transport.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define RNS_NODE_PATH_REQUEST_CONTEXT 0x00u
-#define RNS_NODE_PATH_RESPONSE_CONTEXT 0x0bu
 #define RNS_NODE_RESOURCE_PROOF_CONTEXT 0x05u
 #define RNS_NODE_LINK_REQUEST_PROOF_CONTEXT 0xffu
 
@@ -50,16 +53,6 @@ typedef struct {
 } rns_node_config;
 
 typedef struct {
-    rns_transport transport;
-    uint8_t transport_id[16];
-    uint8_t path_request_destination[16];
-    uint8_t max_hops;
-    uint8_t *local_destinations;
-    size_t local_destination_capacity;
-    size_t local_destination_count;
-} rns_node;
-
-typedef struct {
     rns_node_action action;
     rns_node_reason reason;
     uint8_t packet_hash[32];
@@ -72,27 +65,45 @@ typedef struct {
     int has_verified_announce;
     uint64_t received_interface_id;
     uint64_t forward_interface_id;
-    rns_path_update_result path_update;
+    rns_path_result path_update;
     rns_identity announce_identity;
     const uint8_t *announce_app_data;
     size_t announce_app_data_length;
     uint64_t announce_timebase;
     int announce_has_ratchet;
-    /* Borrowed from the verified packet body and valid only for the duration
-     * of the runtime announce callback. NULL when no ratchet was announced. */
     const uint8_t *announce_ratchet;
     double received_at;
+    rns_transport_transaction transport_transaction;
 } rns_node_result;
+
+typedef struct {
+    rns_transport transport;
+    uint8_t transport_id[16];
+    uint8_t path_request_destination[16];
+    uint8_t max_hops;
+    uint8_t *local_destinations;
+    size_t local_destination_capacity;
+    size_t local_destination_count;
+} rns_node;
 
 int rns_node_init(rns_node *node, const rns_node_config *config);
 void rns_node_free(rns_node *node);
-int rns_node_register_destination(rns_node *node, const uint8_t destination_hash[16]);
-int rns_node_unregister_destination(rns_node *node, const uint8_t destination_hash[16]);
-
-/* interface metadata is associated with paths learned from verified announces. */
+int rns_node_register_destination(rns_node *node,
+                                  const uint8_t destination_hash[16]);
+int rns_node_unregister_destination(rns_node *node,
+                                    const uint8_t destination_hash[16]);
 int rns_node_ingress(rns_node *node, const uint8_t *raw, size_t raw_length,
-                     uint64_t interface_id, int32_t interface_gravity,
+                     uint64_t received_interface_id, int32_t interface_gravity,
                      uint8_t *output, size_t output_capacity,
                      rns_node_result *result);
+/* Completes the synchronous FORWARD decision after the caller attempts the
+ * selected interface transmission. A false sent value restores transport
+ * state exactly to its pre-ingress value. */
+int rns_node_complete_forward(rns_node *node, rns_node_result *result,
+                              int sent);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

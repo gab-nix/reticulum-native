@@ -46,6 +46,18 @@ int main(void) {
     assert(rns_node_ingress(&node, raw, raw_length, 42, 1, output, sizeof(output), &result));
     assert(result.action == RNS_NODE_DROP && result.reason == RNS_NODE_REASON_DUPLICATE);
 
+    /* A repeated emission is still eligible when observed on an interface
+     * with strictly higher gravity. */
+    assert(rns_node_ingress(&node, raw, raw_length, 43, 2, output,
+                            sizeof output, &result));
+    assert(result.action == RNS_NODE_REBROADCAST &&
+           result.path_update == RNS_PATH_UPDATED);
+    const rns_path_entry *higher_gravity_path =
+        rns_transport_lookup(&node.transport, destination);
+    assert(higher_gravity_path != NULL &&
+           higher_gravity_path->interface_id == 43U &&
+           higher_gravity_path->interface_gravity == 2);
+
     /* A newer verified announce exposes its exact public ratchet only for the
      * callback lifetime; consumers can copy it into bounded durable state. */
     uint8_t ratchet[32]; fill(ratchet, sizeof ratchet, 0x5a);

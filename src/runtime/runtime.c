@@ -1158,15 +1158,19 @@ static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, s
         runtime->packet_callback(runtime, packet, length, &result, runtime->callback_context);
     if (result.has_verified_announce && runtime->announce_callback != NULL)
         runtime->announce_callback(runtime, &result, runtime->callback_context);
-    if ((runtime->config.enable_transport || runtime->shared_server) &&
-        result.action == RNS_NODE_FORWARD) {
+    if (result.action == RNS_NODE_FORWARD) {
         bool forwarded = false;
-        for (size_t i = 0U; i < runtime->interface_count; ++i)
-            if (runtime->interfaces[i].info.id == result.forward_interface_id) {
-                (void)send_internal(runtime, i, output, result.output_length);
-                forwarded = true;
-                break;
-            }
+        if (runtime->config.enable_transport || runtime->shared_server)
+            for (size_t i = 0U; i < runtime->interface_count; ++i)
+                if (runtime->interfaces[i].info.id ==
+                    result.forward_interface_id) {
+                    forwarded = send_internal(runtime, i, output,
+                                              result.output_length) == RNS_OK;
+                    break;
+                }
+        if (!rns_node_complete_forward(&runtime->node, &result,
+                                       forwarded ? 1 : 0))
+            return RNS_ERROR_INVALID_STATE;
         if (!forwarded) source->info.packets_dropped++;
     } else if ((runtime->config.enable_transport || runtime->shared_server) &&
                result.action == RNS_NODE_REBROADCAST) {

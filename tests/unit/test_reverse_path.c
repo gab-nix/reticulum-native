@@ -122,11 +122,34 @@ int main(void) {
     fill(destination, sizeof destination, 0x66);
     install_path(&node, destination, 22, 0x33);
 
+    /* A runtime interface-send failure rolls back the just-recorded reverse
+     * route instead of leaving proof state for a packet that never left. */
+    raw_length = encode_data(&node, destination, 0xf0, raw);
+    uint8_t failed_hash[32];
+    assert(rns_packet_hash(raw, raw_length, failed_hash));
+    assert(rns_node_ingress(&node, raw, raw_length, 11, 0, output,
+                            sizeof output, &result));
+    assert(result.action == RNS_NODE_FORWARD);
+    assert(rns_node_complete_forward(&node, &result, 0));
+    raw_length = encode_proof(failed_hash, 0, RNS_PACKET_HEADER_1, 0xf1, 64,
+                              raw);
+    assert(rns_node_ingress(&node, raw, raw_length, 22, 0, output,
+                            sizeof output, &result));
+    assert(result.reason == RNS_NODE_REASON_NO_REVERSE_PATH);
+
     /* Explicit and implicit ordinary proofs traverse the recorded hop. */
     forward_data(&node, destination, 11, 1, explicit_hash);
     forward_proof(&node, explicit_hash, 96, 0xa1);
     now += 0.1;
     forward_data(&node, destination, 11, 2, implicit_hash);
+    raw_length = encode_proof(implicit_hash, 0, RNS_PACKET_HEADER_1, 0xa2,
+                              64, raw);
+    assert(rns_node_ingress(&node, raw, raw_length, 22, 0, output, 1,
+                            &result));
+    assert(result.action == RNS_NODE_DROP &&
+           result.reason == RNS_NODE_REASON_OUTPUT_TOO_SMALL);
+    /* Failed output encoding must not deduplicate the proof or consume the
+     * reverse route. */
     forward_proof(&node, implicit_hash, 64, 0xa2);
 
     /* The same proof cannot loop after its packet hash was accepted. */
