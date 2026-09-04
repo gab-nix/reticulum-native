@@ -1,9 +1,15 @@
-# reticulum-c
+# Reticulum C
 
 A portable C17 implementation of the Reticulum networking stack and LXMF client.
 The project is under active development. Pinned protocol fixtures and specific
 live Python interoperability checks exist, but the complete acceptance matrix
 has not passed. This is not yet a drop-in replacement for Nomad Network.
+
+> **Development disclosure:** Reticulum C was designed and implemented with
+> extensive assistance from [OpenAI Codex](https://openai.com/codex/), under
+> human direction and review. It is an independent clean-room project and is
+> not affiliated with or endorsed by the Reticulum, LXMF, Nomad Network, or
+> OpenAI maintainers.
 
 See the [release summary](docs/IMPLEMENTATION_STATUS.md) and canonical
 [feature ledger](docs/FEATURE_STATUS.md) for implemented behavior, evidence and
@@ -89,7 +95,7 @@ See [docs/TCP_SETUP.md](docs/TCP_SETUP.md) for direct TCP configuration,
 The native library and early client include:
 
 - UDP/TCP networking, verified announces, packet receipts, authenticated inbound
-  and outbound links, request handlers, and single-segment Resource transfer.
+  and outbound links, request handlers, and bounded segmented Resource transfer.
 - Proof-backed direct LXMF over reusable links and Resources, opportunistic
   packets, ratchet history, ticket reuse, bounded asynchronous stamp generation,
   and durable delivery state. Accepted incoming messages retain their full
@@ -111,12 +117,12 @@ codec/storage bound does not imply that all messages of that size can be
 delivered: the history content-preview admission limit is 4 KiB and the journal
 quota is 16 MiB.
 
-Major remaining work includes integrating and verifying multi-segment transfer
-across application delivery paths plus persistent resume; complete retry and
-offline propagation workflows; full Micron forms, executable pages and remote
-file downloads; hosted-node/propagation application controls; complete RRC and
-remaining TUI workflows; multi-hop transport parity; upstream verification of
-AutoInterface, shared IPC, KISS and RNode; and physical RNode validation.
+Major remaining work includes persistent Resource resume and adverse-network
+recovery; complete retry and offline propagation workflows; live verification
+of Micron forms and anchors, executable pages and remote file downloads;
+hosted-node/propagation application controls; complete RRC and remaining TUI
+workflows; multi-hop transport parity; upstream verification of AutoInterface,
+shared IPC, KISS and RNode; and physical RNode validation.
 
 ## Interoperability evidence
 
@@ -130,3 +136,23 @@ Python-generated fixtures and C-to-C tests cover additional layers but are not
 substitutes for the complete upstream matrix. The feature ledger and linked
 reports record the exact scope of each result; no full NomadNet or Reticulum
 parity is claimed.
+
+## Security and private data
+
+Treat every checkout as though it may become public. Never commit Reticulum
+identities or private keys, LXMF histories and companion stores, local settings,
+private interface configuration, packet captures, or message logs. The supplied
+Git ignore rules cover the common generated names, but they are not a substitute
+for reviewing every staged change before committing. See
+[SECURITY.md](SECURITY.md) for vulnerability reporting and the repository's
+public-safety policy.
+
+The tracked `config/public-tcp.conf` is a non-secret example containing public
+TCP endpoints. Put machine-specific changes in a separately named ignored local
+configuration such as `config/client.local.conf`.
+
+## License
+
+No open-source license has been selected yet. Until a license file is added,
+copyright remains with the contributors and publication of the source does not
+grant permission to copy, modify, or redistribute it.

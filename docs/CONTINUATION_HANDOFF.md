@@ -36,7 +36,7 @@ copy of the Python/Urwid UI.
 
 ## Current checkpoint
 
-The main branch entering this documentation checkpoint is `3051b84`.
+The main branch entering this documentation checkpoint is `6148dfe`.
 The warning-as-error build contains 90 registered tests. At that checkpoint all
 90 passed, and focused ASan/UBSan tests passed for direct delivery, reply and
 reaction composition, Micron forms, browser state and anchor navigation. Always
@@ -100,24 +100,13 @@ The main checkout has a user-owned modification to
 `node.reticulumnet.nl:4242` remains. Do not stage, overwrite, restore or commit
 that file unless the user explicitly asks.
 
-The `.claude/` worktrees are separately owned and must remain quarantined until
-reviewed. Do not delete them, reset them or merge them wholesale.
+## Recovered feature work
 
-## Recovered and quarantined isolated work
-
-The older worktrees below are no longer merge candidates. Their useful behavior
-was reviewed, corrected, ported onto fresh branches from current main, tested,
-committed and merged. Keep the old worktrees quarantined until they can be
-removed deliberately; do not merge their stale branches.
+Earlier experimental work was reviewed selectively, corrected, tested and
+merged as the focused commits named below. The obsolete worktrees and branches
+are not merge candidates and have been removed.
 
 ### 1. Multi-segment direct LXMF delivery
-
-- Worktree: `/private/tmp/reticulum-lxmf-multisegment`
-- Branch: `codex/lxmf-multisegment-direct`
-- Base: `7fd9e76`
-- Uncommitted scope: 6 files, approximately 222 insertions and 12 deletions.
-- Touched areas: runtime public API, runtime Resource dispatch, LXMF send path,
-  direct-router integration tests and the feature ledger.
 
 Recovered as `9e38600` and verified narrowly against pinned Python in
 `93c1aa8`. Further work is adverse-network retry timing, reconnect, relay-hop
@@ -125,42 +114,20 @@ and persistent-resume coverage, not another recovery of this worktree.
 
 ### 2. Conversation reply and reaction composition
 
-- Worktree: `/private/tmp/reticulum-reply-reaction`
-- Branch: `codex/conversation-reply-reaction`
-- Base: `0655f49`
-- Uncommitted scope: 5 files, approximately 247 insertions and 18 deletions.
-- Touched areas: TUI state, dispatcher and renderer.
-
 Recovered as `816adba` with stable copied target IDs, bounded valid UTF-8 reply
 quotes, preserved drafts and headless tests. A true per-message cursor remains.
 
 ### 3. Micron forms, anchors and caching
-
-- Worktree: `/private/tmp/reticulum-browser-forms`
-- Branch: `codex/browser-forms-cache`
-- Base: `843d1c3`
-- Uncommitted scope: 12 tracked files, approximately 662 insertions and 42
-  deletions, plus untracked
-  `tests/fixtures/micron_forms.provenance.json`.
-- Touched areas: Micron/browser APIs and parser, TUI state/rendering, unit tests
-  and the feature ledger.
 
 The form subset was reviewed and recovered as `82ed409`; its empty-selector
 behavior and public input bounds were corrected before merge. Anchor parsing and
 navigation were added separately in `3051b84`. Cache directives, form-bearing
 history, downloads and live stock-node exchanges remain.
 
-### 4. Claude Resource experiment
-
-- Worktree: `.claude/worktrees/agent-a1b92701ef3f668f6`
-- Branch: `worktree-agent-a1b92701ef3f668f6`
-- Uncommitted scope: 5 files, approximately 1,106 insertions and 215 deletions.
-- Touched areas: Resource/runtime public APIs, Resource implementation and
-  tests.
-
-This overlaps the current Resource and multi-segment work heavily. Treat it as
-an experiment to audit for useful cases, not as a merge candidate. The other
-Claude worktree, `agent-a1838e0c5e83f7047`, was clean at this checkpoint.
+The obsolete `.claude/` worktrees and their branches were deliberately removed
+after the useful behavior had been independently reviewed and implemented. Do
+not recreate or recover those stale experiments; continue from current `main`
+on a fresh `codex/` worktree.
 
 ## Recommended continuation order
 
@@ -248,8 +215,9 @@ socket write or propagation-node upload is not recipient delivery.
   pinned-Python evidence. This is not complete messaging parity.
 - Static hosted pages and a propagation client API exist, but full hosted-node
   controls, propagation-node operation and automatic client scheduling do not.
-- The native browser loads basic remote Micron pages, but forms, anchors,
-  caching, richer constructs and stock-node evidence remain incomplete.
+- The native browser loads basic remote Micron pages and locally supports a
+  bounded form and anchor subset. Caching, richer constructs, downloads and
+  stock-node evidence remain incomplete.
 - The RRC client completes one narrow pinned-schema UDP exchange; the full room
   and hub experience remains unfinished.
 
