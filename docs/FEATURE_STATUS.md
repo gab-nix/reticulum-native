@@ -46,7 +46,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Message codec, signatures and unknown fields | IMPLEMENTED | Broader compatibility coverage |
 | Standard reply, reaction, thread and media fields | IMPLEMENTED | Complete user-facing workflows |
 | Opportunistic packet delivery | IMPLEMENTED | Complete ratchet and retry workflows |
-| Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior |
+| Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior; integration test IDs are distinct from random wire hashes |
 | Direct resource delivery | IMPLEMENTED | Persistent transfer resume |
 | Delivery proofs and durable queue state | IMPLEMENTED | Complete offline retry scheduling |
 | Incoming block, size and stamp policies | IMPLEMENTED | Complete policy controls |
@@ -96,11 +96,12 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 
 | Acceptance behavior | Status | Evidence and remaining work |
 | --- | --- | --- |
-| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Five opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
+| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Seven opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
 | Direct packet and multi-segment LXMF, UDP/TCP | VERIFIED | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp` pass bidirectionally with pinned Python; loss/restart scenarios remain outside this evidence |
 | Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
 | RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |
-| Stock Nomad page/form/file acceptance | PLANNED | Add bidirectional client/host live drivers |
+| C browser to pinned Nomad page handler, UDP/TCP | IMPLEMENTED | `interop_browser_udp` and `interop_browser_tcp` validate small and resource-backed rendered pages; reverse-direction C hosting remains |
+| Stock Nomad form/file acceptance | PLANNED | Add bidirectional client/host live drivers |
 | Complete keyboard workflow acceptance | WIP | Existing headless tests cover subsets; every screen/action needs mapped cases |
 | Remote hosted file transfer | PLANNED | Hosted files currently support local reads only; add upstream file metadata/resource exchange |
 | Large browser form requests | PLANNED | Browser currently caps encoded forms at 403 bytes; add resource-backed request acceptance |
