@@ -24,9 +24,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev ninja-build
+        run: sudo apt-get update && sudo apt-get install -y libsodium-dev libssl-dev ninja-build
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install libsodium
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DRETICULUM_BUILD_TESTS=ON -DRETICULUM_WARNINGS_AS_ERRORS=ON
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DRETICULUM_BUILD_TESTS=ON
+          -DRETICULUM_WARNINGS_AS_ERRORS=ON
+          -DRETICULUM_REQUIRE_ESP_CRYPTO_HOST_TESTS=ON
       - name: Build
         run: cmake --build build
       - name: Test
@@ -38,7 +45,11 @@ jobs:
       CC: clang
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libssl-dev ninja-build
-      - run: cmake -S . -B build -G Ninja -DRETICULUM_BUILD_TESTS=ON -DRETICULUM_SANITIZERS=address,undefined
+      - run: sudo apt-get update && sudo apt-get install -y libsodium-dev libssl-dev ninja-build
+      - run: >-
+          cmake -S . -B build -G Ninja
+          -DRETICULUM_BUILD_TESTS=ON
+          -DRETICULUM_SANITIZERS=address,undefined
+          -DRETICULUM_REQUIRE_ESP_CRYPTO_HOST_TESTS=ON
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure

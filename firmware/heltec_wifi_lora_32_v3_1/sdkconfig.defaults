@@ -13,6 +13,14 @@ CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
 CONFIG_COMPILER_WARN_WRITE_STRINGS=y
 CONFIG_COMPILER_OPTIMIZATION_DEFAULT=y
 
+# Reticulum crypto primitives. ESP-IDF selects ESP32-S3 accelerated AES and
+# SHA implementations where the configured operation supports them.
+CONFIG_MBEDTLS_AES_C=y
+CONFIG_MBEDTLS_SHA256_C=y
+CONFIG_MBEDTLS_HKDF_C=y
+CONFIG_MBEDTLS_HARDWARE_AES=y
+CONFIG_MBEDTLS_HARDWARE_SHA=y
+
 # Never enable flash encryption or eFuse operations from development defaults.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
