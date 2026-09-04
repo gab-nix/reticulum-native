@@ -1,0 +1,11 @@
+function(reticulum_enable_sanitizers target sanitizers)
+    if(MSVC)
+        message(FATAL_ERROR "RETICULUM_SANITIZERS is not supported with MSVC")
+    endif()
+    if(NOT sanitizers MATCHES "^[a-z]+(,[a-z]+)*$")
+        message(FATAL_ERROR "Invalid RETICULUM_SANITIZERS value: ${sanitizers}")
+    endif()
+    target_compile_options(${target} PUBLIC
+        -fsanitize=${sanitizers} -fno-omit-frame-pointer)
+    target_link_options(${target} PUBLIC -fsanitize=${sanitizers})
+endfunction()
