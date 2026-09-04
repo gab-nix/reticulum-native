@@ -445,7 +445,7 @@ static void test_browser_form_keyboard_and_dump(void) {
 
     assert(tui_dispatch_key(state, '\n'));
     assert(strstr(state->status, "Configure a network interface") != NULL);
-    free(state);
+    state_destroy(state);
 }
 
 static void test_browser_anchor_navigation(void) {

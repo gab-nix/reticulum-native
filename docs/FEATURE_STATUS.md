@@ -18,7 +18,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | TCP client and server interfaces | IMPLEMENTED | Broader reconnect and topology coverage |
 | AutoInterface | IMPLEMENTED | Broader platform compatibility |
 | Shared-instance local IPC | IMPLEMENTED | Complete shared-instance behavior |
-| KISS serial | IMPLEMENTED | Hardware interoperability coverage |
+| KISS serial | IMPLEMENTED | Hardware interoperability coverage; nonblocking backpressure CI coverage exists |
 | RNode serial | IMPLEMENTED | Hardware interoperability coverage; bounded chunked-handshake CI coverage exists |
 | IFAC processing | IMPLEMENTED | Broader interface integration |
 | Transport forwarding and reverse paths | WIP | Complete multi-hop transport behavior |
