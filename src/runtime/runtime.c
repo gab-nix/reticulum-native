@@ -32,6 +32,7 @@
      ((RNS_RUNTIME_MAX_LINKS * RNS_RESOURCE_WINDOW_MAX) + 2U))
 #define RUNTIME_TCP_RECONNECT_INITIAL 1.0
 #define RUNTIME_TCP_RECONNECT_MAX 30.0
+#define RUNTIME_RESOURCE_REQUEST_RETRY_SECONDS 0.25
 
 typedef struct runtime_interface {
     rns_runtime_interface_info_t info;
@@ -65,6 +66,7 @@ struct rns_runtime_link {
     rns_request_receipt_t *resource_receipt;
     bool resource_application;
     double resource_deadline;
+    double resource_request_retry_at;
     uint8_t resource_hash[RNS_RESOURCE_HASH_SIZE];
     uint8_t resource_original_hash[RNS_RESOURCE_HASH_SIZE];
     uint8_t *resource_assembled;
@@ -438,6 +440,7 @@ static void resource_release(rns_runtime_link_t *link) {
     link->resource_receipt = NULL;
     link->resource_application = false;
     link->resource_deadline = 0.0;
+    link->resource_request_retry_at = 0.0;
     memset(link->resource_hash, 0, sizeof link->resource_hash);
     memset(link->resource_original_hash, 0,
            sizeof link->resource_original_hash);
@@ -589,7 +592,12 @@ static rns_status_t resource_request_parts(rns_runtime_link_t *link) {
     rns_status_t status = rns_resource_build_request(link->resource, body,
                                                      sizeof body, &body_length);
     if (status != RNS_OK) return status;
-    return link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_REQ, body, body_length);
+    status = link_send_plain2(link, RNS_LINK_CONTEXT_RESOURCE_REQ, body,
+                              body_length);
+    if (status == RNS_OK)
+        link->resource_request_retry_at =
+            runtime_clock(NULL) + RUNTIME_RESOURCE_REQUEST_RETRY_SECONDS;
+    return status;
 }
 
 /* Returns true when the advertisement was taken over by the resource layer. */
@@ -767,9 +775,10 @@ static bool resource_part(rns_runtime_link_t *link, const uint8_t *plaintext,
     link->resource_deadline = link->last_inbound +
         (link->options.timeout_seconds > 0.0 ? link->options.timeout_seconds
                                              : 30.0);
-    if (rns_resource_parts_complete(link->resource)) resource_complete(link);
-    else if (resource_request_parts(link) != RNS_OK) {
-        /* Nothing outstanding in this window; the sender keeps streaming. */
+    if (rns_resource_parts_complete(link->resource)) {
+        resource_complete(link);
+    } else if (resource_request_parts(link) != RNS_OK) {
+        incoming_resource_abort(link, RNS_ERROR_IO);
     }
     return true;
 }
@@ -1681,6 +1690,11 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
             link->resource_deadline > 0.0 &&
             now >= link->resource_deadline)
             incoming_resource_abort(link, RNS_ERROR_TIMEOUT);
+        else if (link->resource != NULL &&
+                 link->resource_request_retry_at > 0.0 &&
+                 now >= link->resource_request_retry_at &&
+                 resource_request_parts(link) != RNS_OK)
+            incoming_resource_abort(link, RNS_ERROR_IO);
         if ((link->protocol.state == RNS_LINK_PENDING ||
              link->protocol.state == RNS_LINK_HANDSHAKE) &&
             rns_link_check_timeout(&link->protocol)) {

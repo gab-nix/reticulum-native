@@ -124,6 +124,17 @@ static void test_plain_transfer(void) {
     size_t requested = (request_length - 33u) / RNS_RESOURCE_MAPHASH_LEN;
     assert(requested == RNS_RESOURCE_WINDOW || requested == parts);
 
+    /* Receiving one part advances the sliding window by one instead of
+     * requesting every still-outstanding part again. */
+    assert(parts > RNS_RESOURCE_WINDOW);
+    assert(rns_resource_receive_part(resource, stream, part_size) == RNS_OK);
+    assert(rns_resource_build_request(resource, request, sizeof request,
+                                      &request_length) == RNS_OK);
+    assert((request_length - 33u) / RNS_RESOURCE_MAPHASH_LEN == 1u);
+    assert(memcmp(request + 33u,
+                  hashmap + RNS_RESOURCE_WINDOW * RNS_RESOURCE_MAPHASH_LEN,
+                  RNS_RESOURCE_MAPHASH_LEN) == 0);
+
     /* Deliver the parts out of order; matching is by map hash, not arrival. */
     for (size_t k = 0u; k < parts; ++k) {
         size_t i = (k * 3u) % parts;

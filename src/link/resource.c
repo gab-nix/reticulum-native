@@ -21,6 +21,7 @@ struct rns_resource {
     size_t known_hashes;
     uint8_t **parts;
     size_t *part_lengths;
+    bool *requested;
     size_t received;
     bool waiting;
     bool assembled;
@@ -281,8 +282,9 @@ rns_status_t rns_resource_accept(rns_resource_t **out,
     resource->map_hashes = calloc(1U, map_bytes);
     resource->parts = calloc(adv->parts, sizeof *resource->parts);
     resource->part_lengths = calloc(adv->parts, sizeof *resource->part_lengths);
+    resource->requested = calloc(adv->parts, sizeof *resource->requested);
     if (resource->map_hashes == NULL || resource->parts == NULL ||
-        resource->part_lengths == NULL) {
+        resource->part_lengths == NULL || resource->requested == NULL) {
         rns_resource_destroy(resource);
         return RNS_ERROR_NO_MEMORY;
     }
@@ -315,6 +317,7 @@ void rns_resource_destroy(rns_resource_t *resource) {
     }
     free(resource->part_lengths);
     free(resource->parts);
+    free(resource->requested);
     free(resource->map_hashes);
     free(resource);
 }
@@ -370,6 +373,7 @@ rns_status_t rns_resource_receive_part(rns_resource_t *resource,
         memcpy(copy, part, part_length);
         resource->parts[i] = copy;
         resource->part_lengths[i] = part_length;
+        resource->requested[i] = false;
         resource->received++;
         return RNS_OK;
     }
@@ -384,18 +388,27 @@ rns_status_t rns_resource_build_request(rns_resource_t *resource,
     if (rns_resource_parts_complete(resource)) return RNS_ERROR_INVALID_STATE;
     size_t missing[RNS_RESOURCE_WINDOW];
     size_t count = 0U;
-    for (size_t i = 0U; i < resource->known_hashes && count < RNS_RESOURCE_WINDOW;
-         ++i) {
-        if (resource->parts[i] == NULL) missing[count++] = i;
-    }
+    for (size_t i = 0U;
+         i < resource->known_hashes && count < RNS_RESOURCE_WINDOW; ++i)
+        if (resource->parts[i] == NULL && !resource->requested[i])
+            missing[count++] = i;
+    /* If every missing part is already in flight, repeat the oldest window.
+     * This repairs a completely lost request or response without flooding a
+     * duplicate full window after every successfully received part. */
+    if (count == 0U)
+        for (size_t i = 0U;
+             i < resource->known_hashes && count < RNS_RESOURCE_WINDOW; ++i)
+            if (resource->parts[i] == NULL) missing[count++] = i;
     if (count != 0U) {
         size_t needed = 1U + RNS_RESOURCE_HASH_SIZE + count * 4U;
         if (capacity < needed) return RNS_ERROR_OVERFLOW;
         out[0] = 0x00U;
         memcpy(out + 1U, resource->advertisement.hash, RNS_RESOURCE_HASH_SIZE);
-        for (size_t i = 0U; i < count; ++i)
+        for (size_t i = 0U; i < count; ++i) {
             memcpy(out + 33U + i * 4U,
                    resource->map_hashes + missing[i] * 4U, 4U);
+            resource->requested[missing[i]] = true;
+        }
         *out_length = needed;
         resource->waiting = false;
         return RNS_OK;
