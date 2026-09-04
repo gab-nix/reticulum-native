@@ -15,6 +15,9 @@ extern "C" {
 
 #define RNS_BROWSER_URL_MAX 1024u
 #define RNS_BROWSER_PATH_MAX 768u
+/* With the current 500-byte packet ceiling this leaves room for the request
+ * tuple, link token IV/MAC/padding and Reticulum packet header. */
+#define RNS_BROWSER_FORM_MAX 403u
 
 typedef struct rns_browser rns_browser_t;
 

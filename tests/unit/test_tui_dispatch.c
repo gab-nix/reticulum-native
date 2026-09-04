@@ -16,6 +16,7 @@ static tui_state_t *state_create(void) {
     tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
+    tui_editor_init(&state->browser_editor, RNS_MICRON_FORM_VALUE_MAX);
     tui_settings_defaults(&state->settings);
     tui_rrc_init(&state->rrc);
     rns_node_registry_init(&state->nodes, 3600.0);
@@ -188,11 +189,14 @@ static void test_event_log_screen(void) {
 
 static void test_hidden_editors(void) {
     for (int screen = 0; screen < TUI_SCREEN_COUNT; ++screen) {
-        for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_REACTION; ++field) {
+        for (int field = TUI_FIELD_COMPOSE;
+             field <= TUI_FIELD_BROWSER_FORM; ++field) {
             bool visible = field == TUI_FIELD_SETTING
                              ? screen == TUI_SCREEN_SETTINGS
                              : field == TUI_FIELD_RRC
                                    ? screen == TUI_SCREEN_RRC
+                             : field == TUI_FIELD_BROWSER_FORM
+                                   ? screen == TUI_SCREEN_BROWSER
                              : field == TUI_FIELD_NODE_SEARCH
                                    ? screen == TUI_SCREEN_NETWORK
                                    : screen == TUI_SCREEN_CONVERSATIONS;
@@ -206,6 +210,7 @@ static void test_hidden_editors(void) {
             assert(tui_editor_insert_byte(&state->search, 's'));
             assert(tui_editor_insert_byte(&state->node_search, 'n'));
             assert(tui_editor_insert_byte(&state->reaction, 'r'));
+            assert(tui_editor_insert_byte(&state->browser_editor, 'b'));
             tui_settings_t saved = state->settings;
             assert(tui_dispatch_key(state, '\n'));
             assert(state->screen == (tui_screen_t)screen);
@@ -216,6 +221,7 @@ static void test_hidden_editors(void) {
             assert(strcmp(tui_editor_text(&state->search), "s") == 0);
             assert(strcmp(tui_editor_text(&state->node_search), "n") == 0);
             assert(strcmp(tui_editor_text(&state->reaction), "r") == 0);
+            assert(strcmp(tui_editor_text(&state->browser_editor), "b") == 0);
             assert(memcmp(&saved, &state->settings, sizeof saved) == 0);
             assert(state->message_count == 0u);
             state_destroy(state);
@@ -395,6 +401,53 @@ static void test_browser_terminal_escape(void) {
     state_destroy(state);
 }
 
+static void test_browser_form_keyboard_and_dump(void) {
+    static const char markup[] =
+        "Name: `<user`alice>\n"
+        "`<?|news|yes`Subscribe>\n"
+        "`[Submit`:/page/result.mu`user|news]\n";
+    tui_state_t *state = state_create();
+    state->screen = TUI_SCREEN_BROWSER;
+    assert(rns_micron_parse(&state->page, (const uint8_t *)markup,
+                            sizeof markup - 1u));
+    rns_micron_form_init(&state->form, &state->page);
+    assert(tui_state_browser_control_count(state) == 3u);
+
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_BROWSER_FORM);
+    assert(tui_dispatch_key(state, 21)); /* clear current text */
+    assert(tui_dispatch_key(state, 'b'));
+    assert(tui_dispatch_key(state, 'o'));
+    assert(tui_dispatch_key(state, 'b'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_NONE);
+    assert(strcmp(state->form.controls[0].value, "bob") == 0);
+
+    assert(tui_dispatch_key(state, 'j'));
+    assert(state->link_selected == 1u);
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->form.controls[1].checked);
+    assert(tui_dispatch_key(state, 'j'));
+    assert(state->link_selected == 2u);
+
+    FILE *dump = tmpfile();
+    assert(dump != NULL && tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    char output[1024];
+    size_t length = fread(output, 1u, sizeof output - 1u, dump);
+    output[length] = '\0';
+    assert(strstr(output, "Screen: Browser") != NULL);
+    assert(strstr(output, "Controls: 3") != NULL);
+    assert(strstr(output, "field user") != NULL);
+    assert(strstr(output, "checkbox news checked=yes") != NULL);
+    assert(strstr(output, "> link Submit") != NULL);
+    assert(fclose(dump) == 0);
+
+    assert(tui_dispatch_key(state, '\n'));
+    assert(strstr(state->status, "Configure a network interface") != NULL);
+    free(state);
+}
+
 static void test_network_popup_reasons(void) {
     tui_state_t *state = state_create();
     state->screen = TUI_SCREEN_NETWORK;
@@ -499,6 +552,7 @@ int main(void) {
     test_modal_isolation();
     test_shortcuts_drafts_and_node_action();
     test_browser_terminal_escape();
+    test_browser_form_keyboard_and_dump();
     test_network_popup_reasons();
     test_rrc_headless_dump();
     return 0;

@@ -568,6 +568,7 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
         case TUI_FIELD_ADDRESS: editor = &state->address; prompt = "Address: "; break;
         case TUI_FIELD_SETTING:
         case TUI_FIELD_RRC:
+        case TUI_FIELD_BROWSER_FORM:
             break;
         case TUI_FIELD_NONE: break;
     }
@@ -1022,24 +1023,38 @@ static int put_text(int y, int x, int limit, const char *text, chtype attrs) {
 }
 
 /* Renders one span into buffer and returns the text to draw. */
-static const char *span_display(const rns_micron_page *page,
-                                const rns_micron_span *span, char *buffer,
+static const char *span_display(const tui_state_t *state,
+                                const rns_micron_span *span,
+                                size_t span_index, char *buffer,
                                 size_t capacity) {
+    const rns_micron_page *page = &state->page;
     const char *text = rns_micron_span_text(page, span);
+    const rns_micron_form_control *control =
+        rns_micron_form_control_for_span(&state->form, span_index);
     switch (span->kind) {
         case RNS_MICRON_SPAN_FIELD: {
             unsigned width = span->width != 0u ? span->width : 1u;
             if (width > 64u) width = 64u;
-            (void)snprintf(buffer, capacity, "[%-*.*s]", (int)width, (int)width,
-                           span->masked ? "" : text);
+            const char *value = control != NULL ? control->value : text;
+            if (span->masked) {
+                size_t hidden = control != NULL ? control->value_length : strlen(value);
+                if (hidden > width) hidden = width;
+                (void)snprintf(buffer, capacity, "[%.*s%*s]", (int)hidden,
+                               "****************************************************************",
+                               (int)(width - hidden), "");
+            } else
+                (void)snprintf(buffer, capacity, "[%-*.*s]", (int)width,
+                               (int)width, value);
             return buffer;
         }
         case RNS_MICRON_SPAN_CHECKBOX:
-            (void)snprintf(buffer, capacity, "[%c] %s", span->prechecked ? 'x' : ' ',
+            (void)snprintf(buffer, capacity, "[%c] %s",
+                           control != NULL && control->checked ? 'x' : ' ',
                            text);
             return buffer;
         case RNS_MICRON_SPAN_RADIO:
-            (void)snprintf(buffer, capacity, "(%c) %s", span->prechecked ? '*' : ' ',
+            (void)snprintf(buffer, capacity, "(%c) %s",
+                           control != NULL && control->checked ? '*' : ' ',
                            text);
             return buffer;
         case RNS_MICRON_SPAN_TEXT:
@@ -1049,25 +1064,35 @@ static const char *span_display(const rns_micron_page *page,
     }
 }
 
-static int line_columns(const rns_micron_page *page, const rns_micron_line *line) {
+static int line_columns(const tui_state_t *state,
+                        const rns_micron_line *line) {
+    const rns_micron_page *page = &state->page;
     char buffer[RNS_MICRON_TEXT_MAX + 8u];
     size_t columns = 0u;
     for (uint16_t i = 0u; i < line->span_count; ++i) {
         const rns_micron_span *span = &page->spans[line->first_span + i];
-        const char *text = span_display(page, span, buffer, sizeof buffer);
+        size_t span_index = (size_t)line->first_span + i;
+        const char *text = span_display(state, span, span_index, buffer,
+                                        sizeof buffer);
         columns += tui_utf8_columns(text, strlen(text));
     }
     return columns > INT_MAX ? INT_MAX : (int)columns;
 }
 
-/* Index of the page line carrying the nth link, or line_count when absent. */
-static size_t link_line(const rns_micron_page *page, size_t nth) {
+static bool interactive_span(const rns_micron_span *span) {
+    return span->kind == RNS_MICRON_SPAN_LINK ||
+           span->kind == RNS_MICRON_SPAN_FIELD ||
+           span->kind == RNS_MICRON_SPAN_CHECKBOX ||
+           span->kind == RNS_MICRON_SPAN_RADIO;
+}
+
+/* Index of the page line carrying the nth interactive item. */
+static size_t interactive_line(const rns_micron_page *page, size_t nth) {
     size_t seen = 0u;
     for (size_t i = 0u; i < page->line_count; ++i) {
         const rns_micron_line *line = &page->lines[i];
         for (uint16_t j = 0u; j < line->span_count; ++j) {
-            if (page->spans[line->first_span + j].kind != RNS_MICRON_SPAN_LINK)
-                continue;
+            if (!interactive_span(&page->spans[line->first_span + j])) continue;
             if (seen++ == nth) return i;
         }
     }
@@ -1075,7 +1100,8 @@ static size_t link_line(const rns_micron_page *page, size_t nth) {
 }
 
 static void draw_micron_line(const tui_state_t *state, const rns_micron_line *line,
-                             int y, int left, int width, size_t *link_ordinal) {
+                             int y, int left, int width,
+                             size_t *interactive_ordinal) {
     const rns_micron_page *page = &state->page;
     char buffer[RNS_MICRON_TEXT_MAX + 8u];
     int indent = line->depth > 1u
@@ -1092,7 +1118,7 @@ static void draw_micron_line(const tui_state_t *state, const rns_micron_line *li
             (void)put_text(y, left + indent + column, 1, line->divider_char, attrs);
         return;
     }
-    int used = line_columns(page, line);
+    int used = line_columns(state, line);
     int x = left + indent;
     if (line->align == RNS_MICRON_ALIGN_CENTER && used < available)
         x += (available - used) / 2;
@@ -1101,13 +1127,16 @@ static void draw_micron_line(const tui_state_t *state, const rns_micron_line *li
     int remaining = left + width - x;
     for (uint16_t i = 0u; i < line->span_count && remaining > 0; ++i) {
         const rns_micron_span *span = &page->spans[line->first_span + i];
-        const char *text = span_display(page, span, buffer, sizeof buffer);
+        size_t span_index = (size_t)line->first_span + i;
+        const char *text = span_display(state, span, span_index, buffer,
+                                        sizeof buffer);
         chtype attrs = micron_attrs(&span->style);
         if (line->heading != 0u) attrs |= A_BOLD | A_REVERSE;
-        if (span->kind == RNS_MICRON_SPAN_LINK) {
-            bool selected = *link_ordinal == state->link_selected;
-            attrs |= selected ? (A_REVERSE | A_BOLD) : A_UNDERLINE;
-            ++*link_ordinal;
+        if (interactive_span(span)) {
+            bool selected = *interactive_ordinal == state->link_selected;
+            attrs |= selected ? (A_REVERSE | A_BOLD) :
+                     span->kind == RNS_MICRON_SPAN_LINK ? A_UNDERLINE : A_NORMAL;
+            ++*interactive_ordinal;
         }
         int drawn = put_text(y, x, remaining, text, attrs);
         x += drawn;
@@ -1156,7 +1185,7 @@ static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
 
     const rns_micron_page *page = &state->page;
     /* Keep the selected link on screen as the selection walks the document. */
-    size_t focus = link_line(page, state->link_selected);
+    size_t focus = interactive_line(page, state->link_selected);
     if (focus < page->line_count) {
         if (focus < state->page_scroll) state->page_scroll = focus;
         else if (focus >= state->page_scroll + (size_t)body_rows)
@@ -1165,26 +1194,43 @@ static void draw_browser(tui_state_t *state, const tui_layout_t *layout) {
     if (state->page_scroll >= page->line_count)
         state->page_scroll = page->line_count != 0u ? page->line_count - 1u : 0u;
 
-    size_t link_ordinal = 0u;
+    size_t interactive_ordinal = 0u;
     for (size_t i = 0u; i < page->line_count; ++i) {
         if (i < state->page_scroll) {
             const rns_micron_line *skipped = &page->lines[i];
             for (uint16_t j = 0u; j < skipped->span_count; ++j)
-                if (page->spans[skipped->first_span + j].kind == RNS_MICRON_SPAN_LINK)
-                    ++link_ordinal;
+                if (interactive_span(&page->spans[skipped->first_span + j]))
+                    ++interactive_ordinal;
             continue;
         }
         int y = body_top + (int)(i - state->page_scroll);
         if (y >= layout->hint_row - 1) break;
         draw_micron_line(state, &page->lines[i], y, 2, layout->columns - 4,
-                         &link_ordinal);
+                         &interactive_ordinal);
     }
     if (page->truncated || page->unsupported)
         clipped(stdscr, layout->hint_row - 1, 2, layout->columns - 4,
                 page->truncated ? "Page was truncated to fit the parser bounds"
                                 : "Tables and partials are shown unformatted");
-    clipped(stdscr, layout->hint_row, 0, layout->columns,
-            "j/k link  Enter open  PgUp/PgDn scroll  Backspace back  r reload  N network");
+    if (state->field == TUI_FIELD_BROWSER_FORM) {
+        char edit[RNS_MICRON_FORM_VALUE_MAX + 40u];
+        const rns_micron_form_control *control =
+            rns_micron_form_control_at(&state->form,
+                                       state->browser_edit_control);
+        const rns_micron_span *span = control != NULL &&
+                                      control->span_index < page->span_count
+                                          ? &page->spans[control->span_index] : NULL;
+        const char *name = span != NULL
+                               ? rns_micron_span_target(page, span) : "field";
+        (void)snprintf(edit, sizeof edit, "Edit %s: %s", name,
+                       span != NULL && span->masked ? "(hidden)"
+                                                    : tui_editor_text(&state->browser_editor));
+        clipped(stdscr, layout->hint_row - 1, 2, layout->columns - 4, edit);
+        clipped(stdscr, layout->hint_row, 0, layout->columns,
+                "Enter apply  Esc cancel  arrows edit");
+    } else
+        clipped(stdscr, layout->hint_row, 0, layout->columns,
+                "j/k control  Enter edit/toggle/open  Backspace back  r reload  N network");
 }
 
 static void draw_guide(const tui_layout_t *layout) {
@@ -1198,7 +1244,7 @@ static void draw_guide(const tui_layout_t *layout) {
         "Contact actions: i details, p pin, x block, t trust, u untrust",
         "Delivery: d selects direct or propagation-node upload for queued messages",
         "Network: / search, Enter details; b browse, m message, p relay, s sync/cancel",
-        "Browser: j/k select links, Enter follow, Backspace back, r reload",
+        "Browser: j/k select controls, Enter edit/toggle/follow, Backspace back, r reload",
         "Settings: j/k select, Enter edit, announce, start or cancel propagation sync",
         "",
         "Delivery is proof-backed. A queued message is not shown as delivered.",
@@ -1367,11 +1413,41 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             "Screen: Guide\n"
             "Conversations: C, trust tabs 1/2/3, / search, a address, Enter compose\n"
             "Network: N, / search, Enter actions, b browse, m message, p relay, s sync\n"
-            "Browser: B, j/k links, Enter follow, Backspace back, r reload\n"
+            "Browser: B, j/k controls, Enter edit/toggle/follow, Backspace back, r reload\n"
             "Settings: S, j/k select, Enter edit/announce/sync/cancel\n"
             "RRC: R, j/k select, Enter edit/connect/join/part/send\n"
             "Escape: close active layer or return to Conversations\n"
             "Status: %s\n", state->status);
+        return ferror(output) ? -1 : 0;
+    }
+    if (state->screen == TUI_SCREEN_BROWSER) {
+        (void)fprintf(output, "Screen: Browser\nURL: %s\nControls: %zu\n",
+                      state->url, tui_state_browser_control_count(state));
+        size_t ordinal = 0u;
+        for (size_t i = 0u; i < state->page.span_count; ++i) {
+            const rns_micron_span *span = &state->page.spans[i];
+            if (!interactive_span(span)) continue;
+            const char *kind = span->kind == RNS_MICRON_SPAN_LINK ? "link" :
+                               span->kind == RNS_MICRON_SPAN_FIELD ? "field" :
+                               span->kind == RNS_MICRON_SPAN_CHECKBOX
+                                   ? "checkbox" : "radio";
+            char safe[RNS_MICRON_TEXT_MAX * 2u];
+            const char *label = span->kind == RNS_MICRON_SPAN_LINK
+                                    ? rns_micron_span_text(&state->page, span)
+                                    : rns_micron_span_target(&state->page, span);
+            (void)tui_text_sanitize((const uint8_t *)label, strlen(label), safe,
+                                    sizeof safe);
+            (void)fprintf(output, "%c %s %s", ordinal == state->link_selected
+                                                 ? '>' : ' ', kind, safe);
+            const rns_micron_form_control *control =
+                rns_micron_form_control_for_span(&state->form, i);
+            if (control != NULL && span->kind != RNS_MICRON_SPAN_FIELD)
+                (void)fprintf(output, " checked=%s",
+                              control->checked ? "yes" : "no");
+            (void)fputc('\n', output);
+            ++ordinal;
+        }
+        (void)fprintf(output, "Status: %s\n", state->status);
         return ferror(output) ? -1 : 0;
     }
     if (state->screen == TUI_SCREEN_NETWORK) {

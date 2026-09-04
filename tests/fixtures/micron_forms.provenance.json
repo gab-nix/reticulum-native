@@ -1,0 +1,22 @@
+{
+  "profile": "NomadNet 1.2.0",
+  "nomadnet_commit": "475c0ee2a0388cf8470e7f1e90d5decb67b579ea",
+  "source_files": [
+    "nomadnet/ui/textui/Browser.py",
+    "nomadnet/ui/textui/MicronParser.py"
+  ],
+  "behaviour_reviewed": [
+    "text controls submit field_<name> as strings",
+    "checked radios submit one value per field name",
+    "same-name checked boxes are comma-joined in page order",
+    "unchecked toggles are omitted",
+    "link constants submit var_<name>",
+    "an asterisk selector includes all controls",
+    "an empty third link component does not attach request data"
+  ],
+  "evidence": "deterministic native unit and headless dispatcher tests",
+  "limitations": [
+    "no stock Python page exchange was performed",
+    "request ciphertext is nondeterministic and is not a golden fixture"
+  ]
+}

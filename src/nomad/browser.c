@@ -16,7 +16,7 @@ struct rns_browser {
     uint8_t destination[16];
     char url[RNS_BROWSER_URL_MAX + 1U];
     char path[RNS_BROWSER_PATH_MAX + 1U];
-    uint8_t form[RNS_MTU];
+    uint8_t form[RNS_BROWSER_FORM_MAX];
     size_t form_length;
     rns_micron_page page;
 };

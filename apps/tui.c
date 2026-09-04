@@ -33,6 +33,7 @@ static bool field_visible(tui_state_t *state) {
         case TUI_FIELD_NODE_SEARCH: return state->screen == TUI_SCREEN_NETWORK;
         case TUI_FIELD_SETTING: return state->screen == TUI_SCREEN_SETTINGS;
         case TUI_FIELD_RRC: return state->screen == TUI_SCREEN_RRC;
+        case TUI_FIELD_BROWSER_FORM: return state->screen == TUI_SCREEN_BROWSER;
         case TUI_FIELD_NONE: return true;
     }
     return false;
@@ -62,6 +63,7 @@ static tui_editor_t *active_editor(tui_state_t *state) {
         case TUI_FIELD_ADDRESS: return &state->address;
         case TUI_FIELD_SETTING: return &state->setting;
         case TUI_FIELD_RRC: return &state->setting;
+        case TUI_FIELD_BROWSER_FORM: return &state->browser_editor;
         case TUI_FIELD_NONE: break;
     }
     return NULL;
@@ -141,12 +143,16 @@ static void handle_field_key(tui_state_t *state, int key) {
             tui_state_cancel_reference(state);
             state->field = TUI_FIELD_NONE;
         }
+        else if (state->field == TUI_FIELD_BROWSER_FORM)
+            tui_state_browser_form_cancel(state);
         else state->field = TUI_FIELD_NONE;
         return;
     }
     if (key == '\n' || key == KEY_ENTER) {
         if (state->field == TUI_FIELD_SETTING) (void)tui_state_setting_apply(state);
         else if (state->field == TUI_FIELD_RRC) (void)tui_state_rrc_apply(state);
+        else if (state->field == TUI_FIELD_BROWSER_FORM)
+            (void)tui_state_browser_form_apply(state);
         else if (state->field == TUI_FIELD_ADDRESS) submit_address(state);
         else if (state->field == TUI_FIELD_SEARCH) {
             state->field = TUI_FIELD_NONE;
@@ -211,7 +217,7 @@ static void handle_node_actions_key(tui_state_t *state, int key) {
 
 static void select_previous(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_BROWSER) {
-        if (state->link_selected > 0u) --state->link_selected;
+        tui_state_browser_move(state, -1);
     } else if (state->screen == TUI_SCREEN_SETTINGS) {
         tui_state_setting_move(state, -1);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
@@ -228,8 +234,7 @@ static void select_previous(tui_state_t *state) {
 
 static void select_next(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_BROWSER) {
-        size_t links = tui_state_link_count(state);
-        if (links > 0u) state->link_selected = (state->link_selected + 1u) % links;
+        tui_state_browser_move(state, 1);
     } else if (state->screen == TUI_SCREEN_SETTINGS) {
         tui_state_setting_move(state, 1);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
@@ -246,7 +251,7 @@ static void select_next(tui_state_t *state) {
 
 static void activate(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_BROWSER) {
-        tui_state_browse_selected(state);
+        tui_state_browser_activate(state);
     } else if (state->screen == TUI_SCREEN_SETTINGS) {
         tui_state_setting_activate(state);
     } else if (state->screen == TUI_SCREEN_NETWORK) {
@@ -305,7 +310,7 @@ static bool handle_command_key(tui_state_t *state, int key) {
             else if (state->screen == TUI_SCREEN_NETWORK)
                 tui_state_set_status(state, "Network: j/k select, Enter actions, p select relay, s sync/cancel");
             else if (state->screen == TUI_SCREEN_BROWSER)
-                tui_state_set_status(state, "Browser: j/k links, Enter open, PgUp/PgDn scroll, R reload, Esc cancel/back");
+                tui_state_set_status(state, "Browser: j/k controls, Enter edit/toggle/open, PgUp/PgDn scroll, R reload, Esc cancel/back");
             else if (state->screen == TUI_SCREEN_SETTINGS)
                 tui_state_set_status(state, "Settings: j/k select, Enter edit/action, Sync Now can cancel");
             else if (state->screen == TUI_SCREEN_INTERFACES)

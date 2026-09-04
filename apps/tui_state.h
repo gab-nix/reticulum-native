@@ -59,7 +59,8 @@ typedef enum {
     TUI_FIELD_ADDRESS,
     TUI_FIELD_SETTING,
     TUI_FIELD_RRC,
-    TUI_FIELD_REACTION
+    TUI_FIELD_REACTION,
+    TUI_FIELD_BROWSER_FORM
 } tui_field_t;
 
 typedef enum {
@@ -247,8 +248,12 @@ typedef struct tui_state {
     rns_browser_t *browser;
     rns_browser_state_t browser_state;
     rns_micron_page page;
+    rns_micron_form form;
     rns_micron_history history;
+    /* Ordinal among links and form controls in source order. */
     size_t link_selected;
+    size_t browser_edit_control;
+    tui_editor_t browser_editor;
     size_t page_scroll;
     char url[RNS_MICRON_TEXT_MAX];
 
@@ -344,6 +349,13 @@ void tui_state_interface_move(tui_state_t *state, int delta);
 
 size_t tui_state_link_count(const tui_state_t *state);
 const rns_micron_span *tui_state_link(const tui_state_t *state, size_t index);
+size_t tui_state_browser_control_count(const tui_state_t *state);
+const rns_micron_span *tui_state_browser_selected_span(
+    const tui_state_t *state, size_t *span_index);
+void tui_state_browser_move(tui_state_t *state, int delta);
+void tui_state_browser_activate(tui_state_t *state);
+bool tui_state_browser_form_apply(tui_state_t *state);
+void tui_state_browser_form_cancel(tui_state_t *state);
 bool tui_state_browse(tui_state_t *state, const char *url, bool push_history);
 void tui_state_browse_selected(tui_state_t *state);
 void tui_state_browse_back(tui_state_t *state);

@@ -95,8 +95,13 @@ static void test_links(void) {
 
     parse("`[Submit`/page/form.mu`name|email]\n");
     assert(rns_micron_link_count(&page) == 1u);
+    assert(rns_micron_link(&page, 0u)->has_selector);
     assert(strcmp(rns_micron_span_value(&page, rns_micron_link(&page, 0u)),
                   "name|email") == 0);
+
+    parse("`[Empty`/page/form.mu`]\n");
+    assert(!rns_micron_link(&page, 0u)->has_selector);
+    assert(rns_micron_link(&page, 0u)->value_length == 0u);
 
     /* An empty label takes the target as its text, as upstream does. */
     parse("`[`/page/labelless.mu]\n");
@@ -260,6 +265,54 @@ static void test_urls_and_history(void) {
     assert(rns_micron_history_forward(&history) == NULL);
 }
 
+static void test_form_state_and_encoding(void) {
+    static const char markup[] =
+        "`<user`alice>\n"
+        "`<^|pick|red|*`Red> `<^|pick|blue`Blue>\n"
+        "`<?|flags|a|*`A> `< ?|ignored|x`Ignored>\n"
+        "`<?|flags|b|*`B>\n";
+    parse(markup);
+    rns_micron_form form;
+    rns_micron_form_init(&form, &page);
+    assert(!form.truncated && form.count == 6u);
+    assert(strcmp(rns_micron_form_control_at(&form, 0u)->value, "alice") == 0);
+    assert(rns_micron_form_control_at(&form, 1u)->checked);
+    assert(!rns_micron_form_control_at(&form, 2u)->checked);
+    assert(rns_micron_form_set(&form, &page, 0u, "bob", 3u));
+    assert(!rns_micron_form_set(&form, &page, 1u, "bad", 3u));
+    assert(rns_micron_form_toggle(&form, &page, 2u));
+    assert(!form.controls[1u].checked && form.controls[2u].checked);
+    assert(rns_micron_form_toggle(&form, &page, 3u));
+    assert(!form.controls[3u].checked);
+    assert(rns_micron_form_toggle(&form, &page, 3u));
+
+    uint8_t encoded[256];
+    size_t length = 0u;
+    assert(rns_micron_form_encode(&page, &form,
+                                  "fixed=yes|user|pick|flags", 25u, encoded,
+                                  sizeof encoded, &length));
+    static const uint8_t expected[] = {
+        0x84,
+        0xa9, 'v','a','r','_','f','i','x','e','d', 0xa3, 'y','e','s',
+        0xaa, 'f','i','e','l','d','_','u','s','e','r', 0xa3, 'b','o','b',
+        0xaa, 'f','i','e','l','d','_','p','i','c','k', 0xa4, 'b','l','u','e',
+        0xab, 'f','i','e','l','d','_','f','l','a','g','s',
+        0xa3, 'a',',','b'
+    };
+    assert(length == sizeof expected && memcmp(encoded, expected, length) == 0);
+
+    assert(rns_micron_form_encode(&page, &form, NULL, 0u, encoded,
+                                  sizeof encoded, &length));
+    assert(length == 1u && encoded[0] == 0x80u);
+    assert(!rns_micron_form_encode(&page, &form, "*", 1u, encoded, 1u,
+                                   &length));
+    assert(!rns_micron_form_encode(&page, &form, NULL, 1u, encoded,
+                                   sizeof encoded, &length));
+    assert(rns_micron_form_control_for_span(&form, form.controls[2u].span_index) ==
+           &form.controls[2u]);
+    assert(rns_micron_form_control_at(&form, form.count) == NULL);
+}
+
 int main(void) {
     test_sections();
     test_formatting();
@@ -273,5 +326,6 @@ int main(void) {
     test_blank_lines_and_unsupported();
     test_bounds();
     test_urls_and_history();
+    test_form_state_and_encoding();
     return 0;
 }

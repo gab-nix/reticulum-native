@@ -25,6 +25,9 @@
 #define RNS_MICRON_MAX_HEADING 3u
 #define RNS_MICRON_FIELD_WIDTH_DEFAULT 24u
 #define RNS_MICRON_FIELD_WIDTH_MAX 256u
+#define RNS_MICRON_FORM_MAX_CONTROLS 128u
+#define RNS_MICRON_FORM_NAME_MAX 64u
+#define RNS_MICRON_FORM_VALUE_MAX 256u
 
 /* Packed 0xRRGGBB, or the theme default when the page sets no colour. */
 #define RNS_MICRON_COLOR_DEFAULT UINT32_C(0xFF000000)
@@ -68,6 +71,7 @@ typedef struct {
     uint16_t width;
     bool masked;
     bool prechecked;
+    bool has_selector; /* link has an explicit third component, even if empty */
 } rns_micron_span;
 
 typedef struct {
@@ -97,6 +101,19 @@ typedef struct {
     size_t cursor;
 } rns_micron_history;
 
+typedef struct {
+    uint16_t span_index;
+    uint16_t value_length;
+    bool checked;
+    char value[RNS_MICRON_FORM_VALUE_MAX + 1u];
+} rns_micron_form_control;
+
+typedef struct {
+    rns_micron_form_control controls[RNS_MICRON_FORM_MAX_CONTROLS];
+    size_t count;
+    bool truncated;
+} rns_micron_form;
+
 /* Returns 1 on success, 0 only for invalid arguments. A document that exceeds
  * the bounds parses successfully with page->truncated set. */
 int rns_micron_parse(rns_micron_page *page, const uint8_t *data, size_t length);
@@ -114,6 +131,33 @@ size_t rns_micron_link_count(const rns_micron_page *page);
 /* Index of the nth link in page->spans, or SIZE_MAX when out of range. */
 size_t rns_micron_link_index(const rns_micron_page *page, size_t nth);
 const rns_micron_span *rns_micron_link(const rns_micron_page *page, size_t nth);
+
+/* Initialises mutable form state from a parsed page. Values are copied and do
+ * not borrow page storage. Controls beyond the public bound set truncated. */
+void rns_micron_form_init(rns_micron_form *form,
+                          const rns_micron_page *page);
+const rns_micron_form_control *rns_micron_form_control_at(
+    const rns_micron_form *form, size_t index);
+const rns_micron_form_control *rns_micron_form_control_for_span(
+    const rns_micron_form *form, size_t span_index);
+int rns_micron_form_set(rns_micron_form *form, const rns_micron_page *page,
+                        size_t control_index, const char *value,
+                        size_t value_length);
+/* Toggles a checkbox. Selecting a radio clears radios with the same name. */
+int rns_micron_form_toggle(rns_micron_form *form,
+                           const rns_micron_page *page,
+                           size_t control_index);
+
+/* Encodes the map carried as Reticulum request data for a Micron link.
+ * selectors/selectors_length is the bounded third, pipe-separated link
+ * component. It may contain field names, '*' for all fields, and name=value
+ * constants. Output is one deterministic MessagePack map with string keys and
+ * values. */
+int rns_micron_form_encode(const rns_micron_page *page,
+                           const rns_micron_form *form,
+                           const char *selectors, size_t selectors_length,
+                           uint8_t *output, size_t capacity,
+                           size_t *output_length);
 
 int rns_micron_normalize_url(const char *base, const char *target, char *out,
                              size_t capacity);

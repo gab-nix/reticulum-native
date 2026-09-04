@@ -1330,6 +1330,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
+    tui_editor_init(&state->browser_editor, RNS_MICRON_FORM_VALUE_MAX);
     tui_rrc_init(&state->rrc);
     tui_settings_defaults(&state->settings);
     rns_config_init(&state->parsed_config);
@@ -1410,6 +1411,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     (void)snprintf(state->url, sizeof state->url, "nomad://local/home");
     if (!rns_micron_parse(&state->page, tui_home_page, sizeof tui_home_page - 1u) ||
         !rns_micron_history_push(&state->history, state->url)) goto fail;
+    rns_micron_form_init(&state->form, &state->page);
     restore_selected_draft(state);
     if (state->settings_load_error)
         tui_state_set_status(state,
@@ -1463,7 +1465,10 @@ static void poll_browser(tui_state_t *state) {
     state->browser_state = current;
     if (current == RNS_BROWSER_COMPLETE) {
         const rns_micron_page *page = rns_browser_page(state->browser);
-        if (page != NULL) state->page = *page;
+        if (page != NULL) {
+            state->page = *page;
+            rns_micron_form_init(&state->form, &state->page);
+        }
         state->link_selected = 0u;
         state->page_scroll = 0u;
         tui_state_set_status(state, "Remote Nomad page loaded");
@@ -2280,7 +2285,55 @@ const rns_micron_span *tui_state_link(const tui_state_t *state, size_t index) {
     return state == NULL ? NULL : rns_micron_link(&state->page, index);
 }
 
-bool tui_state_browse(tui_state_t *state, const char *url, bool push_history) {
+static bool browser_interactive_kind(rns_micron_span_kind kind) {
+    return kind == RNS_MICRON_SPAN_LINK || kind == RNS_MICRON_SPAN_FIELD ||
+           kind == RNS_MICRON_SPAN_CHECKBOX ||
+           kind == RNS_MICRON_SPAN_RADIO;
+}
+
+size_t tui_state_browser_control_count(const tui_state_t *state) {
+    size_t count = 0u;
+    if (state == NULL) return 0u;
+    for (size_t i = 0u; i < state->page.span_count; ++i)
+        if (browser_interactive_kind(state->page.spans[i].kind)) ++count;
+    return count;
+}
+
+const rns_micron_span *tui_state_browser_selected_span(
+    const tui_state_t *state, size_t *span_index) {
+    size_t ordinal = 0u;
+    if (state == NULL) return NULL;
+    for (size_t i = 0u; i < state->page.span_count; ++i) {
+        if (!browser_interactive_kind(state->page.spans[i].kind)) continue;
+        if (ordinal++ == state->link_selected) {
+            if (span_index != NULL) *span_index = i;
+            return &state->page.spans[i];
+        }
+    }
+    return NULL;
+}
+
+void tui_state_browser_move(tui_state_t *state, int delta) {
+    if (state == NULL || state->field != TUI_FIELD_NONE) return;
+    size_t count = tui_state_browser_control_count(state);
+    if (count == 0u) { state->link_selected = 0u; return; }
+    if (state->link_selected >= count) state->link_selected = count - 1u;
+    if (delta < 0)
+        state->link_selected = state->link_selected == 0u
+                                   ? count - 1u : state->link_selected - 1u;
+    else state->link_selected = (state->link_selected + 1u) % count;
+}
+
+static size_t form_control_index_for_span(const tui_state_t *state,
+                                          size_t span_index) {
+    for (size_t i = 0u; i < state->form.count; ++i)
+        if (state->form.controls[i].span_index == span_index) return i;
+    return SIZE_MAX;
+}
+
+static bool browse_request(tui_state_t *state, const char *url,
+                           bool push_history, const uint8_t *form_msgpack,
+                           size_t form_msgpack_length) {
     char requested[RNS_MICRON_TEXT_MAX];
     char destination_text[TUI_ADDRESS_DIGITS + 1u];
     uint8_t destination[LXMF_DESTINATION_LENGTH];
@@ -2311,7 +2364,9 @@ bool tui_state_browse(tui_state_t *state, const char *url, bool push_history) {
         tui_state_set_status(state, "No verified identity for this Nomad node");
         return false;
     }
-    rns_status_t status = rns_browser_open(state->browser, requested, &identity, NULL, 0u);
+    rns_status_t status = rns_browser_open(state->browser, requested, &identity,
+                                           form_msgpack,
+                                           form_msgpack_length);
     if (status != RNS_OK) {
         tui_state_set_status(state, "Page request failed: %s", rns_status_string(status));
         return false;
@@ -2329,11 +2384,17 @@ bool tui_state_browse(tui_state_t *state, const char *url, bool push_history) {
     return true;
 }
 
+bool tui_state_browse(tui_state_t *state, const char *url, bool push_history) {
+    return browse_request(state, url, push_history, NULL, 0u);
+}
+
 void tui_state_browse_selected(tui_state_t *state) {
     char url[RNS_MICRON_TEXT_MAX];
+    uint8_t form_msgpack[RNS_BROWSER_FORM_MAX];
+    size_t form_length = 0u;
     if (state == NULL) return;
-    const rns_micron_span *item = tui_state_link(state, state->link_selected);
-    if (item == NULL) return;
+    const rns_micron_span *item = tui_state_browser_selected_span(state, NULL);
+    if (item == NULL || item->kind != RNS_MICRON_SPAN_LINK) return;
     const char *target = rns_micron_span_target(&state->page, item);
     /* Pages advertise their author as lxmf@<hash>; following one is a
      * handoff to the conversation screen, not a page fetch. */
@@ -2355,7 +2416,69 @@ void tui_state_browse_selected(tui_state_t *state) {
         tui_state_set_status(state, "Invalid or oversized link");
         return;
     }
-    (void)tui_state_browse(state, url, true);
+    if (item->has_selector &&
+        !rns_micron_form_encode(&state->page, &state->form,
+                                rns_micron_span_value(&state->page, item),
+                                item->value_length,
+                                form_msgpack, sizeof form_msgpack,
+                                &form_length)) {
+        tui_state_set_status(state, "Form data exceeds the safe request limit");
+        return;
+    }
+    (void)browse_request(state, url, true,
+                         item->has_selector ? form_msgpack : NULL,
+                         item->has_selector ? form_length : 0u);
+}
+
+void tui_state_browser_activate(tui_state_t *state) {
+    size_t span_index = 0u;
+    if (state == NULL || state->field != TUI_FIELD_NONE) return;
+    const rns_micron_span *span =
+        tui_state_browser_selected_span(state, &span_index);
+    if (span == NULL) return;
+    if (span->kind == RNS_MICRON_SPAN_LINK) {
+        tui_state_browse_selected(state);
+        return;
+    }
+    size_t control = form_control_index_for_span(state, span_index);
+    if (control == SIZE_MAX) return;
+    if (span->kind == RNS_MICRON_SPAN_FIELD) {
+        tui_editor_init(&state->browser_editor, RNS_MICRON_FORM_VALUE_MAX);
+        const rns_micron_form_control *value =
+            rns_micron_form_control_at(&state->form, control);
+        if (value != NULL)
+            (void)tui_editor_insert(&state->browser_editor, value->value,
+                                    value->value_length);
+        state->browser_edit_control = control;
+        state->field = TUI_FIELD_BROWSER_FORM;
+        tui_state_set_status(state, "Editing page field; Enter applies, Esc cancels");
+    } else if (rns_micron_form_toggle(&state->form, &state->page, control)) {
+        tui_state_set_status(state, span->kind == RNS_MICRON_SPAN_RADIO
+                                        ? "Radio choice selected"
+                                        : "Checkbox toggled");
+    }
+}
+
+bool tui_state_browser_form_apply(tui_state_t *state) {
+    if (state == NULL || state->field != TUI_FIELD_BROWSER_FORM) return false;
+    if (!rns_micron_form_set(&state->form, &state->page,
+                             state->browser_edit_control,
+                             tui_editor_text(&state->browser_editor),
+                             tui_editor_length(&state->browser_editor))) {
+        tui_state_set_status(state, "Page field value is invalid or too long");
+        return false;
+    }
+    tui_editor_clear(&state->browser_editor);
+    state->field = TUI_FIELD_NONE;
+    tui_state_set_status(state, "Page field updated locally");
+    return true;
+}
+
+void tui_state_browser_form_cancel(tui_state_t *state) {
+    if (state == NULL || state->field != TUI_FIELD_BROWSER_FORM) return;
+    tui_editor_clear(&state->browser_editor);
+    state->field = TUI_FIELD_NONE;
+    tui_state_set_status(state, "Page field edit cancelled");
 }
 
 void tui_state_browse_back(tui_state_t *state) {

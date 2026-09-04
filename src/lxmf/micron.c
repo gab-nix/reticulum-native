@@ -1,5 +1,6 @@
 #include "reticulum/micron.h"
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -174,6 +175,10 @@ static size_t emit_link(micron_parser *parser, const char *body, size_t length) 
     }
     rns_micron_span *span = span_new(parser, RNS_MICRON_SPAN_LINK);
     if (span == NULL) return 0u;
+    /* Pinned NomadNet only attaches form data when the third link component
+     * contains at least one selector. An explicit but empty component is the
+     * same as an ordinary link and must not become an empty MessagePack map. */
+    span->has_selector = fields != NULL && fields_length != 0u;
     if (!pool_add(parser, label, label_length, &span->text_offset, &span->text_length) ||
         !pool_add(parser, url, url_length, &span->target_offset, &span->target_length) ||
         (fields != NULL &&
@@ -516,6 +521,267 @@ size_t rns_micron_link_index(const rns_micron_page *page, size_t nth) {
 const rns_micron_span *rns_micron_link(const rns_micron_page *page, size_t nth) {
     size_t index = rns_micron_link_index(page, nth);
     return index == SIZE_MAX ? NULL : &page->spans[index];
+}
+
+/* -------------------------------------------------------------------- forms */
+
+static bool form_kind(rns_micron_span_kind kind) {
+    return kind == RNS_MICRON_SPAN_FIELD ||
+           kind == RNS_MICRON_SPAN_CHECKBOX ||
+           kind == RNS_MICRON_SPAN_RADIO;
+}
+
+void rns_micron_form_init(rns_micron_form *form,
+                          const rns_micron_page *page) {
+    if (form == NULL) return;
+    memset(form, 0, sizeof *form);
+    if (page == NULL) return;
+    for (size_t i = 0u; i < page->span_count; ++i) {
+        const rns_micron_span *span = &page->spans[i];
+        if (!form_kind(span->kind)) continue;
+        if (form->count == RNS_MICRON_FORM_MAX_CONTROLS) {
+            form->truncated = true;
+            continue;
+        }
+        rns_micron_form_control *control = &form->controls[form->count++];
+        control->span_index = (uint16_t)i;
+        control->checked = span->prechecked;
+        const char *initial = span->kind == RNS_MICRON_SPAN_FIELD
+                                  ? rns_micron_span_text(page, span)
+                                  : rns_micron_span_value(page, span);
+        size_t length = strlen(initial);
+        if (length > RNS_MICRON_FORM_VALUE_MAX) {
+            length = RNS_MICRON_FORM_VALUE_MAX;
+            form->truncated = true;
+        }
+        memcpy(control->value, initial, length);
+        control->value[length] = '\0';
+        control->value_length = (uint16_t)length;
+    }
+}
+
+const rns_micron_form_control *rns_micron_form_control_at(
+    const rns_micron_form *form, size_t index) {
+    return form != NULL && index < form->count ? &form->controls[index] : NULL;
+}
+
+const rns_micron_form_control *rns_micron_form_control_for_span(
+    const rns_micron_form *form, size_t span_index) {
+    if (form == NULL) return NULL;
+    for (size_t i = 0u; i < form->count; ++i)
+        if (form->controls[i].span_index == span_index)
+            return &form->controls[i];
+    return NULL;
+}
+
+int rns_micron_form_set(rns_micron_form *form, const rns_micron_page *page,
+                        size_t control_index, const char *value,
+                        size_t value_length) {
+    if (form == NULL || page == NULL || value == NULL ||
+        control_index >= form->count ||
+        value_length > RNS_MICRON_FORM_VALUE_MAX) return 0;
+    rns_micron_form_control *control = &form->controls[control_index];
+    if (control->span_index >= page->span_count ||
+        page->spans[control->span_index].kind != RNS_MICRON_SPAN_FIELD)
+        return 0;
+    memcpy(control->value, value, value_length);
+    control->value[value_length] = '\0';
+    control->value_length = (uint16_t)value_length;
+    return 1;
+}
+
+static bool same_field_name(const rns_micron_page *page, size_t first,
+                            size_t second) {
+    const rns_micron_span *a = &page->spans[first];
+    const rns_micron_span *b = &page->spans[second];
+    return a->target_length == b->target_length &&
+           memcmp(rns_micron_span_target(page, a),
+                  rns_micron_span_target(page, b), a->target_length) == 0;
+}
+
+int rns_micron_form_toggle(rns_micron_form *form,
+                           const rns_micron_page *page,
+                           size_t control_index) {
+    if (form == NULL || page == NULL || control_index >= form->count)
+        return 0;
+    rns_micron_form_control *control = &form->controls[control_index];
+    if (control->span_index >= page->span_count) return 0;
+    rns_micron_span_kind kind = page->spans[control->span_index].kind;
+    if (kind == RNS_MICRON_SPAN_CHECKBOX) {
+        control->checked = !control->checked;
+        return 1;
+    }
+    if (kind != RNS_MICRON_SPAN_RADIO) return 0;
+    for (size_t i = 0u; i < form->count; ++i) {
+        rns_micron_form_control *other = &form->controls[i];
+        if (other->span_index < page->span_count &&
+            page->spans[other->span_index].kind == RNS_MICRON_SPAN_RADIO &&
+            same_field_name(page, control->span_index, other->span_index))
+            other->checked = false;
+    }
+    control->checked = true;
+    return 1;
+}
+
+typedef struct {
+    char key[6u + RNS_MICRON_FORM_NAME_MAX + 1u];
+    size_t key_length;
+    char value[RNS_MICRON_FORM_VALUE_MAX + 1u];
+    size_t value_length;
+} form_entry;
+
+static size_t form_entry_find(const form_entry *entries, size_t count,
+                              const char *key, size_t key_length) {
+    for (size_t i = 0u; i < count; ++i)
+        if (entries[i].key_length == key_length &&
+            memcmp(entries[i].key, key, key_length) == 0) return i;
+    return count;
+}
+
+static bool form_entry_put(form_entry *entries, size_t *count,
+                           const char *prefix, const char *name,
+                           size_t name_length, const char *value,
+                           size_t value_length, bool append) {
+    size_t prefix_length = strlen(prefix);
+    if (name_length > RNS_MICRON_FORM_NAME_MAX ||
+        value_length > RNS_MICRON_FORM_VALUE_MAX) return false;
+    char key[6u + RNS_MICRON_FORM_NAME_MAX];
+    memcpy(key, prefix, prefix_length);
+    memcpy(key + prefix_length, name, name_length);
+    size_t key_length = prefix_length + name_length;
+    size_t index = form_entry_find(entries, *count, key, key_length);
+    if (index == *count) {
+        if (*count == RNS_MICRON_FORM_MAX_CONTROLS) return false;
+        ++*count;
+        memcpy(entries[index].key, key, key_length);
+        entries[index].key[key_length] = '\0';
+        entries[index].key_length = key_length;
+        entries[index].value_length = 0u;
+    }
+    form_entry *entry = &entries[index];
+    if (append && entry->value_length != 0u) {
+        if (entry->value_length + 1u + value_length > RNS_MICRON_FORM_VALUE_MAX)
+            return false;
+        entry->value[entry->value_length++] = ',';
+        memcpy(entry->value + entry->value_length, value, value_length);
+        entry->value_length += value_length;
+    } else {
+        memcpy(entry->value, value, value_length);
+        entry->value_length = value_length;
+    }
+    entry->value[entry->value_length] = '\0';
+    return true;
+}
+
+static bool selector_matches(const char *selectors, size_t selectors_length,
+                             const char *name, size_t name_length, bool *all) {
+    size_t cursor = 0u;
+    bool matched = false;
+    while (cursor < selectors_length) {
+        const char *start = selectors + cursor;
+        const char *separator = memchr(start, '|', selectors_length - cursor);
+        size_t length = separator == NULL
+                            ? selectors_length - cursor
+                            : (size_t)(separator - start);
+        if (length == 1u && start[0] == '*') *all = true;
+        if (memchr(start, '=', length) == NULL && length == name_length &&
+            memcmp(start, name, length) == 0) matched = true;
+        cursor += length + (separator != NULL ? 1u : 0u);
+    }
+    return matched;
+}
+
+static bool collect_constants(const char *selectors, size_t selectors_length,
+                              form_entry *entries, size_t *count) {
+    size_t cursor = 0u;
+    while (cursor < selectors_length) {
+        const char *start = selectors + cursor;
+        const char *separator = memchr(start, '|', selectors_length - cursor);
+        size_t length = separator == NULL
+                            ? selectors_length - cursor
+                            : (size_t)(separator - start);
+        const char *equal = memchr(start, '=', length);
+        if (equal != NULL &&
+            memchr(equal + 1, '=', length - (size_t)(equal - start) - 1u) ==
+                NULL &&
+            !form_entry_put(entries, count, "var_", start,
+                            (size_t)(equal - start), equal + 1,
+                            length - (size_t)(equal - start) - 1u, false))
+            return false;
+        cursor += length + (separator != NULL ? 1u : 0u);
+    }
+    return true;
+}
+
+static size_t msgpack_string_size(size_t length) {
+    return (length <= 31u ? 1u : length <= 255u ? 2u : 3u) + length;
+}
+
+static uint8_t *msgpack_write_string(uint8_t *out, const char *text,
+                                     size_t length) {
+    if (length <= 31u) *out++ = (uint8_t)(0xa0u | length);
+    else if (length <= 255u) { *out++ = 0xd9u; *out++ = (uint8_t)length; }
+    else {
+        *out++ = 0xdau;
+        *out++ = (uint8_t)(length >> 8u);
+        *out++ = (uint8_t)length;
+    }
+    memcpy(out, text, length);
+    return out + length;
+}
+
+int rns_micron_form_encode(const rns_micron_page *page,
+                           const rns_micron_form *form,
+                           const char *selectors, size_t selectors_length,
+                           uint8_t *output, size_t capacity,
+                           size_t *output_length) {
+    if (page == NULL || form == NULL ||
+        (selectors == NULL && selectors_length != 0u) || output == NULL ||
+        output_length == NULL || form->truncated ||
+        selectors_length > RNS_MICRON_TEXT_MAX) return 0;
+    form_entry *entries = calloc(RNS_MICRON_FORM_MAX_CONTROLS, sizeof *entries);
+    if (entries == NULL) return 0;
+    size_t count = 0u;
+    bool ok = collect_constants(selectors, selectors_length, entries, &count);
+    bool all = false;
+    for (size_t i = 0u; ok && i < form->count; ++i) {
+        const rns_micron_form_control *control = &form->controls[i];
+        if (control->span_index >= page->span_count) { ok = false; break; }
+        const rns_micron_span *span = &page->spans[control->span_index];
+        const char *name = rns_micron_span_target(page, span);
+        bool selected = selector_matches(selectors, selectors_length, name,
+                                         span->target_length, &all);
+        if (!selected && !all) continue;
+        if (span->kind != RNS_MICRON_SPAN_FIELD && !control->checked) continue;
+        ok = form_entry_put(entries, &count, "field_", name,
+                            span->target_length, control->value,
+                            control->value_length,
+                            span->kind == RNS_MICRON_SPAN_CHECKBOX);
+    }
+    size_t needed = count <= 15u ? 1u : 3u;
+    for (size_t i = 0u; ok && i < count; ++i)
+        needed += msgpack_string_size(entries[i].key_length) +
+                  msgpack_string_size(entries[i].value_length);
+    if (!ok || count > UINT16_MAX || needed > capacity) {
+        free(entries);
+        return 0;
+    }
+    uint8_t *cursor = output;
+    if (count <= 15u) *cursor++ = (uint8_t)(0x80u | count);
+    else {
+        *cursor++ = 0xdeu;
+        *cursor++ = (uint8_t)(count >> 8u);
+        *cursor++ = (uint8_t)count;
+    }
+    for (size_t i = 0u; i < count; ++i) {
+        cursor = msgpack_write_string(cursor, entries[i].key,
+                                      entries[i].key_length);
+        cursor = msgpack_write_string(cursor, entries[i].value,
+                                      entries[i].value_length);
+    }
+    *output_length = (size_t)(cursor - output);
+    free(entries);
+    return 1;
 }
 
 /* ---------------------------------------------------------------- addresses */

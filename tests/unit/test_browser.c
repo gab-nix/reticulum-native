@@ -15,6 +15,11 @@ int main(void) {
     assert(rns_browser_create(&browser, runtime, NULL) == RNS_OK);
     assert(browser != NULL);
     assert(rns_browser_state(browser) == RNS_BROWSER_IDLE);
+    uint8_t oversized_form[RNS_BROWSER_FORM_MAX + 1u] = {0};
+    assert(rns_browser_open(browser,
+                            "00000000000000000000000000000000:/page/index.mu",
+                            &identity, oversized_form,
+                            sizeof oversized_form) == RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_browser_open(browser, "not-a-node:/page/index.mu", &identity,
                             NULL, 0U) == RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_browser_open(browser,
