@@ -408,6 +408,8 @@ static void test_browser_form_keyboard_and_dump(void) {
         "`[Submit`:/page/result.mu`user|news]\n";
     tui_state_t *state = state_create();
     state->screen = TUI_SCREEN_BROWSER;
+    strcpy(state->page_url, "11111111111111111111111111111111:/page/form.mu");
+    strcpy(state->url, "22222222222222222222222222222222:/page/failed.mu");
     assert(rns_micron_parse(&state->page, (const uint8_t *)markup,
                             sizeof markup - 1u));
     rns_micron_form_init(&state->form, &state->page);
@@ -438,6 +440,7 @@ static void test_browser_form_keyboard_and_dump(void) {
     output[length] = '\0';
     assert(strstr(output, "Screen: Browser") != NULL);
     assert(strstr(output, "Controls: 3") != NULL);
+    assert(strstr(output, "Page URL: 11111111111111111111111111111111:/page/form.mu") != NULL);
     assert(strstr(output, "field user") != NULL);
     assert(strstr(output, "checkbox news checked=yes") != NULL);
     assert(strstr(output, "> link Submit") != NULL);

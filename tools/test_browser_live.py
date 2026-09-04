@@ -58,6 +58,14 @@ def main():
             if line != 99:
                 large.append(10)
         (pages / "large.mu").write_bytes(large)
+        # Explicitly enable only this synthetic executable in the isolated
+        # test root. No user's pages or host environment secrets are used.
+        form = pages / "form.mu"
+        form.write_text('#!/bin/sh\nprintf "Form: %s / %s / %s" "$field_name" "$var_action" "${ignored-unset}"\n')
+        form.chmod(0o700)
+        visitor = RNS.Identity.from_bytes(bytes(range(64)))
+        (pages / "restricted.mu").write_text("Restricted page")
+        (pages / "restricted.mu.allowed").write_text(visitor.hash.hex() + "\n")
         # Exercise the unmodified registered handlers without starting the
         # application scheduler or enabling unrelated hosted services.
         node = module.Node.__new__(module.Node)
@@ -85,7 +93,7 @@ def main():
                           links=len(links),
                           served=node.app.peer_settings["served_page_requests"])
             report["ok"] = bool(report.get("ok") and process.returncode == 0 and
-                                not stderr and report["served"] >= 2 and len(links) == 1)
+                                not stderr and report["served"] == 6 and len(links) == 2)
             print(json.dumps(report, sort_keys=True))
             return 0 if report["ok"] else 1
         finally:

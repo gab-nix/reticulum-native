@@ -588,6 +588,16 @@ static void test_browser_links_and_scroll(void) {
     assert(strcmp(rns_micron_span_text(&state->page, first), "First") == 0);
     assert(strcmp(rns_micron_span_target(&state->page, first), "/page/a.mu") == 0);
     assert(tui_state_link(state, 2u) == NULL);
+    /* A failed navigation must not send retained-page links to another node. */
+    strcpy(state->page_url, "11111111111111111111111111111111:/page/old/index.mu");
+    strcpy(state->url, "22222222222222222222222222222222:/page/new/index.mu");
+    char resolved[RNS_MICRON_TEXT_MAX];
+    assert(tui_state_browser_resolve(state, "next.mu", resolved, sizeof resolved));
+    assert(strcmp(resolved, "11111111111111111111111111111111:/page/old/next.mu") == 0);
+    assert(tui_state_browser_resolve(state, "/page/root.mu", resolved, sizeof resolved));
+    assert(strcmp(resolved, "11111111111111111111111111111111:/page/root.mu") == 0);
+    assert(!tui_state_browser_resolve(state, "next.mu", resolved, 1U));
+    assert(!tui_state_browser_resolve(NULL, "next.mu", resolved, sizeof resolved));
 
     /* Page scrolling runs the opposite way to the upward-growing thread list. */
     state->screen = TUI_SCREEN_BROWSER;

@@ -29,9 +29,23 @@ static void announced(rns_runtime_t *runtime, const rns_node_result *event,
 
 static bool valid_page(const rns_micron_page *page, size_t index) {
     if (page == NULL || page->truncated || page->unsupported) return false;
+    if (index == 4U) {
+        for (size_t i = 0U; i < page->span_count; ++i)
+            if (strcmp(rns_micron_span_text(page, &page->spans[i]),
+                       "You are not authorised to carry out the request.") == 0) return true;
+        return false;
+    }
+    if (index == 5U)
+        return page->span_count == 1U &&
+            strcmp(rns_micron_span_text(page, &page->spans[0]), "Restricted page") == 0;
     if (index == 0U)
         return page->span_count == 1U &&
             strcmp(rns_micron_span_text(page, &page->spans[0]), "Small page") == 0;
+    if (index >= 2U)
+        return page->span_count == 1U &&
+            strcmp(rns_micron_span_text(page, &page->spans[0]),
+                   index == 2U ? "Form: Rei / preview / unset" :
+                                 "Form: Rei / submit / unset") == 0;
     if (page->span_count != 100U) return false;
     uint32_t seed = 0x13579bdfU;
     for (size_t line = 0U; line < 100U; ++line) {
@@ -80,17 +94,44 @@ int main(int argc, char **argv) {
     size_t completed = 0U;
     bool opened = false, failed = false;
     if (rns_hal_monotonic_ms(&start) != RNS_OK) failed = true;
-    while (!failed && completed < 2U) {
+    while (!failed && completed < 6U) {
         if (rns_hal_monotonic_ms(&now) != RNS_OK || now - start > 60000U) break;
         size_t processed;
         if (rns_runtime_poll(runtime, 64U, &processed) != RNS_OK) { failed = true; break; }
         if (peer.known && !opened) {
+            if (completed == 5U) {
+                /* Explicit synthetic test identity, also known to the Python
+                 * allowlist. No user identity is read or transmitted. */
+                uint8_t private_key[RNS_IDENTITY_PRIVATE_SIZE];
+                for (size_t i = 0U; i < sizeof private_key; ++i) private_key[i] = (uint8_t)i;
+                rns_identity visitor;
+                if (!rns_identity_from_private(&visitor, private_key)) { failed = true; break; }
+                rns_browser_options_t identified = {.request_identity = &visitor};
+                rns_browser_destroy(browser);
+                browser = NULL;
+                rns_status_t created = rns_browser_create(&browser, runtime, &identified);
+                rns_hal_secure_zero(&visitor, sizeof visitor);
+                rns_hal_secure_zero(private_key, sizeof private_key);
+                if (created != RNS_OK) { failed = true; break; }
+            }
             char url[100];
             for (size_t i = 0U; i < 16U; ++i)
                 (void)snprintf(url + 2U*i, sizeof url - 2U*i, "%02x", peer.destination[i]);
             (void)snprintf(url + 32U, sizeof url - 32U, ":/page/%s.mu",
-                           completed == 0U ? "index" : "large");
-            if (rns_browser_open(browser, url, &peer.identity, NULL, 0U) != RNS_OK) {
+                           completed == 0U ? "index" : completed == 1U ? "large" :
+                           completed < 4U ? "form" : "restricted");
+            /* Synthetic MessagePack map: field_/var_ keys are passed by
+             * NomadNet to executable pages; unrelated keys must be ignored. */
+            static const uint8_t preview[] =
+                "\x83\xaa" "field_name" "\xa3" "Rei" "\xaa" "var_action"
+                "\xa7" "preview" "\xa7" "ignored" "\xa3" "bad";
+            static const uint8_t submit[] =
+                "\x83\xaa" "field_name" "\xa3" "Rei" "\xaa" "var_action"
+                "\xa6" "submit" "\xa7" "ignored" "\xa3" "bad";
+            const uint8_t *form = completed == 2U ? preview : submit;
+            size_t form_length = completed == 2U ? sizeof preview - 1U : sizeof submit - 1U;
+            if (completed < 2U || completed >= 4U) { form = NULL; form_length = 0U; }
+            if (rns_browser_open(browser, url, &peer.identity, form, form_length) != RNS_OK) {
                 failed = true; break;
             }
             opened = true;
@@ -107,8 +148,8 @@ int main(int argc, char **argv) {
         (void)rns_hal_sleep_ms(2U);
     }
     printf("{\"pages\":%zu,\"error\":%d,\"ok\":%s}\n", completed,
-           (int)rns_browser_error(browser), !failed && completed == 2U ? "true" : "false");
+           (int)rns_browser_error(browser), !failed && completed == 6U ? "true" : "false");
     rns_browser_destroy(browser);
     rns_runtime_destroy(runtime);
-    return !failed && completed == 2U ? 0 : 1;
+    return !failed && completed == 6U ? 0 : 1;
 }

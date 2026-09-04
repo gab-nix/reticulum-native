@@ -15,13 +15,16 @@ struct rns_browser {
     rns_browser_state_t state;
     rns_status_t error;
     rns_identity identity;
+    rns_identity request_identity;
+    bool link_identified;
     uint8_t destination[16];
     char url[RNS_BROWSER_URL_MAX + 1U];
     char path[RNS_BROWSER_PATH_MAX + 1U];
     uint8_t form[RNS_BROWSER_FORM_MAX];
     size_t form_length;
     double discovery_started;
-    rns_micron_page page;
+    rns_micron_page *page;
+    char page_url[RNS_BROWSER_URL_MAX + 1U];
 };
 
 static rns_status_t browser_now(rns_browser_t *browser, double *now) {
@@ -119,12 +122,26 @@ static void response_received(rns_request_receipt_t *receipt,
         return;
     }
     if (response_length > browser->options.max_response_size ||
-        !valid_utf8(response, response_length) ||
-        !rns_micron_parse(&browser->page, response, response_length)) {
+        !valid_utf8(response, response_length)) {
         browser_fail(browser, response_length > browser->options.max_response_size
                                   ? RNS_ERROR_OVERFLOW : RNS_ERROR_PROTOCOL);
         return;
     }
+    /* Commit a page only after parsing succeeds; failed loads must not
+     * mutate the last successful document or its associated address. */
+    rns_micron_page *page = malloc(sizeof *page);
+    if (page == NULL) {
+        browser_fail(browser, RNS_ERROR_NO_MEMORY);
+        return;
+    }
+    if (!rns_micron_parse(page, response, response_length)) {
+        free(page);
+        browser_fail(browser, RNS_ERROR_PROTOCOL);
+        return;
+    }
+    free(browser->page);
+    browser->page = page;
+    memcpy(browser->page_url, browser->url, strlen(browser->url) + 1U);
     browser->error = RNS_OK;
     browser->state = RNS_BROWSER_COMPLETE;
 }
@@ -149,6 +166,14 @@ static void link_changed(rns_runtime_link_t *link, rns_link_state state,
                          rns_status_t reason, void *context) {
     rns_browser_t *browser = context;
     if (state == RNS_LINK_ACTIVE && browser->receipt == NULL) {
+        if (browser->request_identity.has_private && !browser->link_identified) {
+            rns_status_t identified = rns_runtime_link_identify(link, &browser->request_identity);
+            if (identified != RNS_OK) {
+                browser_fail(browser, identified);
+                return;
+            }
+            browser->link_identified = true;
+        }
         rns_request_options_t options = {
             .timeout_seconds = browser->options.request_timeout_seconds,
             .max_response_size = browser->options.max_response_size,
@@ -170,6 +195,8 @@ rns_status_t rns_browser_create(rns_browser_t **output, rns_runtime_t *runtime,
     if (output == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     *output = NULL;
     if (runtime == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (options != NULL && options->request_identity != NULL &&
+        !options->request_identity->has_private) return RNS_ERROR_INVALID_ARGUMENT;
     if (options != NULL && (!isfinite(options->path_timeout_seconds) ||
                             options->path_timeout_seconds < 0.0))
         return RNS_ERROR_INVALID_ARGUMENT;
@@ -177,6 +204,10 @@ rns_status_t rns_browser_create(rns_browser_t **output, rns_runtime_t *runtime,
     if (browser == NULL) return RNS_ERROR_NO_MEMORY;
     browser->runtime = runtime;
     if (options != NULL) browser->options = *options;
+    if (browser->options.request_identity != NULL) {
+        browser->request_identity = *browser->options.request_identity;
+        browser->options.request_identity = NULL;
+    }
     if (browser->options.path_timeout_seconds == 0.0)
         browser->options.path_timeout_seconds = 10.0;
     if (browser->options.max_response_size == 0U)
@@ -190,6 +221,8 @@ void rns_browser_destroy(rns_browser_t *browser) {
     if (browser == NULL) return;
     rns_request_receipt_destroy(browser->receipt);
     rns_runtime_link_destroy(browser->link);
+    rns_hal_secure_zero(&browser->request_identity, sizeof browser->request_identity);
+    free(browser->page);
     free(browser);
 }
 
@@ -217,6 +250,7 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
     if (!reuse) {
         rns_runtime_link_destroy(browser->link);
         browser->link = NULL;
+        browser->link_identified = false;
     }
     memcpy(browser->destination, destination, sizeof destination);
     browser->identity = *node_identity;
@@ -302,6 +336,9 @@ const char *rns_browser_url(const rns_browser_t *browser) {
 }
 
 const rns_micron_page *rns_browser_page(const rns_browser_t *browser) {
-    return browser != NULL && browser->state == RNS_BROWSER_COMPLETE
-               ? &browser->page : NULL;
+    return browser != NULL ? browser->page : NULL;
+}
+
+const char *rns_browser_page_url(const rns_browser_t *browser) {
+    return browser != NULL && browser->page != NULL ? browser->page_url : NULL;
 }

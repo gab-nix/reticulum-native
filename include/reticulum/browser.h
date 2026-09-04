@@ -41,6 +41,10 @@ typedef struct rns_browser_options {
      * NULL uses the platform monotonic clock. */
     double (*clock)(void *context);
     void *clock_context;
+    /* Optional private visitor identity, copied at creation. NULL preserves
+     * anonymous browsing. Opting in discloses this public identity to every
+     * node visited by this browser instance; destroy it to return anonymous. */
+    const rns_identity *request_identity;
 } rns_browser_options_t;
 
 rns_status_t rns_browser_create(rns_browser_t **browser, rns_runtime_t *runtime,
@@ -60,7 +64,12 @@ rns_browser_state_t rns_browser_state(const rns_browser_t *browser);
 double rns_browser_progress(const rns_browser_t *browser);
 rns_status_t rns_browser_error(const rns_browser_t *browser);
 const char *rns_browser_url(const rns_browser_t *browser);
+/* Last successfully parsed page, retained during subsequent loads, failures
+ * and cancellation. NULL until the first success. Borrowed storage remains
+ * valid until the next successful load or browser destruction. */
 const rns_micron_page *rns_browser_page(const rns_browser_t *browser);
+/* URL belonging to the retained page, not a pending/failed navigation. */
+const char *rns_browser_page_url(const rns_browser_t *browser);
 
 #ifdef __cplusplus
 }
