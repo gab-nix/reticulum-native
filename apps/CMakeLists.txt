@@ -19,6 +19,12 @@ add_executable(nomad-chat
 target_include_directories(nomad-chat PRIVATE ${CURSES_INCLUDE_DIRS})
 target_link_libraries(nomad-chat PRIVATE reticulum::reticulum ${CURSES_LIBRARIES})
 target_compile_features(nomad-chat PRIVATE c_std_17)
+if(UNIX)
+    target_compile_definitions(nomad-chat PRIVATE _POSIX_C_SOURCE=200809L)
+endif()
+if(APPLE)
+    target_compile_definitions(nomad-chat PRIVATE _DARWIN_C_SOURCE)
+endif()
 reticulum_set_project_warnings(nomad-chat)
 
 install(TARGETS nomad-chat RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
