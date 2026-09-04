@@ -605,6 +605,50 @@ lxmf_status_t lxmf_standard_fields_merge(
     return LXMF_OK;
 }
 
+lxmf_status_t lxmf_fields_merge_ticket(
+    const uint8_t *existing_fields, size_t existing_length,
+    const lxmf_ticket_field_t *ticket, uint8_t *output, size_t output_capacity,
+    size_t *output_length) {
+    if (output_length != NULL) *output_length = 0u;
+    if ((existing_length != 0u && existing_fields == NULL) || output == NULL ||
+        output_length == NULL || existing_length > LXMF_MAX_MESSAGE_SIZE ||
+        (ticket != NULL && !ticket->present)) return LXMF_ERR_ARGUMENT;
+    size_t capacity = output_capacity < LXMF_MAX_MESSAGE_SIZE ? output_capacity : LXMF_MAX_MESSAGE_SIZE;
+    uintptr_t in = (uintptr_t)existing_fields, out = (uintptr_t)output;
+    if (existing_length != 0u && capacity != 0u &&
+        (out >= in ? out - in < existing_length : in - out < capacity))
+        return LXMF_ERR_ARGUMENT;
+    lxmf_ticket_field_t replacement = {0}, previous;
+    if (ticket != NULL) replacement = *ticket;
+    static const uint8_t empty[] = {0x80u};
+    if (existing_length == 0u) { existing_fields = empty; existing_length = sizeof empty; }
+    lxmf_status_t status = lxmf_fields_parse_ticket(existing_fields, existing_length, &previous);
+    if (status != LXMF_OK) return status;
+    reader_t reader = {existing_fields, existing_fields + existing_length, 0u};
+    size_t count = 0u;
+    if (!container(&reader, 5u, &count)) return LXMF_ERR_FORMAT;
+    size_t new_count = count - (previous.present ? 1u : 0u) + (ticket != NULL ? 1u : 0u);
+    if (new_count > FIELDS_MAX_ITEMS) return LXMF_ERR_BOUNDS;
+    writer_t writer = {output, capacity};
+    if (!put_head(&writer, 5u, new_count)) return LXMF_ERR_BOUNDS;
+    for (size_t i = 0u; i < count; ++i) {
+        const uint8_t *start = reader.p;
+        reader_t key_reader = reader;
+        uint64_t key = UINT64_MAX;
+        bool integer = unsigned_value(&key_reader, &key);
+        if (!skip(&reader, 0u) || !skip(&reader, 0u)) return LXMF_ERR_FORMAT;
+        if ((!integer || key != LXMF_FIELD_TICKET) &&
+            !put(&writer, start, (size_t)(reader.p - start))) return LXMF_ERR_BOUNDS;
+    }
+    if (ticket != NULL &&
+        (!put_head(&writer, 0u, LXMF_FIELD_TICKET) ||
+         !put_head(&writer, 4u, 2u) || !put_head(&writer, 0u, replacement.expires_at) ||
+         !put_slice(&writer, 2u, (lxmf_slice_t){replacement.ticket, LXMF_TICKET_LENGTH})))
+        return LXMF_ERR_BOUNDS;
+    *output_length = capacity - writer.left;
+    return LXMF_OK;
+}
+
 lxmf_status_t lxmf_attachment_safe_name(lxmf_slice_t name, uint8_t *output,
                                         size_t output_capacity,
                                         size_t *output_length) {
