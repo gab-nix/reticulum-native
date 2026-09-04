@@ -1,0 +1,350 @@
+{
+  "c_events": [
+    {
+      "destination": "418d1e0a50ad256fa916c076d46b3653",
+      "event": "ready"
+    },
+    {
+      "event": "peer_verified"
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 4,
+      "result": 8,
+      "state": 0
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 4,
+      "result": 8,
+      "state": 0
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 4,
+      "result": 8,
+      "state": 0
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 0,
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "state",
+      "id": "c1bb7aa489978f0f1900c304dc437e282d73add6d4375f611eb710ecd12c734d",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "c1bb7aa489978f0f1900c304dc437e282d73add6d4375f611eb710ecd12c734d",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "c1bb7aa489978f0f1900c304dc437e282d73add6d4375f611eb710ecd12c734d",
+      "reason": 5,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "c1bb7aa489978f0f1900c304dc437e282d73add6d4375f611eb710ecd12c734d",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "c1bb7aa489978f0f1900c304dc437e282d73add6d4375f611eb710ecd12c734d",
+      "reason": 0,
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "c1bb7aa489978f0f1900c304dc437e282d73add6d4375f611eb710ecd12c734d",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "c1bb7aa489978f0f1900c304dc437e282d73add6d4375f611eb710ecd12c734d",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "state",
+      "id": "09f960f30b77fcc428414c4bd5856e1d88358fab1bcffc35387449e1024abbfc",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "09f960f30b77fcc428414c4bd5856e1d88358fab1bcffc35387449e1024abbfc",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "09f960f30b77fcc428414c4bd5856e1d88358fab1bcffc35387449e1024abbfc",
+      "reason": 5,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "09f960f30b77fcc428414c4bd5856e1d88358fab1bcffc35387449e1024abbfc",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "09f960f30b77fcc428414c4bd5856e1d88358fab1bcffc35387449e1024abbfc",
+      "reason": 0,
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "09f960f30b77fcc428414c4bd5856e1d88358fab1bcffc35387449e1024abbfc",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "09f960f30b77fcc428414c4bd5856e1d88358fab1bcffc35387449e1024abbfc",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "received",
+      "id": "9ae56de62ac5f170dfced4309cbbf54546214e402217995ef1e69940aff05061",
+      "size": 17,
+      "verified": true
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "9ae56de62ac5f170dfced4309cbbf54546214e402217995ef1e69940aff05061",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "received",
+      "id": "7c24f32800acd799945641d91542655d4ea54841f4878fe19a7dd0c832a27369",
+      "size": 2048,
+      "verified": true
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "7c24f32800acd799945641d91542655d4ea54841f4878fe19a7dd0c832a27369",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "received",
+      "id": "0e11a5858acfb76a439832274749d2bb8292d6ddf287bcd50e11e554b4e175a5",
+      "size": 23,
+      "verified": true
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "0e11a5858acfb76a439832274749d2bb8292d6ddf287bcd50e11e554b4e175a5",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "done",
+      "metadata_retained": true,
+      "ok": true,
+      "proved": 3,
+      "received": 3,
+      "resource": true,
+      "resource_parts": 2270,
+      "resource_segments": 2
+    }
+  ],
+  "c_exit": 0,
+  "driver_sha256": "c26e9c7ce6ebf4ebce0088c6bcb12848702f4c86976a35d24133b25cf8f9e5cc",
+  "driver_source_sha256": "64ce43f8f298af8fe158c5e4a2a7ffd3fbb84fd1c943b6dff005c336353fc572",
+  "errors": [],
+  "library_revision": "9bd29145a231ef220d5d2a68ef5ab64d8ae6f216",
+  "lxmf_commit": "795fdaa2b0777c13033787d933d1afc94a2377cb",
+  "lxmf_version": "1.1.0",
+  "ok": true,
+  "python_proved": [
+    {
+      "id": "9ae56de62ac5f170dfced4309cbbf54546214e402217995ef1e69940aff05061",
+      "representation": 1,
+      "resource_parts": 0,
+      "resource_segments": 0,
+      "size": 17,
+      "state": 8
+    },
+    {
+      "id": "7c24f32800acd799945641d91542655d4ea54841f4878fe19a7dd0c832a27369",
+      "representation": 2,
+      "resource_parts": 5,
+      "resource_segments": 1,
+      "size": 2048,
+      "state": 8
+    },
+    {
+      "id": "0e11a5858acfb76a439832274749d2bb8292d6ddf287bcd50e11e554b4e175a5",
+      "representation": 2,
+      "resource_parts": 2260,
+      "resource_segments": 2,
+      "size": 23,
+      "state": 8
+    }
+  ],
+  "python_received": [
+    {
+      "id": "828ebed2b72880f9b16b66a76d9c6d77a5aa8d45a1a867ef4f8bfe3786a18681",
+      "representation": 0,
+      "size": 17,
+      "valid": true,
+      "verified": true
+    },
+    {
+      "id": "c1bb7aa489978f0f1900c304dc437e282d73add6d4375f611eb710ecd12c734d",
+      "representation": 0,
+      "size": 2048,
+      "valid": true,
+      "verified": true
+    },
+    {
+      "id": "09f960f30b77fcc428414c4bd5856e1d88358fab1bcffc35387449e1024abbfc",
+      "representation": 0,
+      "size": 23,
+      "valid": true,
+      "verified": true
+    }
+  ],
+  "rns_commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
+  "rns_version": "1.5.2",
+  "run_utc": "2026-09-04T13:42:40.967886+00:00",
+  "transport": "loopback TCP"
+}

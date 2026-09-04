@@ -70,7 +70,7 @@ parts. Queue capacity is now derived from that pinned window maximum and the
 bounded number of active runtime links. The final exchange receives all six
 packet/Resource completion proofs.
 
-A clean-room receiver regression initially required the authenticated
+An independently reconstructed receiver regression initially required the authenticated
 encrypted stream's four-byte prefix to equal advertisement `r`. Privacy-safe
 stage diagnostics showed that pinned Python independently randomises those
 values: all parts arrived, the assembled wire length matched `t`, token
@@ -79,6 +79,12 @@ the distinct four-byte prefix. The receiver now strips that authenticated
 prefix while continuing to use advertisement `r` for part-map and final
 Resource hash verification. A deterministic distinct-prefix test prevents the
 regression.
+
+Fresh privacy-safe reports for the exact committed reconstruction are stored in
+`tests/fixtures/lxmf_direct_reconstruction_udp.provenance.json` and
+`tests/fixtures/lxmf_direct_reconstruction_tcp.provenance.json`. Both require
+all six directions and representations to complete with valid proofs and retain
+no plaintext, identities, private keys, histories, or packet captures.
 
 Validation checkpoint: AppleClang warnings-as-errors and the complete offline
 suite pass. Focused link/direct-router/runtime-Resource state-machine tests pass
