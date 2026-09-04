@@ -156,6 +156,13 @@ configuration such as `config/client.local.conf`.
 
 ## License
 
-No open-source license has been selected yet. Until a license file is added,
-copyright remains with the contributors and publication of the source does not
-grant permission to copy, modify, or redistribute it.
+Copyright (C) 2026 Gabriele Fumagalli.
+
+Unless a file states otherwise, Reticulum C is free software licensed under the
+**GNU General Public License, version 3 or (at your option) any later version**
+(`GPL-3.0-or-later`). You may use, study, modify, and redistribute it, including
+commercially, under the conditions in [LICENSE](LICENSE).
+
+Contributions intentionally submitted for inclusion are accepted under
+`GPL-3.0-or-later` unless agreed otherwise in writing. OpenAI Codex and other AI
+systems used during development are tools, not copyright holders.

@@ -88,3 +88,5 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/reticulum-config.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/reticulum-config-version.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/reticulum)
+install(FILES LICENSE
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/licenses/reticulum-c)

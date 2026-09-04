@@ -12,14 +12,16 @@ recorded in [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md). Most behavior was
 implemented from documentation and observed wire behavior. The Reticulum
 Resource wire format and certain transport behavior were additionally studied
 in the pinned reference source because no complete independent byte-level
-specification was available. No upstream source text is intended to be copied,
-but this source-review history means the project does not claim that those
-subsystems were developed under a formal clean-room process.
+specification was available. No upstream source text was detected in the C
+implementation. The affected implementation boundaries were later replaced
+through the separated process recorded in
+[`docs/INDEPENDENT_RECONSTRUCTION.md`](docs/INDEPENDENT_RECONSTRUCTION.md).
+That record is deliberately narrower than a blanket legal clean-room claim.
 
 Generated fixtures under `tests/fixtures/` contain synthetic protocol vectors
 or privacy-filtered interoperability results. Their adjacent provenance records
-identify the generator and upstream revision. A project's future top-level
-license does not replace any rights that may apply to third-party material.
+identify the generator and upstream revision. The project's top-level license
+does not replace any rights that may apply to third-party material.
 
 At the recorded compatibility baseline:
 
