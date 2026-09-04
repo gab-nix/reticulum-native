@@ -66,7 +66,9 @@ static void test_screen_scoping(void) {
         assert(state->screen == (tui_screen_t)screen);
         if (screen != TUI_SCREEN_CONVERSATIONS) {
             assert(tui_dispatch_key(state, 'i'));
-            assert(state->overlay == TUI_OVERLAY_NONE);
+            assert(state->overlay == (screen == TUI_SCREEN_BROWSER ?
+                TUI_OVERLAY_BROWSER_IDENTITY : TUI_OVERLAY_NONE));
+            if (screen == TUI_SCREEN_BROWSER) assert(tui_dispatch_key(state, 27));
             assert(tui_dispatch_key(state, 'p'));
             assert(tui_dispatch_key(state, 'x'));
             assert(tui_dispatch_key(state, 't'));
@@ -451,6 +453,54 @@ static void test_browser_form_keyboard_and_dump(void) {
     state_destroy(state);
 }
 
+static void test_browser_identity_consent(void) {
+    tui_state_t *state = state_create();
+    state->screen = TUI_SCREEN_BROWSER;
+    assert(tui_dispatch_key(state, 'i'));
+    assert(state->overlay == TUI_OVERLAY_BROWSER_IDENTITY && !state->browser_identified);
+    assert(tui_dispatch_key(state, 'N')); /* Modal consumes cross-screen keys. */
+    assert(state->screen == TUI_SCREEN_BROWSER);
+    assert(tui_dispatch_key(state, 27));
+    assert(!state->browser_identified && state->overlay == TUI_OVERLAY_NONE);
+    assert(tui_dispatch_key(state, 'i'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(!state->browser_identified); /* No verified destination or runtime. */
+
+    rns_config_t config;
+    rns_config_init(&config);
+    assert(rns_runtime_create(&state->runtime, &config, NULL) == RNS_OK);
+    assert(rns_browser_create(&state->browser, state->runtime, NULL) == RNS_OK);
+    assert(rns_identity_generate(&state->identity));
+    rns_node_record node = {0};
+    node.kind = RNS_NODE_KIND_NOMAD;
+    node.destination[0] = 0x33u;
+    rns_identity_export_public(&state->identity, node.public_key);
+    assert(rns_node_registry_upsert(&state->nodes, &node));
+    strcpy(state->url, "33000000000000000000000000000000:/page/index.mu");
+    assert(tui_dispatch_key(state, 'i'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->browser_identified && state->browser_identity_destination[0] == 0x33u);
+    assert(state->overlay == TUI_OVERLAY_NONE);
+    /* Disable creates a fresh anonymous browser even if reload is offline. */
+    assert(tui_dispatch_key(state, 'i'));
+    assert(tui_dispatch_key(state, '\n'));
+    assert(!state->browser_identified);
+    assert(tui_state_browser_identification(state, true));
+    node.destination[0] = 0x55u;
+    assert(rns_node_registry_upsert(&state->nodes, &node));
+    (void)tui_state_browse(state, "55000000000000000000000000000000:/page/index.mu", false);
+    assert(!state->browser_identified);
+    for (size_t i = 0u; i < sizeof state->browser_identity_destination; ++i)
+        assert(state->browser_identity_destination[i] == 0u);
+    state->overlay = TUI_OVERLAY_BROWSER_IDENTITY;
+    state->screen = TUI_SCREEN_CONVERSATIONS;
+    assert(tui_dispatch_key(state, '\n')); /* Hidden consent cannot identify. */
+    assert(state->overlay == TUI_OVERLAY_NONE && !state->browser_identified);
+    rns_browser_destroy(state->browser);
+    rns_runtime_destroy(state->runtime);
+    state_destroy(state);
+}
+
 static void test_browser_anchor_navigation(void) {
     static const char markup[] =
         "`[Later`#later] `[Missing`#missing]\n"
@@ -580,6 +630,7 @@ int main(void) {
     test_browser_terminal_escape();
     test_browser_form_keyboard_and_dump();
     test_browser_anchor_navigation();
+    test_browser_identity_consent();
     test_network_popup_reasons();
     test_rrc_headless_dump();
     return 0;
