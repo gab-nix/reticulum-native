@@ -31,6 +31,7 @@ set(RETICULUM_PORTABLE_SOURCES
     src/platform/platform.c
     src/platform/status.c
     src/platform/storage.c
+    src/platform/storage_record.c
     src/transport/ifac.c
     src/transport/node.c
     src/transport/path_store.c

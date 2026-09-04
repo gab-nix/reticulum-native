@@ -12,10 +12,10 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 
 | Feature | Status | Remaining work |
 | --- | --- | --- |
-| C17 library, injectable platform HAL, buffers and typed status API | IMPLEMENTED | ESP-IDF platform adapter and target validation |
+| C17 library, injectable platform HAL, buffers and typed status API | IMPLEMENTED | ESP-IDF provider is implemented; target build and physical validation remain |
 | Replaceable crypto provider API | IMPLEMENTED | OpenSSL-free dispatcher link test passes; ESP-IDF backend and cross-backend vectors remain |
-| Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | NVS and native SX1262 providers |
-| Explicit platform-separated source manifests | WIP | ESP-IDF component must consume the portable manifest after provider separation |
+| Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | Bounded serialized dual-slot NVS has host fake-backend transaction and corruption tests, including hypothetical buffered-commit recovery; pinned ESP-IDF 5.5 direct-set/commit-no-op target validation and SX1262 validation remain |
+| Explicit platform-separated source manifests | WIP | Platform/storage component uses an explicit embedded subset; full portable protocol-core consumption remains |
 | Cryptography, identities, destinations and packets | IMPLEMENTED | Broader platform validation |
 | Signed announces and path lookup | WIP | Complete persistence and routing compatibility |
 | UDP interfaces | IMPLEMENTED | Adverse-network hardening |
@@ -103,7 +103,8 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
 | RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |
 | C browser to pinned Nomad page handler, UDP/TCP | IMPLEMENTED | `interop_browser_udp` and `interop_browser_tcp` validate small and resource-backed rendered pages; reverse-direction C hosting remains |
-| Stock Nomad form/file acceptance | PLANNED | Add bidirectional client/host live drivers |
+| C browser executable-page form submissions, UDP/TCP | IMPLEMENTED | `interop_browser_udp/tcp` send two distinct MessagePack forms to pinned unmodified `Node.serve_page`; field/variable values and ignored keys checked; reverse C-host direction remains |
+| Stock Nomad file acceptance | PLANNED | Add bidirectional client/host live drivers |
 | Complete keyboard workflow acceptance | WIP | Existing headless tests cover subsets; every screen/action needs mapped cases |
 | Remote hosted file transfer | PLANNED | Hosted files currently support local reads only; add upstream file metadata/resource exchange |
 | Large browser form requests | PLANNED | Browser currently caps encoded forms at 403 bytes; add resource-backed request acceptance |
@@ -117,7 +118,7 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Node, messaging and diagnostics subcommands | WIP | Complete operational-tool coverage |
 | Headless TUI state tests | IMPLEMENTED | More layouts and terminal sizes |
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
-| Provider API boundaries for embedded ports | IMPLEMENTED | Full portable-core allocation conversion, ESP-IDF adapters and physical-board validation remain |
+| Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform and NVS adapters exist; full portable-core conversion and physical-board validation remain |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
 | Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement drivers and validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
