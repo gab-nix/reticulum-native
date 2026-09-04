@@ -1,0 +1,55 @@
+name: Pinned Python interoperability
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-interop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: markqvist/Reticulum
+          ref: ea98db4f53dcf0defc0e71a16e60d28b1229c4e6
+          path: upstream/Reticulum
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: markqvist/LXMF
+          ref: 795fdaa2b0777c13033787d933d1afc94a2377cb
+          path: upstream/LXMF
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: markqvist/NomadNet
+          ref: 475c0ee2a0388cf8470e7f1e90d5decb67b579ea
+          path: upstream/NomadNet
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libbz2-dev libncurses-dev ninja-build
+          python -m pip install ./upstream/Reticulum
+          python -m pip install --no-deps ./upstream/LXMF
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DRETICULUM_WARNINGS_AS_ERRORS=ON
+          -DRETICULUM_BUILD_TESTS=ON
+          -DRETICULUM_PYTHON_INTEROP=ON
+          -DRETICULUM_PYTHON_RNS=${{ github.workspace }}/upstream/Reticulum
+          -DRETICULUM_PYTHON_LXMF=${{ github.workspace }}/upstream/LXMF
+          -DRETICULUM_PYTHON_NOMADNET=${{ github.workspace }}/upstream/NomadNet
+      - run: cmake --build build
+      - name: Run pinned upstream exchanges
+        run: ctest --test-dir build -L interop --output-on-failure
