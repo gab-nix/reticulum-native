@@ -34,6 +34,13 @@ typedef enum rns_browser_state {
 typedef struct rns_browser_options {
     size_t max_response_size;
     double request_timeout_seconds;
+    /* Zero selects ten seconds. This bounds route discovery separately from
+     * link and response deadlines. Must be finite and non-negative. */
+    double path_timeout_seconds;
+    /* Optional monotonic seconds source; context must outlive the browser.
+     * NULL uses the platform monotonic clock. */
+    double (*clock)(void *context);
+    void *clock_context;
 } rns_browser_options_t;
 
 rns_status_t rns_browser_create(rns_browser_t **browser, rns_runtime_t *runtime,
