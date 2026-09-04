@@ -39,6 +39,12 @@ interface configuration:
 Never commit identities, private keys, message stores, local configuration,
 packet captures or logs containing private traffic.
 
+In Browser, press `i` to request identification for a restricted page, then
+Enter to confirm or Escape to cancel. Your public identity is disclosed only
+to that node for this session. Following a link to another node switches back
+to anonymous browsing. Press `i` again to confirm returning to an anonymous
+link; this cannot undo identity information already disclosed to the node.
+
 ## Heltec WiFi LoRa 32 V3.1 firmware
 
 An early ESP-IDF project scaffold lives in

@@ -44,6 +44,7 @@ static bool overlay_visible(tui_state_t *state) {
         case TUI_OVERLAY_HELP:
             return state->screen == TUI_SCREEN_CONVERSATIONS;
         case TUI_OVERLAY_PEER: return conversation_selected(state);
+        case TUI_OVERLAY_BROWSER_IDENTITY: return state->screen == TUI_SCREEN_BROWSER;
         case TUI_OVERLAY_NODE_ACTIONS: {
             rns_node_record node;
             return state->screen == TUI_SCREEN_NETWORK &&
@@ -381,6 +382,8 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'i':
             if (conversation_selected(state))
                 state->overlay = TUI_OVERLAY_PEER;
+            else if (state->screen == TUI_SCREEN_BROWSER)
+                state->overlay = TUI_OVERLAY_BROWSER_IDENTITY;
             break;
         case 'p':
             if (conversation_selected(state)) tui_state_toggle_pin(state);
@@ -447,6 +450,14 @@ bool tui_dispatch_key(tui_state_t *state, int key) {
     }
     if (state->overlay == TUI_OVERLAY_NODE_ACTIONS) {
         handle_node_actions_key(state, key);
+        return true;
+    }
+    if (state->overlay == TUI_OVERLAY_BROWSER_IDENTITY) {
+        if (key == 27) state->overlay = TUI_OVERLAY_NONE;
+        else if (key == '\n' || key == KEY_ENTER) {
+            (void)tui_state_browser_identification(state, !state->browser_identified);
+            state->overlay = TUI_OVERLAY_NONE;
+        }
         return true;
     }
     if (state->overlay != TUI_OVERLAY_NONE) {
