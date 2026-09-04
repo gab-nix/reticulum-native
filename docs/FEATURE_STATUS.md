@@ -54,8 +54,9 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Ratchet history | WIP | Rotation and enforcement parity |
 | Stamps and asynchronous stamp generation | WIP | Complete cancellation and peer-policy behavior |
 | Tickets | WIP | Complete issuance and renewal workflows |
+| Trusted-contact outgoing tickets | IMPLEMENTED | `test_tui_fields_ui` checks issue/reuse before signing, no ticket for unknown/blocked recipients, and delivered-ticket throttling; full TUI-to-upstream acceptance remains |
+| Ticket delivery throttling | IMPLEMENTED | Packet/link/resource proof completion records included locally issued tickets; `test_lxmf_router_receipt` checks no throttling at socket-send, proof-only throttling, restart and one-day expiry; resource-ticket persistence failure coverage remains |
 | Python fractional ticket expiry | IMPLEMENTED | `test_lxmf_tickets` accepts float32/64 fractions and rejects NaN/infinity/negative/overflow; integer-second storage rounds expiry down by less than one second, never extending validity |
-| Ticket delivery throttling | IMPLEMENTED | Packet/link/resource proof completion records included locally issued tickets; `test_lxmf_router_receipt` checks no throttling at socket-send, proof-only throttling, restart and one-day expiry; trusted-contact issuance remains |
 | Ticket fields composition | IMPLEMENTED | `test_lxmf_fields` covers add/replace/remove, opaque preservation, 64-bit expiry, output object-budget roundtrips, bounds and malformed input; issuance/delivery scheduling remains |
 | Propagation upload | WIP | Automatic scheduling and durable resume |
 | Propagation download and acknowledgement | WIP | Automatic synchronisation and recovery |
@@ -93,7 +94,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Map screen | PLANNED | Match upstream 1.2.0 placeholder; a full mapping system is outside this parity baseline |
 | Hosted propagation-node controls | PLANNED | Full implementation |
 | Hosted Node TUI screen | PLANNED | Replace unavailable action with hosting controls and headless acceptance tests |
-| Terminal QR address display | PLANNED | Replace placeholder with actual QR encoding and terminal rendering |
+| Terminal QR address display | IMPLEMENTED | Bounded public-address QR, four-module quiet zone and half-block rendering; `test_tui_qr` checks bounds/rows/layout, headless dispatcher checks modal keys, `tools/test_tui_qr_decode.py` independently decodes synthetic output with pinned zxing-cpp; physical phone scan and paper-message QR remain |
 | RRC persistent room history | PLANNED | Bounded persistence, restart recovery and history UI tests |
 | RRC Resource envelopes | PLANNED | Oversized channel envelope exchange and upstream acceptance |
 
@@ -130,7 +131,8 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
 | Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform, NVS and crypto adapters exist; target CI compilation and a boot-time KAT are configured, but the crypto host test still uses an OpenSSL symmetric shim and no target/device result is recorded yet |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
+| Pinned Semtech SX126x command driver dependency | IMPLEMENTED | Exact v2.5.0 sources, license, provenance and checksums are recorded; host command/HAL-boundary test passes, but the Heltec backend and hardware remain unverified |
 | Bounded RNode split-packet framing codec | IMPLEMENTED | Local boundary, malformed-fragment, duplicate, reorder, timeout, collision, sequence-reuse and callback-failure tests pass; stock RNode interoperability is not yet verified |
-| Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement drivers and validate on physical hardware |
+| Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement the SPI/BUSY/DIO1/DIO2/DIO3 backend, radio owner task, OLED and shell; validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |

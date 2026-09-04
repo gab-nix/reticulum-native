@@ -49,8 +49,9 @@ link; this cannot undo identity information already disclosed to the node.
 
 An early ESP-IDF project scaffold lives in
 `firmware/heltec_wifi_lora_32_v3_1`. It currently provides the immutable board
-descriptor and a safe OLED power/reset sequence; it does not yet drive the
-SX1262, OLED, Reticulum runtime or LXMF services.
+descriptor, a safe OLED power/reset sequence, and the pinned Semtech SX126x
+command driver; it does not yet provide the Heltec SPI/IRQ radio backend or
+drive the OLED, Reticulum runtime or LXMF services.
 
 The descriptor follows Heltec's official V3 board pin definition and the
 upstream RNode `BOARD_HELTEC32_V3` mapping. V3.1 keeps the V3 radio/display
@@ -62,6 +63,12 @@ not V3.1.
 - Heltec V3 pins: https://github.com/Heltec-Aaron-Lee/WiFi_Kit_series/blob/master/variants/heltec_wifi_lora_32_V3/pins_arduino.h
 - Heltec revision log: https://github.com/HelTecAutomation/HeltecDocs/blob/master/doc/node/esp32/source/wifi_lora_32/hardware_update_log.md
 - RNode board mapping: https://github.com/markqvist/RNode_Firmware/blob/master/Boards.h#L2633-L2699
+
+The upstream Semtech SX126x driver is vendored at version 2.5.0, commit
+`a10c5dfdf89788c6ac805e9fe98889de44175aa2`, under its Clear BSD License.
+Exact included files, source URLs and SHA-256 checksums are recorded in
+`third_party/semtech/sx126x_driver/UPSTREAM.md`. Optional upstream BPSK and
+LR-FHSS modules are not included in the initial LoRa-only firmware profile.
 
 The firmware pins ESP-IDF 5.5.4 and the `esp32s3` target. After installing
 and activating ESP-IDF 5.5.4, configure and build it separately from the desktop
@@ -116,6 +123,17 @@ Use `ctest --test-dir build -LE interop` for the ordinary suite. Offline builds
 leave `RETICULUM_PYTHON_INTEROP` disabled and require no Python installation.
 
 ## License
+
+In Conversations, `i` opens peer information and `q` shows its address QR; `U`
+shows your own address (also available in Settings). QR display requires a
+UTF-8 terminal at least 40 columns by 23 rows; smaller terminals retain the
+plain address. These QR codes contain only public addresses, not identities
+or keys. Paper-message QR export and camera scanning are separate workflows.
+
+The application vendors the MIT-licensed [Project Nayuki C QR encoder](https://github.com/nayuki/QR-Code-generator)
+1.8.0 at `720f62bddb7226106071d4728c292cb1df519ceb`, with unmodified sources,
+license headers and SHA-256 provenance in `third_party/qrcodegen`. It is not
+linked into `libreticulum` or the embedded firmware.
 
 Copyright (C) 2026 Gabriele Fumagalli.
 

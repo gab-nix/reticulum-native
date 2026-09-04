@@ -1,0 +1,3 @@
+# Preserve exact licensed upstream bytes; project files retain whitespace checks.
+third_party/qrcodegen/qrcodegen.c -whitespace
+third_party/qrcodegen/qrcodegen.h -whitespace

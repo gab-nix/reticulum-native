@@ -23,6 +23,7 @@ idf_component_register(
         heap
         mbedtls
         nvs_flash
+        semtech_sx126x
 )
 
 # ESP-IDF's public newlib wrappers intentionally use GCC's `#include_next`, so
