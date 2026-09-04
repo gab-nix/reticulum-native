@@ -27,6 +27,8 @@ typedef struct {
     lxmf_router_event_t last;
 } event_context_t;
 
+static uint64_t wall_now(void *context) { return *(uint64_t *)context; }
+
 static uint16_t reserve_udp_port(void) {
     rns_udp_endpoint_t *endpoint = NULL;
     rns_udp_address_t address;
@@ -108,6 +110,14 @@ int main(void) {
     lxmf_store_t alice_store = {0}, bob_store = {0};
     assert(lxmf_store_open(&alice_store, alice_path) == LXMF_OK);
     assert(lxmf_store_open(&bob_store, bob_path) == LXMF_OK);
+    char ticket_path[] = "/tmp/lxmf-router-ticket-XXXXXX";
+    fd = mkstemp(ticket_path);
+    assert(fd >= 0); close(fd); unlink(ticket_path);
+    lxmf_ticket_store_t *tickets = NULL;
+    assert(lxmf_ticket_store_open(&tickets, ticket_path) == LXMF_OK);
+    uint64_t wall = 1000u;
+    lxmf_ticket_entry_t issued, reusable;
+    assert(lxmf_ticket_store_issue(tickets, bob_destination, wall, &issued, NULL) == LXMF_OK);
 
     resolver_context_t alice_resolver = {.identity = &bob};
     resolver_context_t bob_resolver = {.identity = &alice};
@@ -134,7 +144,8 @@ int main(void) {
         .resolve_identity = resolve,
         .resolve_context = &alice_resolver,
         .event_callback = event_received,
-        .event_context = &alice_events
+        .event_context = &alice_events,
+        .ticket_store = tickets, .wall_clock = wall_now, .wall_clock_context = &wall
     };
     lxmf_router_config_t bob_router_config = {
         .identity = &bob,
@@ -169,6 +180,21 @@ int main(void) {
     outbound.status = LXMF_DELIVERY_QUEUED;
     outbound.signature_state = LXMF_SIGNATURE_VERIFIED;
     outbound.content = (lxmf_slice_t){(const uint8_t *)"receipt", 7U};
+    uint8_t fields[30] = {0x81u, LXMF_FIELD_TICKET, 0x92u, 0xcfu};
+    for (size_t i = 0u; i < 8u; ++i) fields[4u+i] = (uint8_t)(issued.expires_at >> (56u - 8u*i));
+    fields[12] = 0xc4u; fields[13] = LXMF_TICKET_LENGTH;
+    memcpy(fields + 14u, issued.ticket, LXMF_TICKET_LENGTH);
+    lxmf_message_t source = {0}, decoded;
+    memcpy(source.source, alice_destination, 16u);
+    memcpy(source.destination, bob_destination, 16u);
+    source.timestamp = outbound.timestamp;
+    source.content = outbound.content;
+    source.fields_msgpack = (lxmf_slice_t){fields, sizeof fields};
+    uint8_t packed[512]; size_t packed_length = 0u;
+    assert(lxmf_pack(&source, lxmf_identity_signer, &alice, packed, sizeof packed, &packed_length) == LXMF_OK);
+    assert(lxmf_unpack(packed, packed_length, NULL, NULL, &decoded) == LXMF_OK);
+    memcpy(outbound.message_id, decoded.message_id, 32u);
+    outbound.packed = (lxmf_slice_t){packed, packed_length};
     bool inserted = false;
     assert(lxmf_store_put(&alice_store, &outbound, &inserted) == LXMF_OK &&
            inserted);
@@ -179,6 +205,8 @@ int main(void) {
     assert(lxmf_store_read(&alice_store, outbound.message_id, &stored, content,
                            sizeof content) == LXMF_OK);
     assert(stored.status == LXMF_DELIVERY_SENT);
+    assert(lxmf_ticket_store_issue(tickets, bob_destination, wall, &reusable, NULL) == LXMF_OK);
+    assert(memcmp(reusable.ticket, issued.ticket, LXMF_TICKET_LENGTH) == 0);
     assert(stored.delivery.desired_method ==
            LXMF_DELIVERY_METHOD_OPPORTUNISTIC);
     assert(stored.delivery.actual_method ==
@@ -206,6 +234,7 @@ int main(void) {
     assert(stored.delivery.progress == LXMF_DELIVERY_PROGRESS_COMPLETE);
     assert(alice_events.last.state == LXMF_DELIVERY_DELIVERED);
     assert(alice_events.last.result == LXMF_OK);
+    assert(lxmf_ticket_store_issue(tickets, bob_destination, wall, &reusable, NULL) == LXMF_ERR_PENDING);
 
     lxmf_router_destroy(&bob_router);
     lxmf_router_destroy(&alice_router);
@@ -213,6 +242,13 @@ int main(void) {
     rns_runtime_destroy(alice_runtime);
     lxmf_store_close(&bob_store);
     lxmf_store_close(&alice_store);
+    lxmf_ticket_store_close(tickets);
+    assert(lxmf_ticket_store_open(&tickets, ticket_path) == LXMF_OK);
+    assert(lxmf_ticket_store_issue(tickets, bob_destination, wall + 1u, &reusable, NULL) == LXMF_ERR_PENDING);
+    assert(lxmf_ticket_store_issue(tickets, bob_destination, wall + LXMF_TICKET_INTERVAL_SECONDS,
+                                  &reusable, NULL) == LXMF_OK);
+    lxmf_ticket_store_close(tickets);
+    unlink(ticket_path);
     unlink(bob_path);
     unlink(alice_path);
     return 0;
