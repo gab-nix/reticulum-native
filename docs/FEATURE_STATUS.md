@@ -105,13 +105,15 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 
 | Acceptance behavior | Status | Evidence and remaining work |
 | --- | --- | --- |
-| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Seven opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
+| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Nine opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
 | Direct packet and multi-segment LXMF, UDP/TCP | VERIFIED | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp` pass bidirectionally with pinned Python; loss/restart scenarios remain outside this evidence |
 | Bidirectional ticket exchange and stamped resource replies, UDP/TCP | VERIFIED | Direct drivers exchange signed ticket fields, then validate ticket-backed stamps for packet and multi-segment replies against pinned Python; renewal, expiry-boundary and restart scenarios remain outside this evidence |
 | Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
 | RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |
-| C browser to pinned Nomad page handler, UDP/TCP | IMPLEMENTED | `interop_browser_udp` and `interop_browser_tcp` validate small and resource-backed rendered pages; reverse-direction C hosting remains |
-| C browser executable-page form submissions, UDP/TCP | IMPLEMENTED | `interop_browser_udp/tcp` send two distinct MessagePack forms to pinned unmodified `Node.serve_page`; field/variable values and ignored keys checked; reverse C-host direction remains |
+| C browser to pinned Nomad page handler, UDP/TCP | IMPLEMENTED | `interop_browser_udp` and `interop_browser_tcp` validate small and resource-backed rendered pages; integrated stock TUI acceptance remains |
+| C browser executable-page form submissions, UDP/TCP | IMPLEMENTED | `interop_browser_udp/tcp` send two distinct MessagePack forms to pinned unmodified `Node.serve_page`; field/variable values and ignored keys checked; OS executable sandboxing remains separate |
+| Python client to C hosted page service, UDP/TCP | IMPLEMENTED | `interop_hosted_udp/tcp` check exact small/resource responses, two in-process executable-provider form results and anonymous denial/identified allowlist access; paired reverse browser tests cover protocol direction, not stock Nomad TUI rendering or OS executable sandboxing |
+| Bidirectional hosted page/request bytes, UDP/TCP | VERIFIED | Paired `interop_browser_udp/tcp` and `interop_hosted_udp/tcp` pass with pinned upstream for small/resource pages, form values, anonymous denial and identified access; evidence excludes complete TUI/hosting controls and OS execution policy |
 | Stock Nomad file acceptance | PLANNED | Add bidirectional client/host live drivers |
 | Complete keyboard workflow acceptance | WIP | Existing headless tests cover subsets; every screen/action needs mapped cases |
 | Remote hosted file transfer | PLANNED | Hosted files currently support local reads only; add upstream file metadata/resource exchange |
