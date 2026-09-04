@@ -30,7 +30,8 @@ static const rns_heltec_v3_1_board_t BOARD = {
     .uart_rx = RNS_HELTEC_V3_1_GPIO_UART_RX,
     .console_baud = 115200U,
     .has_psram = false,
-    .has_battery_adc = false
+    .battery_adc_state = RNS_HELTEC_V3_1_BATTERY_ADC_UNVALIDATED,
+    .battery_adc_gpio = -1
 };
 
 _Static_assert(RNS_HELTEC_V3_1_GPIO_RADIO_NSS != RNS_HELTEC_V3_1_GPIO_OLED_SDA,
@@ -64,7 +65,8 @@ bool rns_heltec_v3_1_board_valid(const rns_heltec_v3_1_board_t *board) {
            board->console_uart == 0 && board->uart_tx == RNS_HELTEC_V3_1_GPIO_UART_TX &&
            board->uart_rx == RNS_HELTEC_V3_1_GPIO_UART_RX &&
            board->console_baud == 115200U && !board->has_psram &&
-           !board->has_battery_adc;
+           board->battery_adc_state == RNS_HELTEC_V3_1_BATTERY_ADC_UNVALIDATED &&
+           board->battery_adc_gpio == -1;
 }
 
 bool rns_heltec_v3_1_prepare_oled(const rns_heltec_v3_1_gpio_ops_t *ops) {

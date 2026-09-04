@@ -45,11 +45,21 @@ int main(void) {
 
     assert(board == rns_heltec_v3_1_board());
     assert(rns_heltec_v3_1_board_valid(board));
-    assert(board->radio_nss == 8 && board->radio_dio1 == 14);
+    assert(board->radio_nss == 8 && board->radio_sck == 9);
+    assert(board->radio_mosi == 10 && board->radio_miso == 11);
+    assert(board->radio_reset == 12 && board->radio_busy == 13);
+    assert(board->radio_dio1 == 14);
+    assert(board->radio_dio2_rf_switch && board->radio_dio3_tcxo);
+    assert(board->radio_tcxo_millivolts == 1800U);
+    assert(board->radio_tcxo_startup_us >= 5000U);
     assert(board->oled_sda == 17 && board->oled_scl == 18);
+    assert(board->oled_reset == 21 && board->led == 35);
     assert(board->vext == 36 && board->vext_active_low);
+    assert(board->console_uart == 0 && board->console_baud == 115200U);
     assert(board->uart_tx == 43 && board->uart_rx == 44);
-    assert(!board->has_psram && !board->has_battery_adc);
+    assert(!board->has_psram);
+    assert(board->battery_adc_state == RNS_HELTEC_V3_1_BATTERY_ADC_UNVALIDATED);
+    assert(board->battery_adc_gpio == -1);
 
     assert(rns_heltec_v3_1_prepare_oled(&ops));
     assert(fake.gpio_count == 5U);

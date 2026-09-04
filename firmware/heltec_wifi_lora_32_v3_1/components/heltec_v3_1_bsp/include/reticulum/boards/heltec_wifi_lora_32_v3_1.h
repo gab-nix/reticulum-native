@@ -33,6 +33,12 @@ enum {
     RNS_HELTEC_V3_1_OLED_RESET_US = 20000
 };
 
+typedef enum {
+    RNS_HELTEC_V3_1_BATTERY_ADC_NONE = 0,
+    RNS_HELTEC_V3_1_BATTERY_ADC_UNVALIDATED = 1,
+    RNS_HELTEC_V3_1_BATTERY_ADC_VALIDATED = 2
+} rns_heltec_v3_1_battery_adc_state_t;
+
 typedef struct {
     const char *name;
     int radio_nss;
@@ -60,7 +66,8 @@ typedef struct {
     int uart_rx;
     uint32_t console_baud;
     bool has_psram;
-    bool has_battery_adc;
+    rns_heltec_v3_1_battery_adc_state_t battery_adc_state;
+    int battery_adc_gpio;
 } rns_heltec_v3_1_board_t;
 
 typedef struct {
