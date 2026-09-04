@@ -24,6 +24,10 @@ reticulum_validate_source_manifest()
 add_library(reticulum ${RETICULUM_HOST_SOURCES})
 add_library(reticulum::reticulum ALIAS reticulum)
 
+target_compile_definitions(reticulum PRIVATE
+    RNS_CRYPTO_OPENSSL_DEFAULT=1
+    RNS_PLATFORM_POSIX_DEFAULT=1)
+
 target_compile_features(reticulum PUBLIC c_std_17)
 set_target_properties(reticulum PROPERTIES
     C_EXTENSIONS OFF

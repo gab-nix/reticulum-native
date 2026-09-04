@@ -4,6 +4,7 @@
 
 set(RETICULUM_PORTABLE_SOURCES
     src/announce/announce.c
+    src/crypto/provider.c
     src/destination/destination.c
     src/interfaces/auto.c
     src/interfaces/framing.c
@@ -26,7 +27,10 @@ set(RETICULUM_PORTABLE_SOURCES
     src/nomad/rrc_session.c
     src/packet/packet.c
     src/platform/buffer.c
+    src/platform/interface.c
+    src/platform/platform.c
     src/platform/status.c
+    src/platform/storage.c
     src/transport/ifac.c
     src/transport/node.c
     src/transport/path_store.c

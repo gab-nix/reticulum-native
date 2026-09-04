@@ -36,7 +36,30 @@ reticulum_set_project_warnings(rrc_live_driver)
 
 reticulum_add_test(test_buffer test_buffer.c)
 reticulum_add_test(test_hal test_hal.c)
+reticulum_add_test(test_platform_api unit/test_platform_api.c)
+
+add_executable(test_platform_no_default
+    unit/test_platform_no_default.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/platform/platform.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/platform/interface.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/platform/storage.c)
+target_include_directories(test_platform_no_default PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_features(test_platform_no_default PRIVATE c_std_17)
+reticulum_set_project_warnings(test_platform_no_default)
+add_test(NAME test_platform_no_default COMMAND test_platform_no_default)
 reticulum_add_test(test_crypto unit/test_crypto.c)
+
+# Prove the portable dispatcher links without OpenSSL and fails closed before
+# an embedded crypto backend is installed.
+add_executable(test_crypto_no_default
+    unit/test_crypto_no_default.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/crypto/provider.c)
+target_include_directories(test_crypto_no_default PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_features(test_crypto_no_default PRIVATE c_std_17)
+reticulum_set_project_warnings(test_crypto_no_default)
+add_test(NAME test_crypto_no_default COMMAND test_crypto_no_default)
 reticulum_add_test(test_identity unit/test_identity.c)
 reticulum_add_test(test_ratchet_store unit/test_ratchet_store.c)
 reticulum_add_test(test_destination unit/test_destination.c)
