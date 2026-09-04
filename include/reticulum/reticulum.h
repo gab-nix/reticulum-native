@@ -25,6 +25,7 @@
 #include "reticulum/node.h"
 #include "reticulum/packet.h"
 #include "reticulum/proof.h"
+#include "reticulum/radio_framing.h"
 #include "reticulum/runtime.h"
 #include "reticulum/rrc.h"
 #include "reticulum/rrc_session.h"

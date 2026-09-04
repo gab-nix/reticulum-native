@@ -54,6 +54,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Stamps and asynchronous stamp generation | WIP | Complete cancellation and peer-policy behavior |
 | Tickets | WIP | Complete issuance and renewal workflows |
 | Ticket delivery throttling | IMPLEMENTED | Packet/link/resource proof completion records included locally issued tickets; `test_lxmf_router_receipt` checks no throttling at socket-send, proof-only throttling, restart and one-day expiry; trusted-contact issuance remains |
+| Ticket fields composition | IMPLEMENTED | `test_lxmf_fields` covers add/replace/remove, opaque preservation, 64-bit expiry, output object-budget roundtrips, bounds and malformed input; issuance/delivery scheduling remains |
 | Propagation upload | WIP | Automatic scheduling and durable resume |
 | Propagation download and acknowledgement | WIP | Automatic synchronisation and recovery |
 | Paper messages and `lxm://` URIs | IMPLEMENTED | QR rendering and scanning |
@@ -124,6 +125,7 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Parser fuzz targets | WIP | Coverage for every untrusted parser |
 | Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform and NVS adapters exist; full portable-core conversion and physical-board validation remain |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
+| Bounded RNode split-packet framing codec | IMPLEMENTED | Local boundary, malformed-fragment, duplicate, reorder, timeout, collision, sequence-reuse and callback-failure tests pass; stock RNode interoperability is not yet verified |
 | Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement drivers and validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |
