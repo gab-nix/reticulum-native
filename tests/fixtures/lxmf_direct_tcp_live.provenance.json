@@ -1,7 +1,7 @@
 {
   "c_events": [
     {
-      "destination": "aef24ab52c62fd69606351c9e4ec9345",
+      "destination": "58ed9b5d4664408b3658dfe461537b8a",
       "event": "ready"
     },
     {
@@ -9,152 +9,342 @@
     },
     {
       "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 0,
       "result": 0,
       "state": 1
     },
     {
       "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 4,
       "result": 8,
       "state": 0
     },
     {
       "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 0,
       "result": 0,
       "state": 1
     },
     {
       "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 4,
       "result": 8,
       "state": 0
     },
     {
       "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 0,
       "result": 0,
       "state": 1
     },
     {
       "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 4,
       "result": 8,
       "state": 0
     },
     {
       "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 0,
       "result": 0,
       "state": 1
     },
     {
       "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
-      "result": 8,
-      "state": 0
-    },
-    {
-      "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
-      "result": 0,
-      "state": 1
-    },
-    {
-      "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
       "result": 0,
       "state": 2
     },
     {
+      "attempt": 1,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 0,
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "state",
+      "id": "5d1076c28e97112e30c897935bd56513643a525fd5032e93630a66f568242ac0",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5d1076c28e97112e30c897935bd56513643a525fd5032e93630a66f568242ac0",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5d1076c28e97112e30c897935bd56513643a525fd5032e93630a66f568242ac0",
+      "reason": 5,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "5d1076c28e97112e30c897935bd56513643a525fd5032e93630a66f568242ac0",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5d1076c28e97112e30c897935bd56513643a525fd5032e93630a66f568242ac0",
+      "reason": 0,
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "5d1076c28e97112e30c897935bd56513643a525fd5032e93630a66f568242ac0",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5d1076c28e97112e30c897935bd56513643a525fd5032e93630a66f568242ac0",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "state",
+      "id": "53f3a97ae9ae5b0be3e47560fd77ca63e76c69b7e888688b4e48b3cd4a3ee983",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "53f3a97ae9ae5b0be3e47560fd77ca63e76c69b7e888688b4e48b3cd4a3ee983",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "53f3a97ae9ae5b0be3e47560fd77ca63e76c69b7e888688b4e48b3cd4a3ee983",
+      "reason": 5,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "53f3a97ae9ae5b0be3e47560fd77ca63e76c69b7e888688b4e48b3cd4a3ee983",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "53f3a97ae9ae5b0be3e47560fd77ca63e76c69b7e888688b4e48b3cd4a3ee983",
+      "reason": 0,
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "53f3a97ae9ae5b0be3e47560fd77ca63e76c69b7e888688b4e48b3cd4a3ee983",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "53f3a97ae9ae5b0be3e47560fd77ca63e76c69b7e888688b4e48b3cd4a3ee983",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
       "event": "received",
-      "id": "5aa0c205bc637f6a1a84d31d23a44eaf5af6c20fc430022866fba07992465c4b",
+      "id": "7321e0f1bfb6809d0dbba327de94f4fb093fe7ed94354ce45dd54128593ae5bb",
       "size": 17,
       "verified": true
     },
     {
-      "event": "state",
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
-      "result": 0,
-      "state": 3
-    },
-    {
-      "event": "state",
-      "id": "d21541cabc4082ed61d1d351e592c63215361d716c4fa3172910cc968624766c",
-      "result": 0,
-      "state": 1
-    },
-    {
-      "event": "state",
-      "id": "d21541cabc4082ed61d1d351e592c63215361d716c4fa3172910cc968624766c",
-      "result": 0,
-      "state": 2
-    },
-    {
-      "event": "state",
-      "id": "d21541cabc4082ed61d1d351e592c63215361d716c4fa3172910cc968624766c",
+      "attempt": 0,
+      "event": "router",
+      "id": "7321e0f1bfb6809d0dbba327de94f4fb093fe7ed94354ce45dd54128593ae5bb",
+      "reason": 0,
       "result": 0,
       "state": 3
     },
     {
       "event": "received",
-      "id": "eda79a40cf320d98c30a07afb43609de7ceeb2471d312dc52b70febd89df8da8",
+      "id": "119803178f4f800c635a3ece32030e997f873947e2a41e3646648b451c8fe542",
       "size": 2048,
       "verified": true
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "119803178f4f800c635a3ece32030e997f873947e2a41e3646648b451c8fe542",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "received",
+      "id": "6f19f703084d1c3218321c9117f08ca9dc7bc050060be5056eb12da975ae9918",
+      "size": 23,
+      "verified": true
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "6f19f703084d1c3218321c9117f08ca9dc7bc050060be5056eb12da975ae9918",
+      "reason": 0,
+      "result": 0,
+      "state": 3
     },
     {
       "event": "done",
       "metadata_retained": true,
       "ok": true,
-      "proved": 2,
-      "received": 2,
+      "proved": 3,
+      "received": 3,
       "resource": true,
-      "resource_parts": 5
+      "resource_parts": 2270,
+      "resource_segments": 2
     }
   ],
   "c_exit": 0,
-  "driver_sha256": "d67026a3b313a4b233e63be035acd6ba5b2af86f4f58f033c30fb6518ab2eb50",
-  "driver_source_sha256": "b606e51ddffea169e5e3a683abdd4208789e19bc6a1026b60a60498d90d861b6",
+  "driver_sha256": "20b10e9c530d2423750e55a586e5c9f24c21a76a4a96704cb2213ba0707729de",
+  "driver_source_sha256": "64ce43f8f298af8fe158c5e4a2a7ffd3fbb84fd1c943b6dff005c336353fc572",
   "errors": [],
-  "library_revision": "1723bdca42678873d2b2a306c56abd9c7f7f547c",
+  "library_revision": "9e386001bdab2ea86ec1040d1cbd487e42dc5d06",
   "lxmf_commit": "795fdaa2b0777c13033787d933d1afc94a2377cb",
   "lxmf_version": "1.1.0",
   "ok": true,
   "python_proved": [
     {
-      "id": "5aa0c205bc637f6a1a84d31d23a44eaf5af6c20fc430022866fba07992465c4b",
+      "id": "7321e0f1bfb6809d0dbba327de94f4fb093fe7ed94354ce45dd54128593ae5bb",
       "representation": 1,
       "resource_parts": 0,
+      "resource_segments": 0,
       "size": 17,
       "state": 8
     },
     {
-      "id": "eda79a40cf320d98c30a07afb43609de7ceeb2471d312dc52b70febd89df8da8",
+      "id": "119803178f4f800c635a3ece32030e997f873947e2a41e3646648b451c8fe542",
       "representation": 2,
       "resource_parts": 5,
+      "resource_segments": 1,
       "size": 2048,
+      "state": 8
+    },
+    {
+      "id": "6f19f703084d1c3218321c9117f08ca9dc7bc050060be5056eb12da975ae9918",
+      "representation": 2,
+      "resource_parts": 2260,
+      "resource_segments": 2,
+      "size": 23,
       "state": 8
     }
   ],
   "python_received": [
     {
-      "id": "026789a387f0530b8e10b1ca1b9e82fd5e19dce58806a1a37eaa365d107e1f98",
+      "id": "e2937f0db6c5e257974bb464cca853fe4c651139ebd7d472c41d836ef930d4d8",
       "representation": 0,
       "size": 17,
       "valid": true,
       "verified": true
     },
     {
-      "id": "d21541cabc4082ed61d1d351e592c63215361d716c4fa3172910cc968624766c",
+      "id": "5d1076c28e97112e30c897935bd56513643a525fd5032e93630a66f568242ac0",
       "representation": 0,
       "size": 2048,
+      "valid": true,
+      "verified": true
+    },
+    {
+      "id": "53f3a97ae9ae5b0be3e47560fd77ca63e76c69b7e888688b4e48b3cd4a3ee983",
+      "representation": 0,
+      "size": 23,
       "valid": true,
       "verified": true
     }
   ],
   "rns_commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
   "rns_version": "1.5.2",
-  "run_utc": "2026-09-03T19:03:36.976870+00:00",
+  "run_utc": "2026-09-04T10:55:15.873453+00:00",
   "transport": "loopback TCP"
 }

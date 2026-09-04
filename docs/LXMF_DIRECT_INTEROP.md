@@ -31,15 +31,19 @@ The driver is built normally but not registered as an automatic CTest because
 the pinned Python source checkouts are an explicit external prerequisite.
 
 Each endpoint creates a temporary synthetic identity. After both announce
-identities are known, each sends a 17-byte packet-sized message and a 2,048-byte
-message whose incompressible content requires five Resource parts. The harness
+identities are known, each sends three messages: a 17-byte packet-sized
+message; a 2,048-byte incompressible message requiring five Resource parts;
+and a 23-byte-content message whose deterministic binary extension exceeds
+1 MiB and requires two Resource segments and more than 2,200 parts. The harness
 requires all of these to pass:
 
-- Both receivers validate source signatures and exact synthetic content.
-- Both directions preserve titles and an unknown binary extension field.
-- Both senders reach DELIVERED through validated packet/Resource proofs.
-- Python selects direct packet then direct Resource representation; the C
-  router reports Resource transfer, with more than one actual part.
+- Both receivers validate source signatures, exact synthetic content and exact
+  deterministic extension bytes.
+- Both directions preserve titles and unknown binary extension fields.
+- All three sends in both directions reach DELIVERED through validated packet
+  or Resource proofs.
+- Python selects packet, Resource and Resource representations; both endpoints
+  report that the final transfer spans more than one Resource segment.
 - The C receiver retains the complete representation after verification.
 
 The first real exchange revealed that the C router discarded the packed
@@ -55,18 +59,22 @@ identities and IDs. Temporary identity/configuration/history data is removed
 on normal completion, failure and child termination.
 
 `tests/fixtures/lxmf_direct_tcp_live.provenance.json` records the equivalent
-framed-TCP run from committed native source `1723bdc`. The first TCP attempt
+framed-TCP run from committed native source `9e38600`. An earlier TCP attempt
 identified a real MTU negotiation defect: the C responder confirmed Python's
 16 KiB stream MTU despite using 500-byte packet/framing buffers, so Python's
 large Resource parts were correctly sent but could not be admitted. The link
-layer now signs a downgrade to its actual local bound; the final exchange uses
-five parts in both directions and receives both completion proofs.
+layer now signs a downgrade to its actual local bound. The new multi-segment
+acceptance case exposed a second defect: the native TCP egress queue held only
+eight frames while pinned Python can grow a Resource request window to 75
+parts. Queue capacity is now derived from that pinned window maximum and the
+bounded number of active runtime links. The final exchange receives all six
+packet/Resource completion proofs.
 
 Validation checkpoint: AppleClang warnings-as-errors and the complete offline
-suite pass. The live exchanges also pass with the C driver instrumented with
-ASan/UBSan, along with focused link/direct-router/runtime-Resource tests.
-LeakSanitizer is unsupported by this macOS runtime; GCC was unavailable. This
-is narrowly scoped bidirectional UDP and continuous framed-TCP direct-message
-evidence, not full NomadNet parity: relay hops, loss/reconnect/restart,
-stamps/tickets, ratchet enforcement, propagation, multi-segment resources,
-physical RNode and end-user TUI workflows are outside this acceptance case.
+suite pass. Focused link/direct-router/runtime-Resource state-machine tests pass
+with ASan/UBSan, and the normal committed driver passes both live UDP and TCP
+exchanges. LeakSanitizer is unsupported by this macOS runtime; GCC was
+unavailable. This is narrowly scoped bidirectional UDP and continuous
+framed-TCP direct-message evidence, not full NomadNet parity: relay hops,
+loss/reconnect, stamps/tickets, ratchet enforcement, propagation, physical
+RNode and end-user TUI workflows are outside this acceptance case.

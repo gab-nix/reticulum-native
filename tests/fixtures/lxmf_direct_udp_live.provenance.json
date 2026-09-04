@@ -1,7 +1,7 @@
 {
   "c_events": [
     {
-      "destination": "7d1ce7e12f99859b683bbf2b56ddbc90",
+      "destination": "1f1964d7988cad212997f1dc623e2fe0",
       "event": "ready"
     },
     {
@@ -9,128 +9,314 @@
     },
     {
       "event": "state",
-      "id": "e770d1b460de4989e5e591f11e6a936ce3532167377037cbd6239a9095020ed3",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "reason": 0,
       "result": 0,
       "state": 1
     },
     {
       "event": "state",
-      "id": "e770d1b460de4989e5e591f11e6a936ce3532167377037cbd6239a9095020ed3",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "reason": 4,
       "result": 8,
       "state": 0
     },
     {
       "event": "state",
-      "id": "e770d1b460de4989e5e591f11e6a936ce3532167377037cbd6239a9095020ed3",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "reason": 0,
       "result": 0,
       "state": 1
     },
     {
       "event": "state",
-      "id": "e770d1b460de4989e5e591f11e6a936ce3532167377037cbd6239a9095020ed3",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "result": 8,
+      "state": 0
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "reason": 4,
       "result": 8,
       "state": 0
     },
     {
       "event": "state",
-      "id": "e770d1b460de4989e5e591f11e6a936ce3532167377037cbd6239a9095020ed3",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "reason": 0,
       "result": 0,
       "state": 1
     },
     {
       "event": "state",
-      "id": "e770d1b460de4989e5e591f11e6a936ce3532167377037cbd6239a9095020ed3",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "reason": 0,
       "result": 0,
       "state": 2
     },
     {
       "event": "state",
-      "id": "e770d1b460de4989e5e591f11e6a936ce3532167377037cbd6239a9095020ed3",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
+      "reason": 0,
       "result": 0,
       "state": 3
     },
     {
       "event": "state",
-      "id": "3c38438806ef2e659c5c34175f98ec658e09d88d359eac01530c8fcbd6147d24",
+      "id": "23383d0e09ceb0ac79035fa9a032b4fcb1e92a166f9111cb5a17d62bb07276e3",
       "result": 0,
       "state": 1
     },
     {
+      "attempt": 1,
+      "event": "router",
+      "id": "23383d0e09ceb0ac79035fa9a032b4fcb1e92a166f9111cb5a17d62bb07276e3",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "23383d0e09ceb0ac79035fa9a032b4fcb1e92a166f9111cb5a17d62bb07276e3",
+      "reason": 5,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "23383d0e09ceb0ac79035fa9a032b4fcb1e92a166f9111cb5a17d62bb07276e3",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "23383d0e09ceb0ac79035fa9a032b4fcb1e92a166f9111cb5a17d62bb07276e3",
+      "reason": 0,
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "23383d0e09ceb0ac79035fa9a032b4fcb1e92a166f9111cb5a17d62bb07276e3",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "23383d0e09ceb0ac79035fa9a032b4fcb1e92a166f9111cb5a17d62bb07276e3",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "state",
+      "id": "ad908c04b4220431b5f130f34235107dbf1049841156bf825bcc24b4ee62d827",
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "ad908c04b4220431b5f130f34235107dbf1049841156bf825bcc24b4ee62d827",
+      "reason": 0,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "ad908c04b4220431b5f130f34235107dbf1049841156bf825bcc24b4ee62d827",
+      "reason": 5,
+      "result": 0,
+      "state": 1
+    },
+    {
+      "event": "state",
+      "id": "ad908c04b4220431b5f130f34235107dbf1049841156bf825bcc24b4ee62d827",
+      "result": 0,
+      "state": 2
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "ad908c04b4220431b5f130f34235107dbf1049841156bf825bcc24b4ee62d827",
+      "reason": 0,
+      "result": 0,
+      "state": 2
+    },
+    {
+      "event": "state",
+      "id": "ad908c04b4220431b5f130f34235107dbf1049841156bf825bcc24b4ee62d827",
+      "result": 0,
+      "state": 3
+    },
+    {
+      "attempt": 1,
+      "event": "router",
+      "id": "ad908c04b4220431b5f130f34235107dbf1049841156bf825bcc24b4ee62d827",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
       "event": "received",
-      "id": "0368ee881a7b7860dbab9df8e8f634d70aad707d3676fe0cf85eb509a7b4e2ca",
+      "id": "01211ac8632b589330716597679a708fa8ad750a902aa0b985411361db8317f5",
       "size": 17,
       "verified": true
     },
     {
-      "event": "state",
-      "id": "3c38438806ef2e659c5c34175f98ec658e09d88d359eac01530c8fcbd6147d24",
-      "result": 0,
-      "state": 2
-    },
-    {
-      "event": "state",
-      "id": "3c38438806ef2e659c5c34175f98ec658e09d88d359eac01530c8fcbd6147d24",
+      "attempt": 0,
+      "event": "router",
+      "id": "01211ac8632b589330716597679a708fa8ad750a902aa0b985411361db8317f5",
+      "reason": 0,
       "result": 0,
       "state": 3
     },
     {
       "event": "received",
-      "id": "e79cd2c07081ca320de0dd307ea2286ca1e7b23c6145a11b8babde9768580e39",
+      "id": "727faceb7802d8556e11121e312b156440d769d465ee57701b1e478170936796",
       "size": 2048,
       "verified": true
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "727faceb7802d8556e11121e312b156440d769d465ee57701b1e478170936796",
+      "reason": 0,
+      "result": 0,
+      "state": 3
+    },
+    {
+      "event": "received",
+      "id": "96fb25da39460fd78635962fba8b99d8ed4219111e57220b4b5043f69681d96c",
+      "size": 23,
+      "verified": true
+    },
+    {
+      "attempt": 0,
+      "event": "router",
+      "id": "96fb25da39460fd78635962fba8b99d8ed4219111e57220b4b5043f69681d96c",
+      "reason": 0,
+      "result": 0,
+      "state": 3
     },
     {
       "event": "done",
       "metadata_retained": true,
       "ok": true,
-      "proved": 2,
-      "received": 2,
+      "proved": 3,
+      "received": 3,
       "resource": true,
-      "resource_parts": 5
+      "resource_parts": 2270,
+      "resource_segments": 2
     }
   ],
   "c_exit": 0,
-  "driver_sha256": "7852f8cba65e218231c342af741f229316cf01a91c9e6668fc7e431d3765c059",
-  "driver_source_sha256": "069a88995808fb0d4de9d4692ff858befdb9924ccd1c4c979fc35afd33976a86",
+  "driver_sha256": "20b10e9c530d2423750e55a586e5c9f24c21a76a4a96704cb2213ba0707729de",
+  "driver_source_sha256": "64ce43f8f298af8fe158c5e4a2a7ffd3fbb84fd1c943b6dff005c336353fc572",
   "errors": [],
-  "library_revision": "95d597767b7eb814344d737fdde19b27fe008ebe",
+  "library_revision": "9e386001bdab2ea86ec1040d1cbd487e42dc5d06",
   "lxmf_commit": "795fdaa2b0777c13033787d933d1afc94a2377cb",
   "lxmf_version": "1.1.0",
   "ok": true,
   "python_proved": [
     {
-      "id": "0368ee881a7b7860dbab9df8e8f634d70aad707d3676fe0cf85eb509a7b4e2ca",
+      "id": "01211ac8632b589330716597679a708fa8ad750a902aa0b985411361db8317f5",
       "representation": 1,
       "resource_parts": 0,
+      "resource_segments": 0,
       "size": 17,
       "state": 8
     },
     {
-      "id": "e79cd2c07081ca320de0dd307ea2286ca1e7b23c6145a11b8babde9768580e39",
+      "id": "727faceb7802d8556e11121e312b156440d769d465ee57701b1e478170936796",
       "representation": 2,
       "resource_parts": 5,
+      "resource_segments": 1,
       "size": 2048,
+      "state": 8
+    },
+    {
+      "id": "96fb25da39460fd78635962fba8b99d8ed4219111e57220b4b5043f69681d96c",
+      "representation": 2,
+      "resource_parts": 2260,
+      "resource_segments": 2,
+      "size": 23,
       "state": 8
     }
   ],
   "python_received": [
     {
-      "id": "e770d1b460de4989e5e591f11e6a936ce3532167377037cbd6239a9095020ed3",
+      "id": "5194666a62b66635739cad937f81cb983a6c925d102831913a8d9c92a17357f4",
       "representation": 0,
       "size": 17,
       "valid": true,
       "verified": true
     },
     {
-      "id": "3c38438806ef2e659c5c34175f98ec658e09d88d359eac01530c8fcbd6147d24",
+      "id": "23383d0e09ceb0ac79035fa9a032b4fcb1e92a166f9111cb5a17d62bb07276e3",
       "representation": 0,
       "size": 2048,
+      "valid": true,
+      "verified": true
+    },
+    {
+      "id": "ad908c04b4220431b5f130f34235107dbf1049841156bf825bcc24b4ee62d827",
+      "representation": 0,
+      "size": 23,
       "valid": true,
       "verified": true
     }
   ],
   "rns_commit": "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6",
   "rns_version": "1.5.2",
-  "run_utc": "2026-09-03T16:35:10.365345+00:00",
+  "run_utc": "2026-09-04T10:54:38.150274+00:00",
   "transport": "loopback UDP"
 }
