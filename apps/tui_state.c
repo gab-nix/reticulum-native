@@ -1409,6 +1409,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
 
     rns_micron_history_init(&state->history);
     (void)snprintf(state->url, sizeof state->url, "nomad://local/home");
+    (void)snprintf(state->page_url, sizeof state->page_url, "%s", state->url);
     if (!rns_micron_parse(&state->page, tui_home_page, sizeof tui_home_page - 1u) ||
         !rns_micron_history_push(&state->history, state->url)) goto fail;
     rns_micron_form_init(&state->form, &state->page);
@@ -1467,6 +1468,9 @@ static void poll_browser(tui_state_t *state) {
         const rns_micron_page *page = rns_browser_page(state->browser);
         if (page != NULL) {
             state->page = *page;
+            const char *page_url = rns_browser_page_url(state->browser);
+            (void)snprintf(state->page_url, sizeof state->page_url, "%s",
+                           page_url != NULL ? page_url : state->url);
             rns_micron_form_init(&state->form, &state->page);
         }
         state->link_selected = 0u;
@@ -2400,6 +2404,12 @@ bool tui_state_browse(tui_state_t *state, const char *url, bool push_history) {
     return browse_request(state, url, push_history, NULL, 0u);
 }
 
+bool tui_state_browser_resolve(const tui_state_t *state, const char *target,
+                               char *output, size_t capacity) {
+    return state != NULL && state->page_url[0] != '\0' &&
+        rns_micron_normalize_url(state->page_url, target, output, capacity);
+}
+
 void tui_state_browse_selected(tui_state_t *state) {
     char url[RNS_MICRON_TEXT_MAX];
     uint8_t form_msgpack[RNS_BROWSER_FORM_MAX];
@@ -2429,7 +2439,7 @@ void tui_state_browse_selected(tui_state_t *state) {
         tui_state_set_status(state, "LXMF browser links require a destination handoff");
         return;
     }
-    if (!rns_micron_normalize_url(state->url, target, url, sizeof url)) {
+    if (!tui_state_browser_resolve(state, target, url, sizeof url)) {
         tui_state_set_status(state, "Invalid or oversized link");
         return;
     }
