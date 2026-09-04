@@ -12,6 +12,9 @@ int main(void) {
     assert(browser == NULL);
     rns_config_init(&config);
     assert(rns_runtime_create(&runtime, &config, NULL) == RNS_OK);
+    rns_browser_options_t invalid_identity = {.request_identity = &identity};
+    assert(rns_browser_create(&browser, runtime, &invalid_identity) == RNS_ERROR_INVALID_ARGUMENT);
+    assert(browser == NULL);
     assert(rns_browser_create(&browser, runtime, NULL) == RNS_OK);
     assert(browser != NULL);
     assert(rns_browser_state(browser) == RNS_BROWSER_IDLE);

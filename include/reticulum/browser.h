@@ -41,6 +41,10 @@ typedef struct rns_browser_options {
      * NULL uses the platform monotonic clock. */
     double (*clock)(void *context);
     void *clock_context;
+    /* Optional private visitor identity, copied at creation. NULL preserves
+     * anonymous browsing. Opting in discloses this public identity to every
+     * node visited by this browser instance; destroy it to return anonymous. */
+    const rns_identity *request_identity;
 } rns_browser_options_t;
 
 rns_status_t rns_browser_create(rns_browser_t **browser, rns_runtime_t *runtime,
