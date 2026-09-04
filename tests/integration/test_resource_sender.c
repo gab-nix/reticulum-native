@@ -6,6 +6,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const rns_crypto_provider_t *real_crypto;
+static size_t part_hash_calls;
+static bool collide_always;
+static int collision_sha256(void *context, const uint8_t *data, size_t length,
+                            uint8_t out[32]) {
+    (void)context;
+    if (length == RNS_RESOURCE_PART_MAX + 4U) {
+        ++part_hash_calls;
+        if (collide_always || part_hash_calls <= 2U) {
+            memset(out, 0x5a, 32U); return 1;
+        }
+    }
+    return real_crypto->sha256(real_crypto->context, data, length, out);
+}
+
 static void initialise_link(rns_link *link) {
     memset(link, 0, sizeof *link);
     link->state = RNS_LINK_ACTIVE;
@@ -454,7 +469,27 @@ static void test_advertisement_hardening(void) {
     rns_resource_sender_destroy(sender);
 }
 
+static void test_collision_remapping(void) {
+    real_crypto = rns_crypto_provider_current();
+    rns_crypto_provider_t provider = *real_crypto;
+    provider.sha256 = collision_sha256;
+    assert(rns_crypto_provider_install(&provider) == RNS_OK);
+    part_hash_calls = 0U; collide_always = false;
+    transfer_resource(false);
+    assert(part_hash_calls > 4U); /* Initial collision was remapped, then received. */
+    part_hash_calls = 0U; collide_always = true;
+    rns_link link; initialise_link(&link);
+    uint8_t source[1400] = {0};
+    rns_resource_sender_t *sender = NULL;
+    rns_resource_sender_options_t options = {.auto_compress = false};
+    assert(rns_resource_sender_create(&sender, &link, source, sizeof source,
+        &options) == RNS_ERROR_CRYPTO);
+    assert(sender == NULL && part_hash_calls == 16U);
+    rns_crypto_provider_restore_default();
+}
+
 int main(void) {
+    test_collision_remapping();
     transfer_resource(false);
     transfer_resource(true);
     test_compression_and_bounds();

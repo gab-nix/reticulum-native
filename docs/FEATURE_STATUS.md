@@ -38,6 +38,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Requests and request handlers | IMPLEMENTED | Complete access-policy compatibility |
 | Resource sending and receiving | WIP | Persistent resume and adverse-network recovery |
 | Segmented large resources | IMPLEMENTED | Complete low-MTU and retry behavior |
+| Resource part-hash collision recovery | IMPLEMENTED | `test_resource_sender` injects a collision and validates remapped full transfer; repeated collisions fail after eight attempts with cleanup. Rare CI timeout cause remains unproven; direct test exposes bounded progress diagnostics |
 
 ## LXMF messaging
 
