@@ -1,6 +1,7 @@
 #include "tui_render.h"
 
 #include "tui_text.h"
+#include "tui_qr.h"
 
 #include <curses.h>
 #include <limits.h>
@@ -187,6 +188,35 @@ static void centered_box(const char *title, const char *const *lines, size_t cou
     for (size_t i = 0u; i < count; ++i)
         clipped(stdscr, top + 2 + (int)i, left + 2, width - 4, lines[i]);
     (void)attroff(A_REVERSE);
+}
+
+static bool draw_address_qr(const char *address, const char *title) {
+    int rows, columns; getmaxyx(stdscr, rows, columns);
+    tui_qr_t qr;
+    if (!tui_qr_fits(rows, columns) || MB_CUR_MAX < 3 ||
+        !tui_qr_address(address, 32u, &qr)) return false;
+    const int height = 23, width = 40;
+    int top = (rows - height) / 2, left = (columns - width) / 2;
+    (void)attron(A_REVERSE);
+    for (int y = 0; y < height; ++y) {
+        (void)move(top + y, left);
+        for (int x = 0; x < width; ++x) (void)addch(' ');
+    }
+    clipped(stdscr, top, left + 2, width - 4, title);
+    clipped(stdscr, top + 1, left + 3, 32, address);
+    for (size_t row = 0; row < TUI_QR_ROWS; ++row)
+        (void)mvaddstr(top + 3 + (int)row, left + 3, qr.rows[row]);
+    clipped(stdscr, top + 21, left + 2, width - 4, "Public address only. Esc/i closes.");
+    (void)attroff(A_REVERSE);
+    return true;
+}
+
+static void draw_local_qr(const tui_state_t *state) {
+    char address[33]; tui_hex_format(state->local, 16u, address);
+    if (!draw_address_qr(address, "My LXMF address")) {
+        const char *lines[] = {address, "QR needs a UTF-8 terminal at least 40x23.", "Esc/U closes."};
+        centered_box("My LXMF address", lines, 3u);
+    }
 }
 
 static const char *delivery_marker(lxmf_delivery_status_t status) {
@@ -608,6 +638,7 @@ static void draw_conversation_overlay(const tui_state_t *state) {
             "PgUp/PgDn then e: reply to newest visible message",
             "PgUp/PgDn then z: react without changing the saved draft",
             "t/u: trust/untrust    n: local note    y: copy fallback",
+            "i then q: peer address QR    U: my public address QR",
             "v: explicitly save newest attachment (RETICULUM_ATTACHMENT_DIR)",
             "d: choose direct or propagated delivery for queued messages",
             "Composer: arrows Home End Del Backspace Ctrl-A/E/U/K/W",
@@ -618,7 +649,8 @@ static void draw_conversation_overlay(const tui_state_t *state) {
         return;
     }
     const tui_contact_t *contact = tui_state_selected_contact(state);
-    if (state->overlay != TUI_OVERLAY_PEER || contact == NULL) return;
+    if (state->overlay == TUI_OVERLAY_LOCAL_QR) { draw_local_qr(state); return; }
+    if ((state->overlay != TUI_OVERLAY_PEER && state->overlay != TUI_OVERLAY_PEER_QR) || contact == NULL) return;
     char peer[TUI_ADDRESS_DIGITS + 1u];
     char trust[64];
     char note[80];
@@ -630,7 +662,9 @@ static void draw_conversation_overlay(const tui_state_t *state) {
     (void)snprintf(flags, sizeof flags, "Pinned: %s  Blocked: %s  Unread: %zu",
                    contact->pinned ? "yes" : "no", contact->blocked ? "yes" : "no",
                    contact->unread);
-    const char *lines[] = {peer, "[ QR display unavailable in text-only build ]",
+    if (state->overlay == TUI_OVERLAY_PEER_QR && draw_address_qr(peer, "Peer LXMF address")) return;
+    const char *lines[] = {peer, state->overlay == TUI_OVERLAY_PEER_QR ?
+                           "QR needs a UTF-8 terminal at least 40x23." : "q: show scannable address QR",
                            trust, note, flags,
                            "Contact preferences are persisted. Esc/i closes."};
     centered_box("Peer information", lines, sizeof lines / sizeof lines[0]);
@@ -1313,6 +1347,7 @@ void tui_render_draw(tui_state_t *state) {
     }
     if (state->screen == TUI_SCREEN_SETTINGS) {
         draw_settings(state, &layout);
+        if (state->overlay == TUI_OVERLAY_LOCAL_QR) draw_local_qr(state);
         (void)refresh();
         return;
     }

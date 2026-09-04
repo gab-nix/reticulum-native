@@ -123,6 +123,17 @@ leave `RETICULUM_PYTHON_INTEROP` disabled and require no Python installation.
 
 ## License
 
+In Conversations, `i` opens peer information and `q` shows its address QR; `U`
+shows your own address (also available in Settings). QR display requires a
+UTF-8 terminal at least 40 columns by 23 rows; smaller terminals retain the
+plain address. These QR codes contain only public addresses, not identities
+or keys. Paper-message QR export and camera scanning are separate workflows.
+
+The application vendors the MIT-licensed [Project Nayuki C QR encoder](https://github.com/nayuki/QR-Code-generator)
+1.8.0 at `720f62bddb7226106071d4728c292cb1df519ceb`, with unmodified sources,
+license headers and SHA-256 provenance in `third_party/qrcodegen`. It is not
+linked into `libreticulum` or the embedded firmware.
+
 Copyright (C) 2026 Gabriele Fumagalli.
 
 Unless a file states otherwise, this project is licensed under the GNU General

@@ -44,6 +44,9 @@ static bool overlay_visible(tui_state_t *state) {
         case TUI_OVERLAY_HELP:
             return state->screen == TUI_SCREEN_CONVERSATIONS;
         case TUI_OVERLAY_PEER: return conversation_selected(state);
+        case TUI_OVERLAY_PEER_QR: return conversation_selected(state);
+        case TUI_OVERLAY_LOCAL_QR:
+            return state->screen == TUI_SCREEN_CONVERSATIONS || state->screen == TUI_SCREEN_SETTINGS;
         case TUI_OVERLAY_BROWSER_IDENTITY: return state->screen == TUI_SCREEN_BROWSER;
         case TUI_OVERLAY_NODE_ACTIONS: {
             rns_node_record node;
@@ -385,6 +388,10 @@ static bool handle_command_key(tui_state_t *state, int key) {
             else if (state->screen == TUI_SCREEN_BROWSER)
                 state->overlay = TUI_OVERLAY_BROWSER_IDENTITY;
             break;
+        case 'U':
+            if (state->screen == TUI_SCREEN_CONVERSATIONS || state->screen == TUI_SCREEN_SETTINGS)
+                state->overlay = TUI_OVERLAY_LOCAL_QR;
+            break;
         case 'p':
             if (conversation_selected(state)) tui_state_toggle_pin(state);
             break;
@@ -461,7 +468,11 @@ bool tui_dispatch_key(tui_state_t *state, int key) {
         return true;
     }
     if (state->overlay != TUI_OVERLAY_NONE) {
-        if (key == 27 || key == '?' || key == 'i') state->overlay = TUI_OVERLAY_NONE;
+        if (state->overlay == TUI_OVERLAY_PEER && key == 'q')
+            state->overlay = TUI_OVERLAY_PEER_QR;
+        else if (state->overlay == TUI_OVERLAY_PEER_QR && key == 27)
+            state->overlay = TUI_OVERLAY_PEER;
+        else if (key == 27 || key == '?' || key == 'i' || key == 'U') state->overlay = TUI_OVERLAY_NONE;
         return true;
     }
     if (!field_visible(state)) {
