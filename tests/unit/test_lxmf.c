@@ -56,6 +56,19 @@ int main(void) {
       0x6c, 0x6c, 0x6f, 0x81, 0x01, 0xc4, 0x01, 0x78};
   uint8_t packed[512];
   size_t packed_len = 0;
+  /* Empty binary fields are valid MessagePack values and must not pass their
+   * null backing pointers to memcpy, even for a zero-byte copy. */
+  lxmf_message_t empty = m;
+  empty.title = (lxmf_slice_t){NULL, 0u};
+  empty.content = (lxmf_slice_t){NULL, 0u};
+  empty.fields_msgpack = (lxmf_slice_t){NULL, 0u};
+  lxmf_message_t empty_unpacked;
+  assert(lxmf_pack(&empty, fake_sign, NULL, packed, sizeof packed,
+                   &packed_len) == LXMF_OK);
+  assert(lxmf_unpack(packed, packed_len, fake_verify, NULL,
+                     &empty_unpacked) == LXMF_OK);
+  assert(empty_unpacked.title.len == 0u &&
+         empty_unpacked.content.len == 0u);
   assert(lxmf_pack(&m, fake_sign, NULL, packed, sizeof packed, &packed_len) ==
          LXMF_OK);
   assert(packed_len == 96 + sizeof python_1_1_payload);

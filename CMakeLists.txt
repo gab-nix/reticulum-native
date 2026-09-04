@@ -9,6 +9,8 @@ include(CMakePackageConfigHelpers)
 option(RETICULUM_BUILD_TESTS "Build reticulum-c tests" ${BUILD_TESTING})
 option(RETICULUM_BUILD_APPS "Build reticulum-c command-line applications" ON)
 option(RETICULUM_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(RETICULUM_REQUIRE_ESP_CRYPTO_HOST_TESTS
+    "Fail configuration when the ESP crypto host-test dependencies are absent" OFF)
 set(RETICULUM_SANITIZERS "" CACHE STRING
     "Comma-separated sanitizers (for example: address,undefined)")
 

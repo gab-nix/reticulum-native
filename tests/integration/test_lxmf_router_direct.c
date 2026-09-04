@@ -8,6 +8,7 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -538,6 +539,10 @@ int main(void) {
         confirmed = stored.status == LXMF_DELIVERY_DELIVERED;
         assert(rns_hal_monotonic_ms(&now) == RNS_OK);
     } while (!confirmed && now - start < 10000u);
+    if (!confirmed || !bob_inbox.received || !saw_partial_progress)
+        fprintf(stderr, "segmented transfer: confirmed=%d received=%d partial=%d progress=%u elapsed_ms=%llu\n",
+            confirmed, bob_inbox.received, saw_partial_progress, previous_progress,
+            (unsigned long long)(now - start));
     assert(confirmed && bob_inbox.received && saw_partial_progress);
     {
         uint8_t content[LXMF_STORE_MAX_CONTENT];
