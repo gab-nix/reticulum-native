@@ -36,23 +36,34 @@ copy of the Python/Urwid UI.
 
 ## Current checkpoint
 
-The main branch entering this documentation checkpoint was `b68b007`.
+The main branch entering this documentation checkpoint is `3051b84`.
 The warning-as-error build contains 90 registered tests. At that checkpoint all
-90 passed, and the focused node/startup sanitizer tests passed. Always rerun the
-suite on the current checkout instead of treating this note as current evidence.
+90 passed, and focused ASan/UBSan tests passed for direct delivery, reply and
+reaction composition, Micron forms, browser state and anchor navigation. Always
+rerun the suite on the current checkout instead of treating this note as current
+evidence.
 
 The most recent completed changes are:
 
-- `b68b007 fix(tui): announce after interfaces connect`
-- `342cac1 feat(tui): show peer relay and site roles`
-- `21aefc7 fix(nomad): scale active node registry`
+- `3051b84 feat(micron): navigate bounded page anchors`
+- `82ed409 feat(micron): add bounded form submission`
+- `816adba feat(tui): compose LXMF replies and reactions`
+- `93c1aa8 test(interoperability): verify multi-segment LXMF delivery`
+- `9e38600 feat(lxmf): harden direct delivery retries and resources`
 
-The client now waits for a usable TCP interface before its startup announce,
-retries transient startup failures, and reannounces after a full reconnect. The
-Network screen marks peer/inbox, active relay and site roles as `P`, `R` and `S`;
-lowercase `r` means a valid but inactive/static-only propagation endpoint. The
-node registry grows to a bounded maximum of 4,096 records instead of silently
-stopping at 256.
+The client now has verified packet, five-part Resource and greater-than-1-MiB
+two-segment direct LXMF exchanges in both directions against the pinned Python
+stack over UDP and continuous framed TCP. The TUI composes standard LXMF reply
+and reaction fields. The native browser edits and submits bounded Micron text,
+checkbox and radio controls, and follows bounded local and remote named anchors.
+These browser and composer workflows have deterministic local evidence; they do
+not yet have stock-NomadNet screen-level verification.
+
+Startup announces wait for a usable TCP interface, retry transient failures,
+and repeat after a full reconnect. The Network screen marks peer/inbox, active
+relay and site roles as `P`, `R` and `S`; lowercase `r` means a valid but
+inactive/static-only propagation endpoint. The node registry has a bounded
+maximum of 4,096 records instead of silently stopping at 256.
 
 On 2026-09-04 the user confirmed that the native client and Culumba on a phone,
 attached to the same public TCP instance, discovered each other. This is useful
@@ -92,12 +103,12 @@ that file unless the user explicitly asks.
 The `.claude/` worktrees are separately owned and must remain quarantined until
 reviewed. Do not delete them, reset them or merge them wholesale.
 
-## Unfinished isolated work
+## Recovered and quarantined isolated work
 
-These worktrees contain uncommitted work. Their branches are based on older
-checkpoints and therefore must not be merged directly. Review each diff, port it
-onto a new `codex/` branch from current main, run its focused and full gates,
-update the feature ledger, make one focused commit, and only then merge it.
+The older worktrees below are no longer merge candidates. Their useful behavior
+was reviewed, corrected, ported onto fresh branches from current main, tested,
+committed and merged. Keep the old worktrees quarantined until they can be
+removed deliberately; do not merge their stale branches.
 
 ### 1. Multi-segment direct LXMF delivery
 
@@ -108,10 +119,9 @@ update the feature ledger, make one focused commit, and only then merge it.
 - Touched areas: runtime public API, runtime Resource dispatch, LXMF send path,
   direct-router integration tests and the feature ledger.
 
-This is the highest-priority recovery because the core Resource engine can
-already assemble multiple segments locally, while the production LXMF router
-still needs complete direct-message selection, progress, proof and retry
-behavior for those transfers.
+Recovered as `9e38600` and verified narrowly against pinned Python in
+`93c1aa8`. Further work is adverse-network retry timing, reconnect, relay-hop
+and persistent-resume coverage, not another recovery of this worktree.
 
 ### 2. Conversation reply and reaction composition
 
@@ -121,9 +131,8 @@ behavior for those transfers.
 - Uncommitted scope: 5 files, approximately 247 insertions and 18 deletions.
 - Touched areas: TUI state, dispatcher and renderer.
 
-Review only after the delivery path is stable. It must preserve arbitrary LXMF
-fields, drafts and existing conversation state, and needs focused headless input
-and rendering tests before integration.
+Recovered as `816adba` with stable copied target IDs, bounded valid UTF-8 reply
+quotes, preserved drafts and headless tests. A true per-message cursor remains.
 
 ### 3. Micron forms, anchors and caching
 
@@ -136,8 +145,10 @@ and rendering tests before integration.
 - Touched areas: Micron/browser APIs and parser, TUI state/rendering, unit tests
   and the feature ledger.
 
-Do not accept the provenance file solely because it has that name. Confirm its
-generator, pinned source revision, inputs and privacy before committing it.
+The form subset was reviewed and recovered as `82ed409`; its empty-selector
+behavior and public input bounds were corrected before merge. Anchor parsing and
+navigation were added separately in `3051b84`. Cache directives, form-bearing
+history, downloads and live stock-node exchanges remain.
 
 ### 4. Claude Resource experiment
 
@@ -155,19 +166,18 @@ Claude worktree, `agent-a1838e0c5e83f7047`, was clean at this checkpoint.
 
 ### Priority 0: make messaging dependable for real users
 
-1. Recover and review the multi-segment direct-LXMF work on a fresh branch.
-2. Run live native-to-Culumba send and receive tests, including replies and
+1. Run live native-to-Culumba send and receive tests, including replies and
    final receipt state, over the same TCP instance that now supports discovery.
-3. Ensure every queued message exposes one actionable prerequisite: peer
+2. Ensure every queued message exposes one actionable prerequisite: peer
    identity, path, stamp, link, Resource slot or propagation node.
-4. Exercise disconnect/reconnect, process restart, duplicates, cancellation,
+3. Exercise disconnect/reconnect, process restart, duplicates, cancellation,
    expired paths and retry exhaustion without losing history or queued work.
-5. Capture privacy-safe evidence: public IDs, state transitions, contexts,
+4. Capture privacy-safe evidence: public IDs, state transitions, contexts,
    counters, versions and binary/source fingerprints; never message plaintext,
    private keys or derived secrets.
-6. Verify live ratchet and ticket exchange, stamp-required peers and one-hop
+5. Verify live ratchet and ticket exchange, stamp-required peers and one-hop
    transport delivery against the pinned Python stack.
-7. Complete automatic propagation scheduling, durable transient data,
+6. Complete automatic propagation scheduling, durable transient data,
    interrupted upload/download recovery and automatic/manual sync behavior.
 
 Success means short, large and offline messages work in both directions with
@@ -177,7 +187,7 @@ socket write or propagation-node upload is not recipient delivery.
 
 ### Priority 1: finish the conversation experience
 
-1. Recover reply/reaction composition after the router gate passes.
+1. Add a true per-message cursor for reply/reaction and attachment actions.
 2. Add selection among multiple attachments and explicit safe save actions.
 3. Add URI/QR import/export UI, notifications, unread behavior and delivery
    method controls with headless tests.
@@ -186,7 +196,7 @@ socket write or propagation-node upload is not recipient delivery.
 
 ### Priority 2: finish browser and hosted-node behavior
 
-1. Recover the isolated Micron form/anchor/cache work.
+1. Implement bounded cache directives, reload bypass and form-bearing history.
 2. Verify small and multi-segment pages, relative and cross-node links, anchors,
    editable forms, submissions, cache directives, reload bypass and file
    downloads against a stock NomadNet node.
