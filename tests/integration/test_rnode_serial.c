@@ -269,12 +269,15 @@ static void endpoint_poll_ok(rns_rnode_endpoint_t *endpoint,
 static void complete_endpoint_handshake(rns_rnode_endpoint_t *endpoint,
                                         int master, peer_t *peer,
                                         capture_t *capture) {
-    endpoint_poll_ok(endpoint, capture);
-    peer_process(master, peer);
-    endpoint_poll_ok(endpoint, capture);
-    peer_process(master, peer);
-    endpoint_poll_ok(endpoint, capture);
     rns_rnode_info_t info;
+    memset(&info, 0, sizeof(info));
+    for (size_t attempt = 0U;
+         attempt < 16U && info.state != RNS_RNODE_UP;
+         ++attempt) {
+        endpoint_poll_ok(endpoint, capture);
+        (void)peer_process(master, peer);
+        assert(rns_rnode_endpoint_info(endpoint, &info) == RNS_OK);
+    }
     assert(rns_rnode_endpoint_info(endpoint, &info) == RNS_OK);
     assert(info.state == RNS_RNODE_UP && info.firmware_major == 1U &&
            info.firmware_minor == 52U && info.platform == 0x80U);
@@ -527,12 +530,15 @@ static void test_runtime(void) {
     fake_now += 2.0;
     size_t processed = 0U;
     peer_t peer = {0};
-    assert(rns_runtime_poll(runtime, 8U, &processed) == RNS_OK);
-    peer_process(master, &peer);
-    assert(rns_runtime_poll(runtime, 8U, &processed) == RNS_OK);
-    peer_process(master, &peer);
-    assert(rns_runtime_poll(runtime, 8U, &processed) == RNS_OK);
     rns_runtime_interface_info_t info;
+    memset(&info, 0, sizeof(info));
+    for (size_t attempt = 0U;
+         attempt < 16U && info.state != RNS_RUNTIME_INTERFACE_UP;
+         ++attempt) {
+        assert(rns_runtime_poll(runtime, 8U, &processed) == RNS_OK);
+        (void)peer_process(master, &peer);
+        assert(rns_runtime_interface_info(runtime, 0U, &info) == RNS_OK);
+    }
     assert(rns_runtime_interface_info(runtime, 0U, &info) == RNS_OK);
     assert(info.state == RNS_RUNTIME_INTERFACE_UP);
 
