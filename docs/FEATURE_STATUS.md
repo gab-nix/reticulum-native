@@ -102,7 +102,8 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
 | RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |
 | C browser to pinned Nomad page handler, UDP/TCP | IMPLEMENTED | `interop_browser_udp` and `interop_browser_tcp` validate small and resource-backed rendered pages; reverse-direction C hosting remains |
-| Stock Nomad form/file acceptance | PLANNED | Add bidirectional client/host live drivers |
+| C browser executable-page form submissions, UDP/TCP | IMPLEMENTED | `interop_browser_udp/tcp` send two distinct MessagePack forms to pinned unmodified `Node.serve_page`; field/variable values and ignored keys checked; reverse C-host direction remains |
+| Stock Nomad file acceptance | PLANNED | Add bidirectional client/host live drivers |
 | Complete keyboard workflow acceptance | WIP | Existing headless tests cover subsets; every screen/action needs mapped cases |
 | Remote hosted file transfer | PLANNED | Hosted files currently support local reads only; add upstream file metadata/resource exchange |
 | Large browser form requests | PLANNED | Browser currently caps encoded forms at 403 bytes; add resource-backed request acceptance |
