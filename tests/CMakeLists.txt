@@ -33,6 +33,10 @@ add_executable(rrc_live_driver interop/rrc_live_driver.c)
 target_link_libraries(rrc_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(rrc_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(rrc_live_driver)
+add_executable(browser_live_driver interop/browser_live_driver.c)
+target_link_libraries(browser_live_driver PRIVATE reticulum::reticulum)
+target_compile_features(browser_live_driver PRIVATE c_std_17)
+reticulum_set_project_warnings(browser_live_driver)
 
 option(RETICULUM_PYTHON_INTEROP "Run opt-in pinned Python interoperability tests" OFF)
 if(RETICULUM_PYTHON_INTEROP)
@@ -46,6 +50,13 @@ if(RETICULUM_PYTHON_INTEROP)
         endif()
     endforeach()
     foreach(transport udp tcp)
+        add_test(NAME interop_browser_${transport}
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_browser_live.py
+                --reticulum ${RETICULUM_PYTHON_RNS}
+                --nomadnet ${RETICULUM_PYTHON_NOMADNET}
+                --driver $<TARGET_FILE:browser_live_driver> --transport ${transport})
+        set_tests_properties(interop_browser_${transport} PROPERTIES
+            LABELS "interop;python;browser;${transport}" TIMEOUT 120 RUN_SERIAL TRUE)
         foreach(mode direct propagation)
             set(test_name interop_lxmf_${mode}_${transport})
             add_test(NAME ${test_name}
