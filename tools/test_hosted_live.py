@@ -83,8 +83,11 @@ def main():
             destination = RNS.Destination(remote, RNS.Destination.OUT, RNS.Destination.SINGLE,
                                           "nomadnetwork", "node")
             assert destination.hash == destination_hash
-            link = RNS.Link(destination)
-            wait_for(lambda: link.status == RNS.Link.ACTIVE)
+            # ACTIVE is set before Python sends LRRTT. The public callback
+            # runs after it, so do not race a request ahead of confirmation.
+            established = threading.Event()
+            link = RNS.Link(destination, established_callback=lambda _: established.set())
+            wait_for(established.is_set)
 
             def request(path, expected, data=None):
                 receipt = link.request(path, data=data, timeout=20)
