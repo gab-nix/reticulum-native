@@ -16,7 +16,12 @@ typedef struct {
     size_t events;
     lxmf_router_event_t last_event;
     const uint8_t *ratchet;
+    uint64_t now_ms;
 } send_state_t;
+
+static uint64_t clock_ms(void *context) {
+    return ((send_state_t *)context)->now_ms;
+}
 
 static const rns_identity *resolve(void *context, const uint8_t hash[16]) {
     send_state_t *state = context;
@@ -121,7 +126,9 @@ int main(void) {
         .ratchet_context = &state, .send_packet = send_packet,
         .send_context = &state, .delivery_callback = delivery,
         .delivery_context = &state, .event_callback = event,
-        .event_context = &state};
+        .event_context = &state, .monotonic_clock = clock_ms,
+        .monotonic_clock_context = &state, .direct_retry_limit = 2u,
+        .direct_retry_base_ms = 10u};
     assert(lxmf_router_init(&router, &config) == LXMF_OK);
     assert(lxmf_router_send_message(&router, message.message_id) == LXMF_OK);
     assert(state.length > 0u && state.last_status == LXMF_DELIVERY_SENT);
@@ -199,20 +206,37 @@ int main(void) {
     state.fail = true;
     assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK);
     assert(result.attempted == 1u && result.failed == 1u);
-    assert(state.last_status == LXMF_DELIVERY_FAILED);
+    assert(state.last_status == LXMF_DELIVERY_QUEUED);
+    assert(lxmf_store_read(&store, message.message_id, &got, body,
+                           sizeof body) == LXMF_OK);
+    assert(got.status == LXMF_DELIVERY_QUEUED);
+    assert(got.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_BACKOFF);
+    assert(got.delivery.attempts == 1u);
+    assert(got.delivery.retry_at_ms == 10u);
+
+    assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK);
+    assert(result.attempted == 1u && result.deferred == 1u);
+    state.now_ms = 10u;
+    assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK);
+    assert(result.attempted == 1u && result.failed == 1u);
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_FAILED);
-    assert(got.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_BACKOFF);
-    assert(got.delivery.attempts == 1u);
+    assert(got.delivery.attempts == 2u);
+    assert(got.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_EXHAUSTED);
+    assert(got.delivery.retry_at_ms == 0u);
 
+    /* Exhausted records are not retried by polling. An explicit resend starts
+     * a new attempt budget instead of failing immediately at attempt three. */
     state.fail = false;
     assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK);
-    assert(result.attempted == 1u && result.sent == 1u);
+    assert(result.attempted == 0u);
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_OK);
     assert(lxmf_store_read(&store, message.message_id, &got, body,
                            sizeof body) == LXMF_OK);
     assert(got.status == LXMF_DELIVERY_SENT);
-    assert(got.delivery.attempts == 2u);
+    assert(got.delivery.attempts == 1u);
+    assert(got.delivery.queue_reason == LXMF_QUEUE_REASON_NONE);
     lxmf_store_close(&received_store);
     unlink(receive_path);
     lxmf_store_close(&store);

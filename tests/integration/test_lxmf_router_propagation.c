@@ -14,6 +14,7 @@ typedef struct {
     uint8_t recipient_hash[16], sender_hash[16];
     rns_runtime_link_t *links[4]; size_t link_count;
     size_t uploads; bool valid;
+    uint64_t now_ms;
 } host_t;
 static uint16_t port(void) { rns_udp_endpoint_t *e=NULL; rns_udp_address_t a;
     assert(rns_udp_endpoint_create(&e,RNS_UDP_IPV4)==RNS_OK);
@@ -28,6 +29,7 @@ static void config(rns_config_t *c,uint16_t listen,uint16_t forward) {
 static const rns_identity *resolve(void *context,const uint8_t hash[16]) {
     host_t *h=context; return memcmp(hash,h->recipient_hash,16)==0?h->recipient:NULL; }
 static uint64_t wall(void *context) { (void)context; return 1700000000u; }
+static uint64_t monotonic(void *context) { return ((host_t *)context)->now_ms; }
 static void accepted(rns_runtime_destination_t *d,rns_runtime_link_t *l,void *context) {
     host_t *h=context; (void)d; assert(h->link_count<4); h->links[h->link_count++]=l; }
 static bool accept_resource(rns_runtime_link_t *l,
@@ -96,7 +98,7 @@ int main(void) {
     assert(rns_runtime_create(&server,&cb,NULL)==RNS_OK);
     rns_identity sender,recipient,node; assert(rns_identity_generate(&sender));
     assert(rns_identity_generate(&recipient)); assert(rns_identity_generate(&node));
-    host_t host={.recipient=&recipient,.sender=&sender}; const char *delivery[]={"delivery"};
+    host_t host={.recipient=&recipient,.sender=&sender,.now_ms=1234000u}; const char *delivery[]={"delivery"};
     assert(rns_destination_hash(&recipient,"lxmf",delivery,1,host.recipient_hash));
     assert(rns_destination_hash(&sender,"lxmf",delivery,1,host.sender_hash));
     const char *propagation[]={"propagation"}; uint8_t node_hash[16];
@@ -110,6 +112,7 @@ int main(void) {
     char path[48]; lxmf_store_t store; fresh_store(path,&store);uint8_t id[32];queue(&store,&sender,host.recipient_hash,id);
     lxmf_router_config_t options={.identity=&sender,.store=&store,.runtime=client,
       .resolve_identity=resolve,.resolve_context=&host,.wall_clock=wall,
+      .monotonic_clock=monotonic,.monotonic_clock_context=&host,
       .preferred_delivery_method=LXMF_DELIVERY_METHOD_PROPAGATED,
       .propagation_node_identity=&node,.propagation_stamp_cost=1,
       .propagation_retry_base_ms=1,.propagation_retry_limit=2};
@@ -156,6 +159,12 @@ int main(void) {
     assert(lxmf_router_poll(&router,1,&result)==LXMF_OK&&result.deferred==1);
     assert(lxmf_store_read_delivery(&store,id,&metadata)==LXMF_OK);
     assert(metadata.queue_reason==LXMF_QUEUE_REASON_PROPAGATION_NODE&&metadata.attempts==0);
+    metadata.attempts=2;metadata.queue_reason=LXMF_QUEUE_REASON_RETRY_EXHAUSTED;
+    assert(lxmf_store_update_delivery(&store,id,&metadata)==LXMF_OK);
+    assert(lxmf_store_update_status(&store,id,LXMF_DELIVERY_FAILED)==LXMF_OK);
+    assert(lxmf_router_send_message(&router,id)==LXMF_ERR_PENDING);
+    assert(lxmf_store_read_delivery(&store,id,&metadata)==LXMF_OK);
+    assert(metadata.queue_reason==LXMF_QUEUE_REASON_PROPAGATION_NODE&&metadata.attempts==0);
     lxmf_router_destroy(&router);lxmf_store_close(&store);unlink(path);
 
     /* An unannounced but valid node times out, retries once, then becomes a
@@ -164,6 +173,7 @@ int main(void) {
     assert(rns_destination_hash(&missing,"lxmf",propagation,1,missing_hash));
     fresh_store(path,&store);queue(&store,&sender,host.recipient_hash,id);
     options.store=&store;options.propagation_node_identity=&missing;
+    options.monotonic_clock=NULL;options.monotonic_clock_context=NULL;
     memcpy(options.propagation_node_destination,missing_hash,16);
     options.propagation_stamp_cost=1;options.resource_timeout_seconds=0.01;
     assert(lxmf_router_init(&router,&options)==LXMF_OK);
@@ -178,8 +188,8 @@ int main(void) {
     assert(metadata.attempts==2);
     lxmf_router_destroy(&router);lxmf_store_close(&store);unlink(path);
 
-    /* Restart recovery clears process-local deadlines and safely requeues an
-     * interrupted propagated SENDING record without losing its method. */
+    /* Restart recovery establishes a bounded durable deadline and safely
+     * requeues an interrupted propagated SENDING record. */
     fresh_store(path,&store);queue(&store,&sender,host.recipient_hash,id);
     options.store=&store;options.propagation_node_identity=&node;
     memcpy(options.propagation_node_destination,node_hash,16);
@@ -190,7 +200,7 @@ int main(void) {
     assert(lxmf_store_read(&store,id,&recovered,content,sizeof content)==LXMF_OK);
     assert(recovered.status==LXMF_DELIVERY_QUEUED);
     assert(recovered.delivery.desired_method==LXMF_DELIVERY_METHOD_PROPAGATED);
-    assert(recovered.delivery.retry_at_ms==0);
+    assert(recovered.delivery.retry_at_ms!=0);
     lxmf_router_destroy(&router);lxmf_store_close(&store);unlink(path);
     for(size_t i=0;i<host.link_count;i++)rns_runtime_link_destroy(host.links[i]);
     rns_runtime_destination_destroy(registration);rns_runtime_destroy(client);rns_runtime_destroy(server);return 0;

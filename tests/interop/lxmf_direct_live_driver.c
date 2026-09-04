@@ -12,8 +12,14 @@ typedef struct {
     rns_identity peer;
     uint8_t destination[16];
     bool known;
-    size_t received, delivered, resource_parts;
+    size_t received, delivered, resource_parts, resource_segments;
     bool failed, metadata_failed, resource;
+    bool has_event_snapshot;
+    lxmf_delivery_status_t event_state;
+    lxmf_queue_reason_t event_reason;
+    lxmf_status_t event_result;
+    uint32_t event_attempt;
+    uint8_t event_message_id[LXMF_MESSAGE_ID_LENGTH];
 } state_t;
 static void make_body(uint8_t *body, size_t length, bool from_python) {
     uint32_t seed = from_python ? 0x2468ace1U : 0x13579bdfU;
@@ -24,6 +30,22 @@ static void make_body(uint8_t *body, size_t length, bool from_python) {
     }
 }
 static const uint8_t fields[] = {0x81, 0xcd, 0x12, 0x34, 0xc4, 0x03, 1, 2, 3};
+#define SEGMENTED_FIELD_SIZE (RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE + 4096u)
+static bool segmented_fields_valid(const uint8_t *data, size_t length) {
+    const uint8_t prefix[9] = {0x81, 0xcd, 0x12, 0x34, 0xc6,
+        (uint8_t)(SEGMENTED_FIELD_SIZE >> 24u),
+        (uint8_t)(SEGMENTED_FIELD_SIZE >> 16u),
+        (uint8_t)(SEGMENTED_FIELD_SIZE >> 8u), (uint8_t)SEGMENTED_FIELD_SIZE};
+    if (data == NULL || length != SEGMENTED_FIELD_SIZE + sizeof prefix ||
+        memcmp(data, prefix, sizeof prefix) != 0)
+        return false;
+    uint32_t seed = 0x6d2b79f5u;
+    for (size_t i = sizeof prefix; i < length; ++i) {
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        if (data[i] != (uint8_t)seed) return false;
+    }
+    return true;
+}
 static void hex(const uint8_t *input, size_t length) {
     for (size_t i = 0; i < length; ++i) printf("%02x", input[i]);
 }
@@ -44,7 +66,7 @@ static void announce(rns_runtime_t *runtime, const rns_node_result *event,
 }
 static void received(void *context, const lxmf_store_message_t *message) {
     state_t *s = context;
-    size_t expected = s->received == 0 ? 17 : 2048;
+    size_t expected = s->received == 0 ? 17 : s->received == 1 ? 2048 : 23;
     if (message->signature_state != LXMF_SIGNATURE_VERIFIED ||
         message->delivery.actual_method != LXMF_DELIVERY_METHOD_DIRECT ||
         message->content.len != expected ||
@@ -55,8 +77,12 @@ static void received(void *context, const lxmf_store_message_t *message) {
     if (lxmf_unpack(message->packed.data, message->packed.len, NULL, NULL,
         &unpacked) != LXMF_OK || unpacked.title.len != 11 ||
         memcmp(unpacked.title.data, "python-live", 11) != 0 ||
-        unpacked.fields_msgpack.len != sizeof(fields) ||
-        memcmp(unpacked.fields_msgpack.data, fields, sizeof(fields)) != 0)
+        (s->received < 2 &&
+         (unpacked.fields_msgpack.len != sizeof(fields) ||
+          memcmp(unpacked.fields_msgpack.data, fields, sizeof(fields)) != 0)) ||
+        (s->received == 2 &&
+         !segmented_fields_valid(unpacked.fields_msgpack.data,
+                                 unpacked.fields_msgpack.len)))
         s->metadata_failed = true;
     s->received++;
     printf("{\"event\":\"received\",\"size\":%zu,\"verified\":%s,\"id\":\"",
@@ -73,6 +99,24 @@ static void changed(void *context, const uint8_t id[32],
 static void event(void *context, const lxmf_router_event_t *ev) {
     state_t *s = context;
     if (ev->queue_reason == LXMF_QUEUE_REASON_RESOURCE) s->resource = true;
+    if (s->has_event_snapshot && s->event_state == ev->state &&
+        s->event_reason == ev->queue_reason &&
+        s->event_result == ev->result && s->event_attempt == ev->attempt &&
+        memcmp(s->event_message_id, ev->message_id,
+               sizeof s->event_message_id) == 0)
+        return;
+    s->has_event_snapshot = true;
+    s->event_state = ev->state;
+    s->event_reason = ev->queue_reason;
+    s->event_result = ev->result;
+    s->event_attempt = ev->attempt;
+    memcpy(s->event_message_id, ev->message_id,
+           sizeof s->event_message_id);
+    printf("{\"event\":\"router\",\"state\":%d,\"result\":%d,"
+           "\"reason\":%d,\"attempt\":%u,\"id\":\"",
+           (int)ev->state, (int)ev->result, (int)ev->queue_reason,
+           ev->attempt);
+    hex(ev->message_id, 32); puts("\"}");
 }
 static bool queue(lxmf_store_t *store, const rns_identity *identity,
                   const uint8_t destination[16], size_t length) {
@@ -99,6 +143,54 @@ static bool queue(lxmf_store_t *store, const rns_identity *identity,
     record.content = m.content; record.packed = (lxmf_slice_t){packed, size};
     bool inserted;
     return lxmf_store_put(store, &record, &inserted) == LXMF_OK && inserted;
+}
+
+static bool queue_segmented(lxmf_store_t *store, const rns_identity *identity,
+                            const uint8_t destination[16]) {
+    const size_t fields_length = SEGMENTED_FIELD_SIZE + 9u;
+    uint8_t *large_fields = malloc(fields_length);
+    uint8_t *packed = malloc(fields_length + 256u);
+    if (large_fields == NULL || packed == NULL) {
+        free(large_fields); free(packed); return false;
+    }
+    const uint8_t prefix[9] = {0x81, 0xcd, 0x12, 0x34, 0xc6,
+        (uint8_t)(SEGMENTED_FIELD_SIZE >> 24u),
+        (uint8_t)(SEGMENTED_FIELD_SIZE >> 16u),
+        (uint8_t)(SEGMENTED_FIELD_SIZE >> 8u), (uint8_t)SEGMENTED_FIELD_SIZE};
+    memcpy(large_fields, prefix, sizeof prefix);
+    uint32_t seed = 0x6d2b79f5u;
+    for (size_t i = sizeof prefix; i < fields_length; ++i) {
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        large_fields[i] = (uint8_t)seed;
+    }
+    uint8_t body[23], source[16]; make_body(body, sizeof body, false);
+    const char *aspects[] = {"delivery"};
+    if (!rns_destination_hash(identity, "lxmf", aspects, 1, source)) {
+        free(large_fields); free(packed); return false;
+    }
+    uint64_t now; lxmf_message_t m = {0}, decoded;
+    if (rns_hal_wallclock_ms(&now) != RNS_OK) {
+        free(large_fields); free(packed); return false;
+    }
+    memcpy(m.destination, destination, 16); memcpy(m.source, source, 16);
+    m.timestamp = (double)now / 1000.0;
+    m.title = (lxmf_slice_t){(const uint8_t *)"c-live", 6};
+    m.content = (lxmf_slice_t){body, sizeof body};
+    m.fields_msgpack = (lxmf_slice_t){large_fields, fields_length};
+    size_t size = 0; bool ok = lxmf_pack(&m, lxmf_identity_signer,
+        (void *)identity, packed, fields_length + 256u, &size) == LXMF_OK &&
+        size > RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE &&
+        lxmf_unpack(packed, size, NULL, NULL, &decoded) == LXMF_OK;
+    if (ok) {
+        lxmf_store_message_t record = {0}; bool inserted = false;
+        memcpy(record.destination, destination, 16); memcpy(record.source, source, 16);
+        memcpy(record.message_id, decoded.message_id, 32);
+        record.timestamp = m.timestamp; record.status = LXMF_DELIVERY_QUEUED;
+        record.signature_state = LXMF_SIGNATURE_VERIFIED;
+        record.content = m.content; record.packed = (lxmf_slice_t){packed, size};
+        ok = lxmf_store_put(store, &record, &inserted) == LXMF_OK && inserted;
+    }
+    free(large_fields); free(packed); return ok;
 }
 static bool parse_port(const char *text, uint16_t *port) {
     char *end; errno = 0; unsigned long value = strtoul(text, &end, 10);
@@ -153,8 +245,12 @@ int main(int argc, char **argv) {
             (void)rns_runtime_announce(runtime, &identity, "lxmf", aspects, 1, NULL, 0);
             last_announce = now;
         }
-        if (state.known && queued < 2 && state.delivered == queued) {
-            if (!queue(&store, &identity, state.destination, queued == 0 ? 17 : 2048)) {
+        if (state.known && queued < 3 && state.delivered == queued) {
+            bool queued_ok = queued < 2
+                ? queue(&store, &identity, state.destination,
+                        queued == 0 ? 17 : 2048)
+                : queue_segmented(&store, &identity, state.destination);
+            if (!queued_ok) {
                 state.failed = true; break;
             }
             queued++;
@@ -167,14 +263,20 @@ int main(int argc, char **argv) {
             if (!router.resources[i].used) continue;
             size_t parts = rns_runtime_resource_transfer_total_parts(router.resources[i].transfer);
             if (parts > state.resource_parts) state.resource_parts = parts;
+            rns_runtime_resource_progress_t progress;
+            if (rns_runtime_resource_transfer_progress(
+                    router.resources[i].transfer, &progress) == RNS_OK &&
+                progress.total_segments > state.resource_segments)
+                state.resource_segments = progress.total_segments;
         }
-        if (state.failed || (state.received == 2 && state.delivered == 2)) break;
+        if (state.failed || (state.received == 3 && state.delivered == 3)) break;
         (void)rns_hal_sleep_ms(5);
-    } while (now - start < 90000);
-    bool success = !state.failed && !state.metadata_failed && state.received == 2 && state.delivered == 2 && state.resource && state.resource_parts > 1;
-    printf("{\"event\":\"done\",\"ok\":%s,\"received\":%zu,\"proved\":%zu,\"resource\":%s,\"metadata_retained\":%s,\"resource_parts\":%zu}\n",
+    } while (now - start < 300000);
+    bool success = !state.failed && !state.metadata_failed && state.received == 3 && state.delivered == 3 && state.resource && state.resource_parts > 1 && state.resource_segments > 1;
+    printf("{\"event\":\"done\",\"ok\":%s,\"received\":%zu,\"proved\":%zu,\"resource\":%s,\"metadata_retained\":%s,\"resource_parts\":%zu,\"resource_segments\":%zu}\n",
         success ? "true" : "false", state.received, state.delivered, state.resource ? "true" : "false",
-        state.metadata_failed ? "false" : "true", state.resource_parts);
+        state.metadata_failed ? "false" : "true", state.resource_parts,
+        state.resource_segments);
     /* Drain final Resource proof before shutting down. */
     (void)rns_hal_sleep_ms(100);
     lxmf_router_destroy(&router); lxmf_store_close(&store);

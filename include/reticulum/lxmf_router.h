@@ -23,6 +23,8 @@ extern "C" {
 #define LXMF_ROUTER_MAX_RESOURCES 8u
 #define LXMF_ROUTER_PROPAGATION_MAX_RETRIES 32u
 #define LXMF_ROUTER_PROPAGATION_MAX_RETRY_BASE_MS 86400000u
+#define LXMF_ROUTER_DIRECT_MAX_RETRIES 32u
+#define LXMF_ROUTER_DIRECT_MAX_RETRY_BASE_MS 86400000u
 #define LXMF_ROUTER_MAX_PAPER_TRANSIENTS 32u
 
 typedef struct {
@@ -168,6 +170,12 @@ typedef struct {
     size_t max_incoming_resource_size;
     /* Zero selects the runtime Resource default. */
     double resource_timeout_seconds;
+    /* Direct and opportunistic failures use durable bounded exponential
+     * retry. Zero selects five attempts and ten seconds. */
+    lxmf_clock_fn monotonic_clock;
+    void *monotonic_clock_context;
+    uint32_t direct_retry_limit;
+    uint64_t direct_retry_base_ms;
     /* Optional verified propagation node. Supplying an identity requires a
      * runtime, wall clock, matching lxmf.propagation hash and cost 1..254. */
     const rns_identity *propagation_node_identity;

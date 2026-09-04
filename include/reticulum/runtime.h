@@ -109,6 +109,13 @@ typedef struct rns_runtime_resource_options {
     void *callback_context;
 } rns_runtime_resource_options_t;
 
+typedef struct rns_runtime_resource_progress {
+    uint64_t transferred;
+    uint64_t total;
+    size_t current_segment;
+    size_t total_segments;
+} rns_runtime_resource_progress_t;
+
 /* Called synchronously from rns_runtime_poll() after a structurally valid link
  * request has been accepted and its signed LRPROOF has been transmitted. The
  * link is in RNS_LINK_HANDSHAKE until its encrypted RTT confirmation arrives.
@@ -381,8 +388,9 @@ const rns_identity *rns_runtime_link_remote_identity(
 rns_link_state rns_runtime_link_state(const rns_runtime_link_t *link);
 const uint8_t *rns_runtime_link_id(const rns_runtime_link_t *link);
 void rns_runtime_link_destroy(rns_runtime_link_t *link);
-/* Starts one bounded single-segment Resource on an active link. The returned
- * transfer is caller-owned and must be destroyed after its terminal state. */
+/* Starts one bounded Resource on an active link. Large payloads are split into
+ * sequential protocol segments. The returned transfer is caller-owned and
+ * must be destroyed after its terminal state. */
 rns_status_t rns_runtime_link_send_resource(
     rns_runtime_link_t *link, const uint8_t *data, size_t data_length,
     const rns_runtime_resource_options_t *options,
@@ -393,6 +401,11 @@ size_t rns_runtime_resource_transfer_sent_parts(
     const rns_runtime_resource_transfer_t *transfer);
 size_t rns_runtime_resource_transfer_total_parts(
     const rns_runtime_resource_transfer_t *transfer);
+/* Reports fixed-denominator source-byte-equivalent progress. Retransmitted or
+ * duplicate part requests do not advance the transferred value. */
+rns_status_t rns_runtime_resource_transfer_progress(
+    const rns_runtime_resource_transfer_t *transfer,
+    rns_runtime_resource_progress_t *progress);
 const uint8_t *rns_runtime_resource_transfer_hash(
     const rns_runtime_resource_transfer_t *transfer);
 void rns_runtime_resource_transfer_cancel(

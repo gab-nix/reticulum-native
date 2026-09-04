@@ -18,6 +18,9 @@ extern "C" {
 #define RNS_RESOURCE_REQUEST_ID_SIZE 16u
 #define RNS_RESOURCE_PROOF_SIZE (2u * RNS_RESOURCE_HASH_SIZE)
 #define RNS_RESOURCE_WINDOW 4u
+/* Pinned Reticulum receivers may grow a fast-link request window to 75 parts.
+ * A stream carrier must be able to queue the complete requested burst. */
+#define RNS_RESOURCE_WINDOW_MAX 75u
 /* One advertisement carries floor((Link MDU - 134) / 4) map hashes. */
 #define RNS_RESOURCE_HASHMAP_MAX_ENTRIES 74u
 #define RNS_RESOURCE_MAX_PARTS 18000u

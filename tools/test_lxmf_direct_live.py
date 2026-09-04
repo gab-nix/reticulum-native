@@ -19,6 +19,7 @@ import time
 
 RNS_COMMIT = "ea98db4f53dcf0defc0e71a16e60d28b1229c4e6"
 LXMF_COMMIT = "795fdaa2b0777c13033787d933d1afc94a2377cb"
+SEGMENTED_FIELD_SIZE = (1024 * 1024 - 1) + 4096
 
 
 def check_checkout(path, commit):
@@ -48,6 +49,17 @@ def make_body(length, from_python):
         seed ^= (seed << 5) & 0xFFFFFFFF
         result.append((ord("a" if from_python else "A") + i % 26)
                       if length < 100 else (33 + seed % 90))
+    return bytes(result)
+
+
+def make_segmented_field():
+    seed = 0x6D2B79F5
+    result = bytearray()
+    for _ in range(SEGMENTED_FIELD_SIZE):
+        seed ^= (seed << 13) & 0xFFFFFFFF
+        seed ^= seed >> 17
+        seed ^= (seed << 5) & 0xFFFFFFFF
+        result.append(seed & 0xFF)
     return bytes(result)
 
 
@@ -104,14 +116,19 @@ def main():
         reticulum = RNS.Reticulum(configdir=str(root / "rns"), loglevel=0)
         identity = RNS.Identity()
         router = LXMF.LXMRouter(identity=identity, storagepath=str(root),
-                                 autopeer=False, enforce_stamps=False)
+                                 autopeer=False, enforce_stamps=False,
+                                 delivery_limit=2000)
         source = router.register_delivery_identity(identity, "Python live test", stamp_cost=None)
+        segmented_field = make_segmented_field()
 
         def received(message):
-            expected_size = 17 if not report["python_received"] else 2048
+            index = len(report["python_received"])
+            expected_size = 17 if index == 0 else 2048 if index == 1 else 23
             expected = make_body(expected_size, False)
+            expected_fields = ({0x1234: bytes([1, 2, 3])} if index < 2
+                               else {0x1234: segmented_field})
             valid = (message.signature_validated and message.content == expected
-                     and message.title == b"c-live" and message.fields == {0x1234: bytes([1, 2, 3])}
+                     and message.title == b"c-live" and message.fields == expected_fields
                      and message.method == LXMF.LXMessage.DIRECT)
             report["python_received"].append({"size": len(message.content),
                 "verified": bool(message.signature_validated), "id": message.hash.hex(),
@@ -140,7 +157,7 @@ def main():
         started = time.monotonic()
         last_announce = 0
         try:
-            while time.monotonic() - started < 100:
+            while time.monotonic() - started < 300:
                 while not lines.empty():
                     line = lines.get_nowait()
                     try:
@@ -155,19 +172,27 @@ def main():
                         peer_verified = True
                 now = time.monotonic()
                 remote = RNS.Identity.recall(destination_hash) if destination_hash else None
+                c_delivered = sum(1 for event in report["c_events"]
+                                  if event.get("event") == "state" and
+                                  event.get("state") == 3)
                 # C starts sending as soon as it learns this announce. Only
                 # release it after Python has validated C's identity, or a fast
                 # stream connection can deliver the first LXMF before recall.
                 if remote and now - last_announce > 3:
                     router.announce(source.hash)
                     last_announce = now
-                if remote and peer_verified and len(outbound) < 2 and len(report["python_proved"]) == len(outbound):
+                if (remote and peer_verified and c_delivered >= 3 and
+                        len(outbound) < 3 and
+                        len(report["python_proved"]) == len(outbound)):
                     destination = RNS.Destination(remote, RNS.Destination.OUT,
                         RNS.Destination.SINGLE, "lxmf", "delivery")
-                    size = 17 if not outbound else 2048
+                    size = 17 if len(outbound) == 0 else 2048 if len(outbound) == 1 else 23
                     content = make_body(size, True)
+                    outbound_fields = ({0x1234: bytes([1, 2, 3])}
+                                       if len(outbound) < 2
+                                       else {0x1234: segmented_field})
                     message = LXMF.LXMessage(destination, source, content,
-                        title="python-live", fields={0x1234: bytes([1, 2, 3])},
+                        title="python-live", fields=outbound_fields,
                         desired_method=LXMF.LXMessage.DIRECT)
 
                     def proved(sent):
@@ -175,6 +200,8 @@ def main():
                             "state": sent.state, "representation": sent.representation,
                             "size": len(sent.content),
                             "resource_parts": (sent.resource_representation.total_parts
+                                if sent.resource_representation else 0),
+                            "resource_segments": (sent.resource_representation.total_segments
                                 if sent.resource_representation else 0)})
 
                     def failed(sent):
@@ -201,12 +228,14 @@ def main():
                 report["errors"].append("C driver emitted stderr diagnostics")
             done = [e for e in report["c_events"] if e.get("event") == "done"]
             report["ok"] = bool(process.returncode == 0 and done and done[-1]["ok"]
-                and len(report["python_received"]) == 2 and len(report["python_proved"]) == 2
+                and len(report["python_received"]) == 3 and len(report["python_proved"]) == 3
                 and all(e["valid"] for e in report["python_received"])
                 and [e["representation"] for e in report["python_proved"]]
-                    == [LXMF.LXMessage.PACKET, LXMF.LXMessage.RESOURCE]
+                    == [LXMF.LXMessage.PACKET, LXMF.LXMessage.RESOURCE,
+                        LXMF.LXMessage.RESOURCE]
                 and all(e["state"] == LXMF.LXMessage.DELIVERED for e in report["python_proved"])
                 and report["python_proved"][-1]["resource_parts"] > 1
+                and report["python_proved"][-1]["resource_segments"] > 1
                 and not report["errors"])
         finally:
             if process.poll() is None:

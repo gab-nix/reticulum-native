@@ -21,7 +21,15 @@
 #include <string.h>
 
 #define RUNTIME_DEFAULT_WORK 32U
-#define RUNTIME_TCP_QUEUE (RNS_MTU * 8U)
+/* Each active link can have one outgoing Resource and one incoming
+ * RESOURCE_REQ can ask for the pinned fast-link maximum of 75 parts. A single
+ * TCP receive batch may dispatch requests for every runtime link before the
+ * endpoint flushes. Each packet can double under HDLC escaping; retain two
+ * additional bounded control frames. */
+#define RUNTIME_TCP_FRAME_MAX ((RNS_MTU * 2U) + 2U)
+#define RUNTIME_TCP_QUEUE \
+    (RUNTIME_TCP_FRAME_MAX * \
+     ((RNS_RUNTIME_MAX_LINKS * RNS_RESOURCE_WINDOW_MAX) + 2U))
 #define RUNTIME_TCP_RECONNECT_INITIAL 1.0
 #define RUNTIME_TCP_RECONNECT_MAX 30.0
 
@@ -78,6 +86,7 @@ struct rns_runtime_resource_transfer {
     rns_runtime_resource_state_t state;
     double deadline;
     size_t sent_parts;
+    size_t sent_segment_bytes;
     bool part_sent[RNS_RESOURCE_MAX_PARTS];
     bool runtime_owned;
 };
@@ -814,6 +823,7 @@ static bool outgoing_resource_request(rns_runtime_link_t *link,
         if (!transfer->part_sent[indexes[i]]) {
             transfer->part_sent[indexes[i]] = true;
             transfer->sent_parts++;
+            transfer->sent_segment_bytes += part_length;
         }
     }
     uint8_t update[RNS_MTU];
@@ -833,8 +843,9 @@ static bool outgoing_resource_request(rns_runtime_link_t *link,
                                  update_status);
         return true;
     }
-    if (count != 0U && transfer->state == RNS_RUNTIME_RESOURCE_ADVERTISED) {
-        transfer->state = RNS_RUNTIME_RESOURCE_TRANSFERRING;
+    if (count != 0U) {
+        if (transfer->state == RNS_RUNTIME_RESOURCE_ADVERTISED)
+            transfer->state = RNS_RUNTIME_RESOURCE_TRANSFERRING;
         if (transfer->options.callback != NULL)
             transfer->options.callback(
                 transfer, transfer->state, RNS_OK, transfer->sent_parts,
@@ -864,6 +875,7 @@ static bool outgoing_resource_proof(rns_runtime_link_t *link,
             return true;
         }
         memset(transfer->part_sent, 0, sizeof transfer->part_sent);
+        transfer->sent_segment_bytes = 0U;
         uint8_t advertisement[RNS_MTU];
         size_t advertisement_length = 0U;
         if (rns_resource_sender_advertisement(
@@ -2560,6 +2572,37 @@ size_t rns_runtime_resource_transfer_total_parts(
     return transfer != NULL
                ? rns_resource_sender_total_data_parts(transfer->sender)
                : 0U;
+}
+
+rns_status_t rns_runtime_resource_transfer_progress(
+    const rns_runtime_resource_transfer_t *transfer,
+    rns_runtime_resource_progress_t *progress) {
+    if (transfer == NULL || progress == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    size_t total = rns_resource_sender_data_size(transfer->sender);
+    size_t segments = rns_resource_sender_total_segments(transfer->sender);
+    size_t segment = rns_resource_sender_segment_index(transfer->sender);
+    size_t wire = rns_resource_sender_transfer_size(transfer->sender);
+    if (total == 0U || segments == 0U || segment == 0U || segment > segments ||
+        wire == 0U)
+        return RNS_ERROR_INVALID_STATE;
+    size_t completed = (segment - 1U) * RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE;
+    if (completed > total) completed = total;
+    size_t segment_source = total - completed;
+    if (segment_source > RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE)
+        segment_source = RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE;
+    size_t sent = transfer->sent_segment_bytes;
+    if (sent > wire) sent = wire;
+    uint64_t partial = ((uint64_t)segment_source * sent) / wire;
+    uint64_t transferred = (uint64_t)completed + partial;
+    if (transfer->state == RNS_RUNTIME_RESOURCE_COMPLETE)
+        transferred = total;
+    if (transferred > total) transferred = total;
+    progress->transferred = transferred;
+    progress->total = total;
+    progress->current_segment = segment;
+    progress->total_segments = segments;
+    return RNS_OK;
 }
 
 const uint8_t *rns_runtime_resource_transfer_hash(

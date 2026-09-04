@@ -15,6 +15,8 @@
 
 #define RESOURCE_CONTENT_SIZE 2048u
 #define RESOURCE_PACKED_SIZE (RESOURCE_CONTENT_SIZE + 256u)
+#define SEGMENTED_FIELD_PAYLOAD_SIZE \
+    (RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE + 4096u)
 
 typedef struct {
     const rns_identity *identity;
@@ -144,6 +146,57 @@ static size_t queue_large_message(
     stored.packed = (lxmf_slice_t){packed, packed_length};
     bool inserted = false;
     assert(lxmf_store_put(store, &stored, &inserted) == LXMF_OK && inserted);
+    return packed_length;
+}
+
+static size_t queue_segmented_message(
+    lxmf_store_t *store, const rns_identity *signer,
+    const uint8_t destination[16], const uint8_t source[16],
+    uint8_t **packed_out, uint8_t message_id[32]) {
+    static const uint8_t content[] = "segmented direct message";
+    const size_t fields_length = SEGMENTED_FIELD_PAYLOAD_SIZE + 9u;
+    uint8_t *fields = malloc(fields_length);
+    uint8_t *packed = malloc(fields_length + 256u);
+    assert(fields != NULL && packed != NULL);
+    const uint8_t prefix[9] = {
+        0x81u, 0xcdu, 0x04u, 0xd2u, 0xc6u,
+        (uint8_t)(SEGMENTED_FIELD_PAYLOAD_SIZE >> 24u),
+        (uint8_t)(SEGMENTED_FIELD_PAYLOAD_SIZE >> 16u),
+        (uint8_t)(SEGMENTED_FIELD_PAYLOAD_SIZE >> 8u),
+        (uint8_t)SEGMENTED_FIELD_PAYLOAD_SIZE};
+    memcpy(fields, prefix, sizeof prefix);
+    uint32_t random = 0x6d2b79f5u;
+    for (size_t i = sizeof prefix; i < fields_length; ++i) {
+        random ^= random << 13u;
+        random ^= random >> 17u;
+        random ^= random << 5u;
+        fields[i] = (uint8_t)random;
+    }
+    lxmf_message_t message = {0}, decoded;
+    memcpy(message.destination, destination, 16u);
+    memcpy(message.source, source, 16u);
+    message.timestamp = 94.5;
+    message.content = (lxmf_slice_t){content, sizeof content - 1u};
+    message.fields_msgpack = (lxmf_slice_t){fields, fields_length};
+    size_t packed_length = 0u;
+    assert(lxmf_pack(&message, lxmf_identity_signer, (void *)signer, packed,
+                     fields_length + 256u, &packed_length) == LXMF_OK);
+    assert(packed_length > RNS_RESOURCE_SINGLE_SEGMENT_MAX_SIZE);
+    assert(lxmf_unpack(packed, packed_length, NULL, NULL, &decoded) == LXMF_OK);
+    memcpy(message_id, decoded.message_id, 32u);
+    lxmf_store_message_t stored = {0};
+    memcpy(stored.message_id, message_id, 32u);
+    memcpy(stored.destination, destination, 16u);
+    memcpy(stored.source, source, 16u);
+    stored.timestamp = message.timestamp;
+    stored.status = LXMF_DELIVERY_QUEUED;
+    stored.signature_state = LXMF_SIGNATURE_VERIFIED;
+    stored.content = message.content;
+    stored.packed = (lxmf_slice_t){packed, packed_length};
+    bool inserted = false;
+    assert(lxmf_store_put(store, &stored, &inserted) == LXMF_OK && inserted);
+    free(fields);
+    *packed_out = packed;
     return packed_length;
 }
 
@@ -438,6 +491,73 @@ int main(void) {
     assert(lxmf_pow_stamp_validate(resource_id, 1u, received_resource.stamp,
                                    NULL) == LXMF_OK);
 
+    /* A representation beyond the one-segment bound advances monotonically
+     * and is delivered only after the final segment proof. */
+    uint8_t *segmented_packed = NULL;
+    uint8_t segmented_id[LXMF_MESSAGE_ID_LENGTH];
+    size_t segmented_packed_length = queue_segmented_message(
+        &alice_store, &alice, bob_destination, alice_destination,
+        &segmented_packed, segmented_id);
+    memset(&alice_delivery, 0, sizeof alice_delivery);
+    bob_inbox.received = false;
+    assert(lxmf_router_send_message(&alice_router, segmented_id) == LXMF_OK);
+    uint8_t first_segment_proof[LXMF_MESSAGE_ID_LENGTH];
+    {
+        uint8_t content[LXMF_STORE_MAX_CONTENT];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, segmented_id, &stored, content,
+                               sizeof content) == LXMF_OK);
+        assert(stored.status == LXMF_DELIVERY_SENDING &&
+               stored.delivery.queue_reason == LXMF_QUEUE_REASON_RESOURCE &&
+               stored.delivery.has_proof_id);
+        memcpy(first_segment_proof, stored.delivery.proof_id,
+               sizeof first_segment_proof);
+    }
+    assert(rns_hal_monotonic_ms(&start) == RNS_OK);
+    confirmed = false;
+    bool saw_partial_progress = false;
+    uint32_t previous_progress = 100000u;
+    do {
+        size_t processed = 0u;
+        assert(rns_runtime_poll(bob_runtime, 32u, &processed) == RNS_OK);
+        assert(rns_runtime_poll(alice_runtime, 32u, &processed) == RNS_OK);
+        uint8_t content[LXMF_STORE_MAX_CONTENT];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, segmented_id, &stored, content,
+                               sizeof content) == LXMF_OK);
+        assert(stored.delivery.progress >= previous_progress);
+        previous_progress = stored.delivery.progress;
+        if (previous_progress > 100000u &&
+            previous_progress < LXMF_DELIVERY_PROGRESS_COMPLETE)
+            saw_partial_progress = true;
+        confirmed = stored.status == LXMF_DELIVERY_DELIVERED;
+        assert(rns_hal_monotonic_ms(&now) == RNS_OK);
+    } while (!confirmed && now - start < 10000u);
+    assert(confirmed && bob_inbox.received && saw_partial_progress);
+    {
+        uint8_t content[LXMF_STORE_MAX_CONTENT];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, segmented_id, &stored, content,
+                               sizeof content) == LXMF_OK);
+        assert(stored.delivery.progress == LXMF_DELIVERY_PROGRESS_COMPLETE &&
+               stored.delivery.has_proof_id &&
+               memcmp(stored.delivery.proof_id, first_segment_proof,
+                      sizeof first_segment_proof) != 0);
+    }
+    size_t received_packed_length = 0u;
+    assert(lxmf_store_packed_size(&bob_store, segmented_id,
+                                  &received_packed_length) == LXMF_OK &&
+           received_packed_length == segmented_packed_length);
+    uint8_t *received_packed = malloc(received_packed_length);
+    assert(received_packed != NULL);
+    assert(lxmf_store_read_packed(&bob_store, segmented_id, received_packed,
+                                  received_packed_length,
+                                  &received_packed_length) == LXMF_OK &&
+           memcmp(received_packed, segmented_packed,
+                  segmented_packed_length) == 0);
+    free(received_packed);
+    free(segmented_packed);
+
     /* Remote policy rejection is terminal and never creates a SENT state. */
     bob_router.config.max_incoming_message_size = 400U;
     (void)queue_large_message(
@@ -484,9 +604,12 @@ int main(void) {
         lxmf_store_message_t stored;
         assert(lxmf_store_read(&alice_store, resource_id, &stored, content,
                                sizeof content) == LXMF_OK);
-        assert(stored.status == LXMF_DELIVERY_FAILED);
+        assert(stored.status == LXMF_DELIVERY_QUEUED);
+        assert(stored.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_BACKOFF);
+        assert(stored.delivery.retry_at_ms != 0U);
     }
     assert(alice_delivery.count == 2U);
+    assert(alice_delivery.statuses[1] == LXMF_DELIVERY_QUEUED);
     assert(alice_delivery.results[1] == LXMF_ERR_TIMEOUT);
     lxmf_router_poll_result_t resource_poll;
     assert(lxmf_router_poll(&alice_router, 0U, &resource_poll) == LXMF_OK);
@@ -524,6 +647,89 @@ int main(void) {
         assert(lxmf_store_read(&alice_store, outbound.message_id, &stored,
                                content, sizeof content) == LXMF_OK);
         assert(stored.status == LXMF_DELIVERY_SENT);
+    }
+
+    /* Normal router teardown preserves an active receipt for restart recovery;
+     * it is not an explicit user cancellation. */
+    bob_inbox.blocked = false;
+    outbound.message_id[0] = 0x99U;
+    outbound.timestamp = 99.0;
+    inserted = false;
+    assert(lxmf_store_put(&alice_store, &outbound, &inserted) == LXMF_OK &&
+           inserted);
+    assert(lxmf_router_send_message(&alice_router, outbound.message_id) ==
+           LXMF_OK);
+    lxmf_router_destroy(&alice_router);
+    {
+        uint8_t content[64];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, outbound.message_id, &stored,
+                               content, sizeof content) == LXMF_OK);
+        assert(stored.status == LXMF_DELIVERY_SENT);
+        assert(stored.delivery.has_proof_id);
+        assert(stored.delivery.queue_reason != LXMF_QUEUE_REASON_CANCELLED);
+    }
+    assert(lxmf_router_init(&alice_router, &alice_options) == LXMF_OK);
+    {
+        uint8_t content[64];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, outbound.message_id, &stored,
+                               content, sizeof content) == LXMF_OK);
+        assert(stored.status == LXMF_DELIVERY_QUEUED);
+        assert(stored.delivery.queue_reason ==
+               LXMF_QUEUE_REASON_RETRY_BACKOFF);
+        assert(!stored.delivery.has_proof_id);
+    }
+
+    /* Re-establish a direct link, then ensure teardown also preserves an
+     * active Resource instead of converting it to a durable cancellation. */
+    outbound.message_id[0] = 0x9aU;
+    outbound.timestamp = 100.0;
+    inserted = false;
+    assert(lxmf_store_put(&alice_store, &outbound, &inserted) == LXMF_OK &&
+           inserted);
+    assert(lxmf_router_send_message(&alice_router, outbound.message_id) ==
+           LXMF_ERR_PENDING);
+    assert(rns_hal_monotonic_ms(&start) == RNS_OK);
+    confirmed = false;
+    do {
+        lxmf_router_poll_result_t poll_result;
+        size_t poll_processed = 0U;
+        assert(rns_runtime_poll(bob_runtime, 8U, &poll_processed) == RNS_OK);
+        assert(rns_runtime_poll(alice_runtime, 8U, &poll_processed) == RNS_OK);
+        assert(lxmf_router_poll(&alice_router, 4U, &poll_result) == LXMF_OK);
+        uint8_t content[64];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, outbound.message_id, &stored,
+                               content, sizeof content) == LXMF_OK);
+        confirmed = stored.status == LXMF_DELIVERY_DELIVERED;
+        assert(rns_hal_monotonic_ms(&now) == RNS_OK);
+    } while (!confirmed && now - start < 3000U);
+    assert(confirmed);
+
+    (void)queue_large_message(
+        &alice_store, &alice, bob_destination, alice_destination, 101.0,
+        0xa5U, resource_content, resource_packed, resource_id);
+    assert(lxmf_router_send_message(&alice_router, resource_id) == LXMF_OK);
+    lxmf_router_destroy(&alice_router);
+    {
+        uint8_t content[RESOURCE_CONTENT_SIZE];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, resource_id, &stored, content,
+                               sizeof content) == LXMF_OK);
+        assert(stored.status == LXMF_DELIVERY_SENDING);
+        assert(stored.delivery.queue_reason == LXMF_QUEUE_REASON_RESOURCE);
+    }
+    assert(lxmf_router_init(&alice_router, &alice_options) == LXMF_OK);
+    {
+        uint8_t content[RESOURCE_CONTENT_SIZE];
+        lxmf_store_message_t stored;
+        assert(lxmf_store_read(&alice_store, resource_id, &stored, content,
+                               sizeof content) == LXMF_OK);
+        assert(stored.status == LXMF_DELIVERY_QUEUED);
+        assert(stored.delivery.queue_reason ==
+               LXMF_QUEUE_REASON_RETRY_BACKOFF);
+        assert(!stored.delivery.has_proof_id);
     }
 
     lxmf_router_destroy(&bob_router);
