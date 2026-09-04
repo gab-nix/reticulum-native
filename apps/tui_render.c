@@ -120,6 +120,20 @@ void tui_render_message_metadata(const tui_message_metadata_t *metadata,
     if (mask != 0u) append_summary(output, capacity, "]");
 }
 
+void tui_render_compose_reference(const tui_compose_reference_t *reference,
+                                  char *output, size_t capacity) {
+    if (capacity == 0u) return;
+    output[0] = '\0';
+    if (reference == NULL ||
+        reference->kind == TUI_COMPOSE_REFERENCE_NONE) return;
+    (void)snprintf(output, capacity, "%s %02x%02x%02x%02x: %.96s",
+                   reference->kind == TUI_COMPOSE_REFERENCE_REPLY
+                       ? "Reply to" : "React to",
+                   reference->message_id[0], reference->message_id[1],
+                   reference->message_id[2], reference->message_id[3],
+                   reference->preview);
+}
+
 static tui_layout_t layout_of(int rows, int columns) {
     tui_layout_t layout;
     layout.rows = rows;
@@ -517,7 +531,13 @@ static void draw_thread(const tui_state_t *state, const tui_layout_t *layout) {
         (void)tui_text_sanitize(message->value.content.data, message->value.content.len,
                                 text, sizeof text);
         tui_render_message_metadata(&message->metadata, metadata, sizeof metadata);
-        (void)snprintf(rendered, sizeof rendered, "%s %s %s%s",
+        bool referenced = state->compose_reference.kind !=
+                              TUI_COMPOSE_REFERENCE_NONE &&
+                          memcmp(state->compose_reference.message_id,
+                                 message->value.message_id,
+                                 LXMF_MESSAGE_ID_LENGTH) == 0;
+        (void)snprintf(rendered, sizeof rendered, "%c%s %s %s%s",
+                       referenced ? '*' : ' ',
                        outgoing ? ">" : "<",
                        outgoing ? delivery_marker(message->value.status) : "   ",
                        text, metadata);
@@ -532,8 +552,15 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
     switch (state->field) {
         case TUI_FIELD_COMPOSE:
             editor = &state->composer;
-            prompt = state->compose_delivery_method ==
-                         LXMF_DELIVERY_METHOD_PROPAGATED ? "Relay: " : "Direct: ";
+            if (state->compose_reference.kind == TUI_COMPOSE_REFERENCE_REPLY)
+                prompt = "Reply: ";
+            else
+                prompt = state->compose_delivery_method ==
+                             LXMF_DELIVERY_METHOD_PROPAGATED ? "Relay: " : "Direct: ";
+            break;
+        case TUI_FIELD_REACTION:
+            editor = &state->reaction;
+            prompt = "React: ";
             break;
         case TUI_FIELD_SEARCH: editor = &state->search; prompt = "Search: "; break;
         case TUI_FIELD_NODE_SEARCH:
@@ -554,9 +581,18 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
         (void)move(layout->input_row,
                    cursor_x < layout->columns ? cursor_x : layout->columns - 1);
     }
-    clipped(stdscr, layout->hint_row, 0, layout->columns,
-            editor != NULL ? "Enter accept  Esc cancel  Home/End  Ctrl-A/E/U/K/W"
-                           : "d route  v save latest attachment  / search  i info  ? help");
+    char reference_hint[TUI_FIELD_PREVIEW_MAX + 80u];
+    const char *hint = editor != NULL
+                           ? "Enter accept  Esc cancel  Home/End  Ctrl-A/E/U/K/W"
+                           : "e reply  z react  d route  v save  / search  i info  ? help";
+    if (editor != NULL && state->compose_reference.kind !=
+                              TUI_COMPOSE_REFERENCE_NONE) {
+        tui_render_compose_reference(&state->compose_reference,
+                                     reference_hint,
+                                     sizeof reference_hint);
+        hint = reference_hint;
+    }
+    clipped(stdscr, layout->hint_row, 0, layout->columns, hint);
     clipped(stdscr, layout->legend_row, 0, layout->columns,
             "[.] queued  [>] sending  [+] sent  [x] delivered  [!] failed");
 }
@@ -567,6 +603,8 @@ static void draw_conversation_overlay(const tui_state_t *state) {
             "j/k or arrows: conversation    PgUp/PgDn: history",
             "1/2/3: trusted/unknown/untrusted    /: search",
             "Enter: compose    i: peer info    p: pin    x: block",
+            "PgUp/PgDn then e: reply to newest visible message",
+            "PgUp/PgDn then z: react without changing the saved draft",
             "t/u: trust/untrust    n: local note    y: copy fallback",
             "v: explicitly save newest attachment (RETICULUM_ATTACHMENT_DIR)",
             "d: choose direct or propagated delivery for queued messages",
@@ -1490,6 +1528,12 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
                       state->contacts[i].messages);
     }
     size_t count = tui_state_thread_count(state);
+    if (state->compose_reference.kind != TUI_COMPOSE_REFERENCE_NONE) {
+        char reference[TUI_FIELD_PREVIEW_MAX + 80u];
+        tui_render_compose_reference(&state->compose_reference, reference,
+                                     sizeof reference);
+        (void)fprintf(output, "Compose reference: %s\n", reference);
+    }
     (void)fprintf(output, "Messages: %zu\n", count);
     for (size_t i = 0u; i < count; ++i) {
         const tui_message_t *message = tui_state_thread_message(state, i);

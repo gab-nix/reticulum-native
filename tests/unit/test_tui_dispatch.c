@@ -11,6 +11,7 @@ static tui_state_t *state_create(void) {
     tui_state_t *state = calloc(1u, sizeof *state);
     assert(state != NULL);
     tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
+    tui_editor_init(&state->reaction, TUI_REACTION_CAPACITY);
     tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
@@ -25,6 +26,8 @@ static tui_state_t *state_create(void) {
     state->contacts[1].trust = TUI_TRUST_UNKNOWN;
     state->tab = TUI_TRUST_UNKNOWN;
     state->filter_dirty = true;
+    state->messages = calloc(TUI_MAX_MESSAGES, sizeof *state->messages);
+    assert(state->messages != NULL);
     tui_state_refresh(state);
     assert(state->visible_count == 2u);
     return state;
@@ -33,6 +36,7 @@ static tui_state_t *state_create(void) {
 static void state_destroy(tui_state_t *state) {
     rns_node_registry_destroy(&state->nodes);
     tui_rrc_close(&state->rrc);
+    free(state->messages);
     free(state);
 }
 
@@ -184,7 +188,7 @@ static void test_event_log_screen(void) {
 
 static void test_hidden_editors(void) {
     for (int screen = 0; screen < TUI_SCREEN_COUNT; ++screen) {
-        for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_RRC; ++field) {
+        for (int field = TUI_FIELD_COMPOSE; field <= TUI_FIELD_REACTION; ++field) {
             bool visible = field == TUI_FIELD_SETTING
                              ? screen == TUI_SCREEN_SETTINGS
                              : field == TUI_FIELD_RRC
@@ -201,6 +205,7 @@ static void test_hidden_editors(void) {
             assert(tui_editor_insert_byte(&state->address, 'a'));
             assert(tui_editor_insert_byte(&state->search, 's'));
             assert(tui_editor_insert_byte(&state->node_search, 'n'));
+            assert(tui_editor_insert_byte(&state->reaction, 'r'));
             tui_settings_t saved = state->settings;
             assert(tui_dispatch_key(state, '\n'));
             assert(state->screen == (tui_screen_t)screen);
@@ -210,11 +215,48 @@ static void test_hidden_editors(void) {
             assert(strcmp(tui_editor_text(&state->address), "a") == 0);
             assert(strcmp(tui_editor_text(&state->search), "s") == 0);
             assert(strcmp(tui_editor_text(&state->node_search), "n") == 0);
+            assert(strcmp(tui_editor_text(&state->reaction), "r") == 0);
             assert(memcmp(&saved, &state->settings, sizeof saved) == 0);
             assert(state->message_count == 0u);
             state_destroy(state);
         }
     }
+}
+
+static void test_reply_reaction_dispatch(void) {
+    tui_state_t *state = state_create();
+    tui_message_t *message = &state->messages[0];
+    message->value.message_id[0] = 0xa5u;
+    memcpy(message->value.source, state->contacts[0].peer,
+           LXMF_DESTINATION_LENGTH);
+    memcpy(message->content, "target", 6u);
+    message->value.content = (lxmf_slice_t){message->content, 6u};
+    state->message_count = 1u;
+    state->contacts[0].messages = 1u;
+    state->filter_dirty = true;
+    tui_state_refresh(state);
+
+    assert(tui_editor_insert(&state->composer, "draft", 5u));
+    assert(tui_dispatch_key(state, 'e'));
+    assert(state->field == TUI_FIELD_COMPOSE);
+    assert(state->compose_reference.kind == TUI_COMPOSE_REFERENCE_REPLY);
+    assert(state->compose_reference.message_id[0] == 0xa5u);
+    assert(tui_dispatch_key(state, 27));
+    assert(state->field == TUI_FIELD_NONE);
+    assert(state->compose_reference.kind == TUI_COMPOSE_REFERENCE_NONE);
+    assert(strcmp(tui_editor_text(&state->composer), "draft") == 0);
+
+    assert(tui_dispatch_key(state, 'z'));
+    assert(state->field == TUI_FIELD_REACTION);
+    assert(state->compose_reference.kind == TUI_COMPOSE_REFERENCE_REACTION);
+    assert(tui_dispatch_key(state, 'x'));
+    assert(strcmp(tui_editor_text(&state->reaction), "x") == 0);
+    assert(tui_dispatch_key(state, 27));
+    assert(state->field == TUI_FIELD_NONE);
+    assert(tui_editor_empty(&state->reaction));
+    assert(!state->contacts[0].blocked);
+
+    state_destroy(state);
 }
 
 static void test_modal_isolation(void) {
@@ -453,6 +495,7 @@ int main(void) {
     test_propagation_sync_actions_are_screen_scoped();
     test_event_log_screen();
     test_hidden_editors();
+    test_reply_reaction_dispatch();
     test_modal_isolation();
     test_shortcuts_drafts_and_node_action();
     test_browser_terminal_escape();

@@ -15,6 +15,8 @@ int tui_render_dump(const tui_state_t *state, FILE *output);
 /* Bounded single-line projection used by curses and headless tests. */
 void tui_render_message_metadata(const tui_message_metadata_t *metadata,
                                  char *output, size_t capacity);
+void tui_render_compose_reference(const tui_compose_reference_t *reference,
+                                  char *output, size_t capacity);
 /* NULL means the node satisfies the unchanged verified-selection policy. */
 const char *tui_render_node_propagation_reason(const rns_node_record *node);
 /* Three-character role badge: P=peer, R=active relay, r=inactive relay

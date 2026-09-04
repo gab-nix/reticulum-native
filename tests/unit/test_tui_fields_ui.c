@@ -1,6 +1,7 @@
 #include "tui.h"
 #include "tui_render.h"
 #include "tui_state.h"
+#include "tui_text.h"
 
 #include "reticulum/destination.h"
 #include "reticulum/identity.h"
@@ -205,6 +206,76 @@ int main(void) {
     assert(tui_dispatch_key(&state, 'v'));
     assert(strstr(state.status, "directory is unavailable") != NULL);
     assert(!tui_state_set_attachment_directory(&state, "relative/path"));
+
+    /* Reply composition copies a stable full message ID and turns arbitrary
+     * target bytes into a bounded valid UTF-8 quote before signing. */
+    uint8_t target_id[LXMF_MESSAGE_ID_LENGTH];
+    memcpy(target_id, state.messages[2].value.message_id, sizeof target_id);
+    state.messages[2].content[0] = 0xffu;
+    assert(tui_state_begin_reply(&state));
+    assert(state.field == TUI_FIELD_COMPOSE);
+    assert(state.compose_reference.kind == TUI_COMPOSE_REFERENCE_REPLY);
+    assert(memcmp(state.compose_reference.message_id, target_id,
+                  sizeof target_id) == 0);
+    assert(state.compose_reference.quote[0] == '?');
+    assert(tui_utf8_valid(state.compose_reference.quote,
+                          state.compose_reference.quote_length));
+    tui_editor_clear(&state.composer);
+    assert(tui_editor_insert(&state.composer, "reply text", 10u));
+    assert(tui_state_queue_message(&state) == LXMF_OK);
+    assert(state.message_count == 4u);
+    metadata = &state.messages[3].metadata;
+    assert(metadata->state == TUI_METADATA_AVAILABLE);
+    assert((metadata->present_mask & (LXMF_STANDARD_REPLY_TO |
+                                      LXMF_STANDARD_REPLY_QUOTE)) ==
+           (LXMF_STANDARD_REPLY_TO | LXMF_STANDARD_REPLY_QUOTE));
+    assert(memcmp(metadata->reply_to, target_id, sizeof target_id) == 0);
+    assert(metadata->reply_quote[0] == '?');
+    assert(state.messages[3].value.content.len == 10u);
+
+    /* A reaction uses the same stable target while preserving the ordinary
+     * conversation draft. Its normal content mirrors the reaction so stock
+     * NomadNet 1.2.0, which preserves but does not render field 0x40, shows it. */
+    tui_editor_clear(&state.composer);
+    assert(tui_editor_insert(&state.composer, "saved draft", 11u));
+    tui_state_save_draft(&state);
+    state.scroll = 1u;
+    assert(tui_state_begin_reaction(&state));
+    assert(memcmp(state.compose_reference.message_id, target_id,
+                  sizeof target_id) == 0);
+    char reference[160];
+    tui_render_compose_reference(&state.compose_reference, reference,
+                                 sizeof reference);
+    assert(strstr(reference, "React to") != NULL);
+    dump = tmpfile();
+    assert(dump != NULL && tui_render_dump(&state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    output_length = fread(output, 1u, sizeof output - 1u, dump);
+    output[output_length] = '\0';
+    assert(strstr(output, "Compose reference: React to") != NULL);
+    assert(fclose(dump) == 0);
+    assert(tui_editor_insert(&state.reaction, "+1", 2u));
+    assert(tui_state_queue_reaction(&state) == LXMF_OK);
+    assert(state.message_count == 5u);
+    metadata = &state.messages[4].metadata;
+    assert(metadata->state == TUI_METADATA_AVAILABLE);
+    assert((metadata->present_mask & LXMF_STANDARD_REACTION) != 0u);
+    assert(memcmp(metadata->reaction_to, target_id, sizeof target_id) == 0);
+    assert(strcmp(metadata->reaction, "+1") == 0);
+    assert(state.messages[4].value.content.len == 2u);
+    assert(memcmp(state.messages[4].value.content.data, "+1", 2u) == 0);
+    assert(strcmp(tui_editor_text(&state.composer), "saved draft") == 0);
+    assert(state.compose_reference.kind == TUI_COMPOSE_REFERENCE_NONE);
+
+    struct { char output[4]; unsigned char guard; } reference_narrow =
+        {{0x55, 0x55, 0x55, 0x55}, 0xa5u};
+    tui_compose_reference_t shown = {.kind = TUI_COMPOSE_REFERENCE_REPLY};
+    memcpy(shown.message_id, target_id, sizeof target_id);
+    tui_render_compose_reference(&shown, reference_narrow.output,
+                                 sizeof reference_narrow.output);
+    assert(reference_narrow.output[sizeof reference_narrow.output - 1u] ==
+           '\0');
+    assert(reference_narrow.guard == 0xa5u);
 
     tui_state_close(&state);
     assert(unlink(saved_path) == 0);

@@ -29,6 +29,7 @@
 #define TUI_LOG_TEXT_MAX TUI_STATUS_MAX
 #define TUI_FIELD_PREVIEW_MAX 96u
 #define TUI_ATTACHMENT_DISPLAY_MAX 96u
+#define TUI_REACTION_CAPACITY LXMF_STANDARD_MAX_REACTION_BYTES
 
 typedef enum {
     TUI_TRUST_TRUSTED,
@@ -57,8 +58,24 @@ typedef enum {
     TUI_FIELD_NODE_SEARCH,
     TUI_FIELD_ADDRESS,
     TUI_FIELD_SETTING,
-    TUI_FIELD_RRC
+    TUI_FIELD_RRC,
+    TUI_FIELD_REACTION
 } tui_field_t;
+
+typedef enum {
+    TUI_COMPOSE_REFERENCE_NONE = 0,
+    TUI_COMPOSE_REFERENCE_REPLY,
+    TUI_COMPOSE_REFERENCE_REACTION
+} tui_compose_reference_kind_t;
+
+typedef struct {
+    tui_compose_reference_kind_t kind;
+    uint8_t peer[LXMF_DESTINATION_LENGTH];
+    uint8_t message_id[LXMF_MESSAGE_ID_LENGTH];
+    uint8_t quote[LXMF_STANDARD_MAX_QUOTE_BYTES];
+    size_t quote_length;
+    char preview[TUI_FIELD_PREVIEW_MAX];
+} tui_compose_reference_t;
 
 typedef enum {
     TUI_SETTING_DISPLAY_NAME,
@@ -182,6 +199,8 @@ typedef struct tui_state {
     bool filter_dirty;
 
     tui_editor_t composer;
+    tui_editor_t reaction;
+    tui_compose_reference_t compose_reference;
     tui_editor_t search;
     tui_editor_t node_search;
     tui_editor_t address;
@@ -221,6 +240,7 @@ typedef struct tui_state {
     rns_identity resolved_propagation_identity;
     lxmf_router_propagation_sync_status_t propagation_sync;
     lxmf_delivery_method_t compose_delivery_method;
+    uint64_t last_compose_timestamp_ms;
     bool send_attempted;
     bool send_ok;
 
@@ -284,6 +304,14 @@ void tui_state_scroll_by(tui_state_t *state, int lines);
 /* Selects, creating if needed, the conversation with peer. */
 bool tui_state_open_conversation(tui_state_t *state, const uint8_t peer[LXMF_DESTINATION_LENGTH]);
 lxmf_status_t tui_state_queue_message(tui_state_t *state);
+/* Starts a reply/reaction against the newest message visible in the scrolled
+ * viewport. The copied message ID keeps the target stable afterwards. */
+bool tui_state_begin_reply(tui_state_t *state);
+bool tui_state_begin_reaction(tui_state_t *state);
+/* Queues a reaction without modifying the conversation's saved draft. */
+lxmf_status_t tui_state_queue_reaction(tui_state_t *state);
+/* Cancels only the active reference/editor, preserving the normal draft. */
+void tui_state_cancel_reference(tui_state_t *state);
 /* Persists the active composer into the selected conversation. */
 void tui_state_save_draft(tui_state_t *state);
 void tui_state_persist_contacts(tui_state_t *state);

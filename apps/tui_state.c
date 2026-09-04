@@ -172,6 +172,85 @@ static void restore_selected_draft(tui_state_t *state) {
     (void)tui_editor_insert(&state->composer, contact->draft, length);
 }
 
+void tui_state_cancel_reference(tui_state_t *state) {
+    if (state == NULL) return;
+    rns_hal_secure_zero(&state->compose_reference,
+                        sizeof state->compose_reference);
+    tui_editor_clear(&state->reaction);
+    if (state->field == TUI_FIELD_REACTION)
+        state->field = TUI_FIELD_NONE;
+}
+
+static size_t copy_quote_utf8(lxmf_slice_t input, uint8_t *output,
+                              size_t capacity) {
+    size_t read = 0u;
+    size_t written = 0u;
+    if (output == NULL || (input.data == NULL && input.len != 0u)) return 0u;
+    while (read < input.len && written < capacity) {
+        uint8_t byte = input.data[read];
+        if (byte < 0x80u) {
+            output[written++] = byte < 0x20u || byte == 0x7fu ? ' ' : byte;
+            ++read;
+            continue;
+        }
+        size_t width = tui_utf8_length(input.data + read, input.len - read);
+        if (width == 0u) {
+            output[written++] = '?';
+            ++read;
+        } else if (width <= capacity - written) {
+            memcpy(output + written, input.data + read, width);
+            written += width;
+            read += width;
+        } else {
+            break;
+        }
+    }
+    return written;
+}
+
+static const tui_message_t *viewport_reference_message(tui_state_t *state) {
+    if (state == NULL || state->selected >= state->contact_count) return NULL;
+    tui_state_refresh(state);
+    size_t end = state->thread_count > state->scroll
+                     ? state->thread_count - state->scroll : 0u;
+    return end == 0u ? NULL : tui_state_thread_message(state, end - 1u);
+}
+
+static bool begin_reference(tui_state_t *state,
+                            tui_compose_reference_kind_t kind) {
+    const tui_message_t *message = viewport_reference_message(state);
+    if (message == NULL) {
+        tui_state_set_status(state, "No visible message to reference");
+        return false;
+    }
+    tui_state_cancel_reference(state);
+    state->compose_reference.kind = kind;
+    memcpy(state->compose_reference.peer, state->contacts[state->selected].peer,
+           LXMF_DESTINATION_LENGTH);
+    memcpy(state->compose_reference.message_id, message->value.message_id,
+           LXMF_MESSAGE_ID_LENGTH);
+    state->compose_reference.quote_length = copy_quote_utf8(
+        message->value.content, state->compose_reference.quote,
+        sizeof state->compose_reference.quote);
+    copy_preview(message->value.content, state->compose_reference.preview,
+                 sizeof state->compose_reference.preview);
+    state->field = kind == TUI_COMPOSE_REFERENCE_REACTION
+                       ? TUI_FIELD_REACTION : TUI_FIELD_COMPOSE;
+    tui_state_set_status(state, "%s target selected: %.8s",
+                         kind == TUI_COMPOSE_REFERENCE_REACTION
+                             ? "Reaction" : "Reply",
+                         state->compose_reference.preview);
+    return true;
+}
+
+bool tui_state_begin_reply(tui_state_t *state) {
+    return begin_reference(state, TUI_COMPOSE_REFERENCE_REPLY);
+}
+
+bool tui_state_begin_reaction(tui_state_t *state) {
+    return begin_reference(state, TUI_COMPOSE_REFERENCE_REACTION);
+}
+
 /* Copies one stored message into the in-memory history and its conversation. */
 static bool ingest_message(tui_state_t *state, const lxmf_store_message_t *message) {
     if (state->message_count >= TUI_MAX_MESSAGES ||
@@ -1246,6 +1325,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     if (state == NULL || identity_path == NULL || store_path == NULL) return -1;
     memset(state, 0, sizeof *state);
     tui_editor_init(&state->composer, TUI_COMPOSER_CAPACITY);
+    tui_editor_init(&state->reaction, TUI_REACTION_CAPACITY);
     tui_editor_init(&state->search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->node_search, TUI_SEARCH_CAPACITY);
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
@@ -1514,6 +1594,7 @@ void tui_state_select_offset(tui_state_t *state, int delta) {
     else if (delta < 0)
         position = position == 0u ? state->visible_count - 1u : position - 1u;
     else position = (position + 1u) % state->visible_count;
+    tui_state_cancel_reference(state);
     state->selected = state->visible[position];
     restore_selected_draft(state);
     state->contacts[state->selected].unread = 0u;
@@ -1523,6 +1604,7 @@ void tui_state_select_offset(tui_state_t *state, int delta) {
 
 void tui_state_set_tab(tui_state_t *state, tui_trust_t tab) {
     if (state == NULL) return;
+    tui_state_cancel_reference(state);
     state->tab = tab;
     state->scroll = 0u;
     state->filter_dirty = true;
@@ -1569,6 +1651,7 @@ bool tui_state_open_conversation(tui_state_t *state,
         tui_state_set_status(state, "Conversation limit reached");
         return false;
     }
+    tui_state_cancel_reference(state);
     state->selected = index;
     state->contacts[index].trust = TUI_TRUST_UNKNOWN;
     state->tab = TUI_TRUST_UNKNOWN;
@@ -1582,24 +1665,38 @@ bool tui_state_open_conversation(tui_state_t *state,
 
 /* ------------------------------------------------------------------ sending */
 
-lxmf_status_t tui_state_queue_message(tui_state_t *state) {
+static lxmf_status_t queue_outbound(tui_state_t *state, lxmf_slice_t content,
+                                    lxmf_slice_t fields) {
     if (state == NULL || state->selected >= state->contact_count ||
-        tui_editor_empty(&state->composer)) return LXMF_ERR_ARGUMENT;
+        (content.len != 0u && content.data == NULL) ||
+        (fields.len != 0u && fields.data == NULL)) return LXMF_ERR_ARGUMENT;
     lxmf_message_t source = {0};
     lxmf_message_t decoded;
-    uint8_t packed[LXMF_STORE_MAX_CONTENT + 256u];
+    uint8_t *packed = NULL;
     size_t packed_length = 0u;
     memcpy(source.destination, state->contacts[state->selected].peer,
            LXMF_DESTINATION_LENGTH);
     memcpy(source.source, state->local, LXMF_DESTINATION_LENGTH);
-    source.timestamp = (double)time(NULL);
-    source.content.data = (const uint8_t *)tui_editor_text(&state->composer);
-    source.content.len = tui_editor_length(&state->composer);
+    uint64_t now_ms = 0u;
+    if (rns_hal_wallclock_ms(&now_ms) != RNS_OK) return LXMF_ERR_CRYPTO;
+    if (now_ms <= state->last_compose_timestamp_ms) {
+        if (state->last_compose_timestamp_ms == UINT64_MAX)
+            return LXMF_ERR_BOUNDS;
+        now_ms = state->last_compose_timestamp_ms + 1u;
+    }
+    source.timestamp = (double)now_ms / 1000.0;
+    source.content = content;
+    source.fields_msgpack = fields;
+    size_t packed_capacity = lxmf_pack_bound(&source);
+    if (packed_capacity == 0u || packed_capacity > LXMF_STORE_MAX_PACKED)
+        return LXMF_ERR_BOUNDS;
+    packed = malloc(packed_capacity);
+    if (packed == NULL) return LXMF_ERR_BOUNDS;
     lxmf_status_t status = lxmf_pack(&source, lxmf_identity_signer, &state->identity,
-                                     packed, sizeof packed, &packed_length);
-    if (status != LXMF_OK) return status;
+                                     packed, packed_capacity, &packed_length);
+    if (status != LXMF_OK) goto done;
     status = lxmf_unpack(packed, packed_length, NULL, NULL, &decoded);
-    if (status != LXMF_OK) return status;
+    if (status != LXMF_OK) goto done;
 
     lxmf_store_message_t stored = {0};
     bool inserted = false;
@@ -1614,7 +1711,12 @@ lxmf_status_t tui_state_queue_message(tui_state_t *state) {
     status = lxmf_store_put(&state->store, &stored, &inserted);
     state->send_attempted = false;
     state->send_ok = false;
-    if (status != LXMF_OK || !inserted) return status;
+    if (status != LXMF_OK) goto done;
+    if (!inserted) {
+        status = LXMF_ERR_FORMAT;
+        goto done;
+    }
+    state->last_compose_timestamp_ms = now_ms;
 
     if (state->router_ready) {
         bool propagation_waiting =
@@ -1636,7 +1738,74 @@ lxmf_status_t tui_state_queue_message(tui_state_t *state) {
         }
     }
     (void)ingest_message(state, &stored);
-    return LXMF_OK;
+done:
+    if (packed != NULL) {
+        rns_hal_secure_zero(packed, packed_capacity);
+        free(packed);
+    }
+    return status;
+}
+
+lxmf_status_t tui_state_queue_message(tui_state_t *state) {
+    if (state == NULL || state->selected >= state->contact_count ||
+        tui_editor_empty(&state->composer)) return LXMF_ERR_ARGUMENT;
+    static const uint8_t empty_fields[] = {0x80u};
+    uint8_t fields[LXMF_STANDARD_MAX_QUOTE_BYTES + 96u];
+    lxmf_slice_t encoded = {empty_fields, sizeof empty_fields};
+    size_t fields_length = 0u;
+    if (state->compose_reference.kind == TUI_COMPOSE_REFERENCE_REPLY) {
+        if (memcmp(state->compose_reference.peer,
+                   state->contacts[state->selected].peer,
+                   LXMF_DESTINATION_LENGTH) != 0) return LXMF_ERR_ARGUMENT;
+        lxmf_standard_fields_t reply = {0};
+        reply.present_mask = LXMF_STANDARD_REPLY_TO |
+                             LXMF_STANDARD_REPLY_QUOTE;
+        memcpy(reply.reply_to, state->compose_reference.message_id,
+               LXMF_MESSAGE_ID_LENGTH);
+        reply.reply_quote = (lxmf_slice_t){state->compose_reference.quote,
+                                           state->compose_reference.quote_length};
+        lxmf_status_t field_status = lxmf_standard_fields_merge(
+            empty_fields, sizeof empty_fields, &reply, reply.present_mask, 0u,
+            fields, sizeof fields, &fields_length);
+        if (field_status != LXMF_OK) return field_status;
+        encoded = (lxmf_slice_t){fields, fields_length};
+    }
+    lxmf_status_t status = queue_outbound(
+        state, (lxmf_slice_t){(const uint8_t *)tui_editor_text(&state->composer),
+                              tui_editor_length(&state->composer)}, encoded);
+    if (status == LXMF_OK) tui_state_cancel_reference(state);
+    return status;
+}
+
+lxmf_status_t tui_state_queue_reaction(tui_state_t *state) {
+    if (state == NULL || state->selected >= state->contact_count ||
+        state->compose_reference.kind != TUI_COMPOSE_REFERENCE_REACTION ||
+        tui_editor_empty(&state->reaction) ||
+        memcmp(state->compose_reference.peer,
+               state->contacts[state->selected].peer,
+               LXMF_DESTINATION_LENGTH) != 0) return LXMF_ERR_ARGUMENT;
+    static const uint8_t empty_fields[] = {0x80u};
+    uint8_t fields[LXMF_STANDARD_MAX_REACTION_BYTES + 96u];
+    size_t fields_length = 0u;
+    lxmf_standard_fields_t reaction = {0};
+    reaction.present_mask = LXMF_STANDARD_REACTION;
+    memcpy(reaction.reaction_to, state->compose_reference.message_id,
+           LXMF_MESSAGE_ID_LENGTH);
+    reaction.reaction_content = (lxmf_slice_t){
+        (const uint8_t *)tui_editor_text(&state->reaction),
+        tui_editor_length(&state->reaction)};
+    lxmf_status_t status = lxmf_standard_fields_merge(
+        empty_fields, sizeof empty_fields, &reaction, reaction.present_mask, 0u,
+        fields, sizeof fields, &fields_length);
+    if (status == LXMF_OK) {
+        /* NomadNet 1.2.0 preserves the standard reaction field but does not
+         * render it. Mirroring the short reaction in normal content keeps it
+         * visible to that stock client while retaining LXMF semantics. */
+        status = queue_outbound(state, reaction.reaction_content,
+                                (lxmf_slice_t){fields, fields_length});
+    }
+    if (status == LXMF_OK) tui_state_cancel_reference(state);
+    return status;
 }
 
 void tui_state_save_draft(tui_state_t *state) {

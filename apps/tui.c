@@ -27,6 +27,7 @@ static bool conversation_selected(tui_state_t *state) {
 static bool field_visible(tui_state_t *state) {
     switch (state->field) {
         case TUI_FIELD_COMPOSE: return conversation_selected(state);
+        case TUI_FIELD_REACTION: return conversation_selected(state);
         case TUI_FIELD_SEARCH: case TUI_FIELD_ADDRESS:
             return state->screen == TUI_SCREEN_CONVERSATIONS;
         case TUI_FIELD_NODE_SEARCH: return state->screen == TUI_SCREEN_NETWORK;
@@ -55,6 +56,7 @@ static bool overlay_visible(tui_state_t *state) {
 static tui_editor_t *active_editor(tui_state_t *state) {
     switch (state->field) {
         case TUI_FIELD_COMPOSE: return &state->composer;
+        case TUI_FIELD_REACTION: return &state->reaction;
         case TUI_FIELD_SEARCH: return &state->search;
         case TUI_FIELD_NODE_SEARCH: return &state->node_search;
         case TUI_FIELD_ADDRESS: return &state->address;
@@ -112,6 +114,18 @@ static void submit_message(tui_state_t *state) {
     state->field = TUI_FIELD_NONE;
 }
 
+static void submit_reaction(tui_state_t *state) {
+    lxmf_status_t status = tui_state_queue_reaction(state);
+    if (status != LXMF_OK) {
+        tui_state_set_status(state, "Could not queue reaction (%d)", status);
+        return;
+    }
+    if (!state->router_ready)
+        tui_state_set_status(state,
+                             "Reaction queued locally; network delivery is pending");
+    state->field = TUI_FIELD_NONE;
+}
+
 /* Returns false when the field was submitted or cancelled. */
 static void handle_field_key(tui_state_t *state, int key) {
     tui_editor_t *editor = active_editor(state);
@@ -120,6 +134,13 @@ static void handle_field_key(tui_state_t *state, int key) {
     if (key == 27) {
         if (state->field == TUI_FIELD_SETTING) tui_state_setting_cancel(state);
         else if (state->field == TUI_FIELD_RRC) tui_state_rrc_cancel(state);
+        else if (state->field == TUI_FIELD_REACTION ||
+                 (state->field == TUI_FIELD_COMPOSE &&
+                  state->compose_reference.kind ==
+                      TUI_COMPOSE_REFERENCE_REPLY)) {
+            tui_state_cancel_reference(state);
+            state->field = TUI_FIELD_NONE;
+        }
         else state->field = TUI_FIELD_NONE;
         return;
     }
@@ -137,7 +158,8 @@ static void handle_field_key(tui_state_t *state, int key) {
             tui_state_node_move(state, 0);
             tui_state_set_status(state, tui_state_node_count(state) == 0u
                 ? "No nodes match the search" : "Network search applied");
-        } else submit_message(state);
+        } else if (state->field == TUI_FIELD_REACTION) submit_reaction(state);
+        else submit_message(state);
         return;
     }
     if (editor_command(key, &command)) (void)tui_editor_apply(editor, command);
@@ -342,6 +364,14 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'd': case 'D':
             if (state->screen == TUI_SCREEN_CONVERSATIONS)
                 tui_state_toggle_delivery_method(state);
+            break;
+        case 'e': case 'E':
+            if (conversation_selected(state))
+                (void)tui_state_begin_reply(state);
+            break;
+        case 'z': case 'Z':
+            if (conversation_selected(state))
+                (void)tui_state_begin_reaction(state);
             break;
         case 'i':
             if (conversation_selected(state))

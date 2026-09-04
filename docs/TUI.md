@@ -23,6 +23,13 @@ starting an asynchronous attempt is never presented as a failure by itself.
 - `Page Up`/`Page Down`: scroll conversation history.
 - `/`: search addresses, local notes, and message text in the current trust tab.
 - `Enter`: open the composer; in the composer, queue the message locally.
+- `e`: reply to the newest message in the current scrolled viewport. The full
+  message ID and a bounded UTF-8 quote are copied when selected, so later
+  arrivals cannot retarget the reply.
+- `z`: react to the newest message in the current scrolled viewport. Reactions
+  use the standard LXMF reaction field and do not replace the saved composer
+  draft. The short reaction is also mirrored as normal content because stock
+  NomadNet 1.2.0 preserves but does not render reaction fields.
 - `d`: switch the compose delivery mode between direct delivery and an explicit
   propagation-node upload. Direct is the default, and propagated messages never
   silently fall back to direct delivery.
