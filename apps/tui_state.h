@@ -93,7 +93,8 @@ typedef enum {
     TUI_OVERLAY_NONE,
     TUI_OVERLAY_HELP,
     TUI_OVERLAY_PEER,
-    TUI_OVERLAY_NODE_ACTIONS
+    TUI_OVERLAY_NODE_ACTIONS,
+    TUI_OVERLAY_BROWSER_IDENTITY
 } tui_overlay_t;
 
 typedef enum {
@@ -247,6 +248,8 @@ typedef struct tui_state {
 
     rns_browser_t *browser;
     rns_browser_state_t browser_state;
+    bool browser_identified;
+    uint8_t browser_identity_destination[LXMF_DESTINATION_LENGTH];
     rns_micron_page page;
     rns_micron_form form;
     rns_micron_history history;
@@ -360,6 +363,7 @@ bool tui_state_browser_jump_anchor(tui_state_t *state, const char *target,
 bool tui_state_browser_form_apply(tui_state_t *state);
 void tui_state_browser_form_cancel(tui_state_t *state);
 bool tui_state_browse(tui_state_t *state, const char *url, bool push_history);
+bool tui_state_browser_identification(tui_state_t *state, bool enabled);
 /* Resolve against the displayed page, never a failed/pending navigation. */
 bool tui_state_browser_resolve(const tui_state_t *state, const char *target,
                                char *output, size_t capacity);

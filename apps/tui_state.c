@@ -2347,6 +2347,50 @@ static size_t form_control_index_for_span(const tui_state_t *state,
     return SIZE_MAX;
 }
 
+static bool replace_browser_identity(tui_state_t *state, bool enabled,
+                                      const uint8_t *destination) {
+    if (state->runtime == NULL || (enabled && !state->identity.has_private)) {
+        tui_state_set_status(state, "Browser identity requires a running network and local identity");
+        return false;
+    }
+    rns_browser_options_t options = {.request_identity = enabled ? &state->identity : NULL};
+    rns_browser_t *replacement = NULL;
+    rns_status_t status = rns_browser_create(&replacement, state->runtime, &options);
+    if (status != RNS_OK) {
+        tui_state_set_status(state, "Could not change browser identity: %s", rns_status_string(status));
+        return false;
+    }
+    rns_browser_destroy(state->browser);
+    state->browser = replacement;
+    state->browser_state = RNS_BROWSER_IDLE;
+    state->browser_identified = enabled;
+    memset(state->browser_identity_destination, 0, sizeof state->browser_identity_destination);
+    if (enabled) memcpy(state->browser_identity_destination, destination, LXMF_DESTINATION_LENGTH);
+    return true;
+}
+
+bool tui_state_browser_identification(tui_state_t *state, bool enabled) {
+    if (state == NULL || state->screen != TUI_SCREEN_BROWSER) return false;
+    uint8_t destination[LXMF_DESTINATION_LENGTH] = {0};
+    if (enabled) {
+        char hash[TUI_ADDRESS_DIGITS + 1u];
+        if (strlen(state->url) < TUI_ADDRESS_DIGITS + 1u || state->url[TUI_ADDRESS_DIGITS] != ':') {
+            tui_state_set_status(state, "Select a verified remote Nomad page before identifying");
+            return false;
+        }
+        memcpy(hash, state->url, TUI_ADDRESS_DIGITS); hash[TUI_ADDRESS_DIGITS] = '\0';
+        if (!tui_hex_parse(hash, destination, sizeof destination) ||
+            !tui_state_node_serves_pages(rns_node_registry_get(&state->nodes, destination))) {
+            tui_state_set_status(state, "Select a verified remote Nomad page before identifying");
+            return false;
+        }
+    }
+    if (!replace_browser_identity(state, enabled, destination)) return false;
+    /* Retain the displayed page if reload fails. Identity mode still changed. */
+    (void)tui_state_browse(state, state->url, false);
+    return true;
+}
+
 static bool browse_request(tui_state_t *state, const char *url,
                            bool push_history, const uint8_t *form_msgpack,
                            size_t form_msgpack_length) {
@@ -2380,6 +2424,9 @@ static bool browse_request(tui_state_t *state, const char *url,
         tui_state_set_status(state, "No verified identity for this Nomad node");
         return false;
     }
+    if (state->browser_identified &&
+        memcmp(state->browser_identity_destination, destination, sizeof destination) != 0 &&
+        !replace_browser_identity(state, false, NULL)) return false;
     rns_status_t status = rns_browser_open(state->browser, requested, &identity,
                                            form_msgpack,
                                            form_msgpack_length);
