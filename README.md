@@ -60,7 +60,8 @@ ctest --test-dir build -L interop --output-on-failure
 ```
 
 These tests require loopback socket access and may take several minutes each.
-They cover direct and propagated LXMF over UDP/TCP, plus an RRC schema fixture
+They cover direct and propagated LXMF over UDP/TCP, small and resource-backed
+pages served by the pinned NomadNet page handler, plus an RRC schema fixture
 hub using upstream codecs. The RRC test does not certify a stock RRC server.
 Use `ctest --test-dir build -LE interop` for the ordinary suite. Offline builds
 leave `RETICULUM_PYTHON_INTEROP` disabled and require no Python installation.
