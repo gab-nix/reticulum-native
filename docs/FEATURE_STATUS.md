@@ -4,6 +4,7 @@ This is the complete public feature ledger. It tracks implementation state only
 and does not certify complete Reticulum, LXMF or Nomad Network parity.
 
 - `IMPLEMENTED`: available in the current C implementation.
+- `VERIFIED`: a specifically scoped behavior passes bidirectional pinned-upstream tests.
 - `WIP`: partially implemented; important behavior remains.
 - `PLANNED`: not implemented.
 
@@ -78,8 +79,30 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Guide screen | IMPLEMENTED | Expanded contextual help |
 | Event log screen | IMPLEMENTED | Filtering and persistent diagnostics |
 | Channels and RRC | WIP | Complete rooms, moderation and reconnect workflows |
-| Directory and map workflows | PLANNED | Full implementation |
+| Directory screen | PLANNED | Match upstream 1.2.0 placeholder; contact-directory behavior is covered by Network/contact workflows |
+| Map screen | PLANNED | Match upstream 1.2.0 placeholder; a full mapping system is outside this parity baseline |
 | Hosted propagation-node controls | PLANNED | Full implementation |
+| Hosted Node TUI screen | PLANNED | Replace unavailable action with hosting controls and headless acceptance tests |
+| Terminal QR address display | PLANNED | Replace placeholder with actual QR encoding and terminal rendering |
+| RRC persistent room history | PLANNED | Bounded persistence, restart recovery and history UI tests |
+| RRC Resource envelopes | PLANNED | Oversized channel envelope exchange and upstream acceptance |
+
+## Desktop acceptance coverage
+
+The opt-in CTest `interop` label runs existing Python drivers using the exact
+revisions documented in README. Each driver validates its source provenance.
+Successful fixture tests alone do not verify an entire screen or subsystem.
+
+| Acceptance behavior | Status | Evidence and remaining work |
+| --- | --- | --- |
+| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Five opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
+| Direct packet and multi-segment LXMF, UDP/TCP | VERIFIED | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp` pass bidirectionally with pinned Python; loss/restart scenarios remain outside this evidence |
+| Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
+| RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |
+| Stock Nomad page/form/file acceptance | PLANNED | Add bidirectional client/host live drivers |
+| Complete keyboard workflow acceptance | WIP | Existing headless tests cover subsets; every screen/action needs mapped cases |
+| Remote hosted file transfer | PLANNED | Hosted files currently support local reads only; add upstream file metadata/resource exchange |
+| Large browser form requests | PLANNED | Browser currently caps encoded forms at 403 bytes; add resource-backed request acceptance |
 
 ## Tools and portability
 

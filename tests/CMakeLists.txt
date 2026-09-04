@@ -34,6 +34,40 @@ target_link_libraries(rrc_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(rrc_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(rrc_live_driver)
 
+option(RETICULUM_PYTHON_INTEROP "Run opt-in pinned Python interoperability tests" OFF)
+if(RETICULUM_PYTHON_INTEROP)
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    set(RETICULUM_PYTHON_RNS "" CACHE PATH "Pinned Reticulum source checkout")
+    set(RETICULUM_PYTHON_LXMF "" CACHE PATH "Pinned LXMF source checkout")
+    set(RETICULUM_PYTHON_NOMADNET "" CACHE PATH "Pinned NomadNet source checkout")
+    foreach(checkout RNS LXMF NOMADNET)
+        if(NOT IS_DIRECTORY "${RETICULUM_PYTHON_${checkout}}")
+            message(FATAL_ERROR "Set RETICULUM_PYTHON_${checkout} to its pinned source checkout")
+        endif()
+    endforeach()
+    foreach(transport udp tcp)
+        foreach(mode direct propagation)
+            set(test_name interop_lxmf_${mode}_${transport})
+            add_test(NAME ${test_name}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${PROJECT_SOURCE_DIR}/tools/test_lxmf_${mode}_live.py
+                    --reticulum ${RETICULUM_PYTHON_RNS}
+                    --lxmf ${RETICULUM_PYTHON_LXMF}
+                    --driver $<TARGET_FILE:lxmf_${mode}_live_driver>
+                    --transport ${transport})
+            set_tests_properties(${test_name} PROPERTIES
+                LABELS "interop;python;${transport}" TIMEOUT 600 RUN_SERIAL TRUE)
+        endforeach()
+    endforeach()
+    add_test(NAME interop_rrc_python
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_rrc_live.py
+            --reticulum ${RETICULUM_PYTHON_RNS}
+            --nomadnet ${RETICULUM_PYTHON_NOMADNET}
+            --driver $<TARGET_FILE:rrc_live_driver>)
+    set_tests_properties(interop_rrc_python PROPERTIES
+        LABELS "interop;python;rrc" TIMEOUT 600 RUN_SERIAL TRUE)
+endif()
+
 reticulum_add_test(test_buffer test_buffer.c)
 reticulum_add_test(test_hal test_hal.c)
 reticulum_add_test(test_platform_api unit/test_platform_api.c)
