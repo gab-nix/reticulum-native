@@ -49,5 +49,8 @@ int rns_packet_hash(const uint8_t *raw, size_t raw_length, uint8_t out[32]) {
 }
 
 int rns_packet_truncated_hash(const uint8_t *raw, size_t raw_length, uint8_t out[16]) {
-    uint8_t digest[32]; if (!out || !rns_packet_hash(raw, raw_length, digest)) return 0; memcpy(out, digest, 16); return 1;
+    uint8_t digest[32];
+    if (!out || !rns_packet_hash(raw, raw_length, digest)) return 0;
+    memcpy(out, digest, 16);
+    return 1;
 }

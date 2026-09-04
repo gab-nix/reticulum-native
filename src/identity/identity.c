@@ -12,7 +12,8 @@ static int update_hash(rns_identity *identity) {
 }
 
 int rns_identity_generate(rns_identity *identity) {
-    if (!identity) return 0; memset(identity, 0, sizeof(*identity));
+    if (!identity) return 0;
+    memset(identity, 0, sizeof(*identity));
     if (!rns_x25519_generate(identity->encryption_private, identity->encryption_public) ||
         !rns_ed25519_generate(identity->signing_private, identity->signing_public)) {
         memset(identity, 0, sizeof(*identity)); return 0;
@@ -21,7 +22,8 @@ int rns_identity_generate(rns_identity *identity) {
 }
 
 int rns_identity_from_private(rns_identity *identity, const uint8_t private_key[64]) {
-    if (!identity || !private_key) return 0; memset(identity, 0, sizeof(*identity));
+    if (!identity || !private_key) return 0;
+    memset(identity, 0, sizeof(*identity));
     memcpy(identity->encryption_private, private_key, 32); memcpy(identity->signing_private, private_key + 32, 32);
     if (!rns_x25519_public_from_private(identity->encryption_private, identity->encryption_public) ||
         !rns_ed25519_public_from_private(identity->signing_private, identity->signing_public)) {
@@ -31,7 +33,8 @@ int rns_identity_from_private(rns_identity *identity, const uint8_t private_key[
 }
 
 int rns_identity_from_public(rns_identity *identity, const uint8_t public_key[64]) {
-    if (!identity || !public_key) return 0; memset(identity, 0, sizeof(*identity));
+    if (!identity || !public_key) return 0;
+    memset(identity, 0, sizeof(*identity));
     memcpy(identity->encryption_public, public_key, 32); memcpy(identity->signing_public, public_key + 32, 32);
     return update_hash(identity);
 }

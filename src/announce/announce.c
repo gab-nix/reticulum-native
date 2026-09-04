@@ -86,7 +86,8 @@ int rns_announce_verify(const uint8_t destination_hash[16], const uint8_t *body,
     prefix_length = announce.has_ratchet ? 116u : 84u;
     if (announce.app_data_length > SIZE_MAX - 16u - prefix_length) return 0;
     signed_length = 16u + prefix_length + announce.app_data_length;
-    signed_data = malloc(signed_length); if (!signed_data) return 0;
+    signed_data = malloc(signed_length);
+    if (!signed_data) return 0;
     memcpy(signed_data, destination_hash, 16);
     memcpy(signed_data + 16, body, prefix_length);
     if (announce.app_data_length)
