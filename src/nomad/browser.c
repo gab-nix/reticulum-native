@@ -1,6 +1,8 @@
 #include "reticulum/browser.h"
 #include "reticulum/packet.h"
+#include "reticulum/hal.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,8 +20,21 @@ struct rns_browser {
     char path[RNS_BROWSER_PATH_MAX + 1U];
     uint8_t form[RNS_BROWSER_FORM_MAX];
     size_t form_length;
+    double discovery_started;
     rns_micron_page page;
 };
+
+static rns_status_t browser_now(rns_browser_t *browser, double *now) {
+    if (browser->options.clock != NULL) {
+        *now = browser->options.clock(browser->options.clock_context);
+    } else {
+        uint64_t milliseconds;
+        rns_status_t status = rns_hal_monotonic_ms(&milliseconds);
+        if (status != RNS_OK) return status;
+        *now = (double)milliseconds / 1000.0;
+    }
+    return isfinite(*now) && *now >= 0.0 ? RNS_OK : RNS_ERROR_INVALID_STATE;
+}
 
 static int hex_value(char value) {
     if (value >= '0' && value <= '9') return value - '0';
@@ -155,10 +170,15 @@ rns_status_t rns_browser_create(rns_browser_t **output, rns_runtime_t *runtime,
     if (output == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     *output = NULL;
     if (runtime == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (options != NULL && (!isfinite(options->path_timeout_seconds) ||
+                            options->path_timeout_seconds < 0.0))
+        return RNS_ERROR_INVALID_ARGUMENT;
     rns_browser_t *browser = calloc(1U, sizeof *browser);
     if (browser == NULL) return RNS_ERROR_NO_MEMORY;
     browser->runtime = runtime;
     if (options != NULL) browser->options = *options;
+    if (browser->options.path_timeout_seconds == 0.0)
+        browser->options.path_timeout_seconds = 10.0;
     if (browser->options.max_response_size == 0U)
         browser->options.max_response_size = RNS_REQUEST_DEFAULT_MAX_RESPONSE;
     browser->state = RNS_BROWSER_IDLE;
@@ -184,6 +204,9 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
     char path[RNS_BROWSER_PATH_MAX + 1U];
     rns_status_t status = parse_url(url, destination, path);
     if (status != RNS_OK) return status;
+    double now;
+    status = browser_now(browser, &now);
+    if (status != RNS_OK) return status;
     bool reuse = browser->state == RNS_BROWSER_COMPLETE && browser->link != NULL &&
         rns_runtime_link_state(browser->link) == RNS_LINK_ACTIVE &&
         memcmp(browser->destination, destination, sizeof destination) == 0 &&
@@ -204,6 +227,7 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
     browser->form_length = form_msgpack_length;
     browser->error = RNS_OK;
     browser->state = RNS_BROWSER_PATH_DISCOVERY;
+    browser->discovery_started = now;
     if (reuse) {
         link_changed(browser->link, RNS_LINK_ACTIVE, RNS_OK, browser);
         return browser->state == RNS_BROWSER_FAILED ? browser->error : RNS_OK;
@@ -219,6 +243,16 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
 rns_status_t rns_browser_poll(rns_browser_t *browser) {
     if (browser == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     if (browser->state != RNS_BROWSER_PATH_DISCOVERY) return browser->error;
+    double now;
+    rns_status_t clock_status = browser_now(browser, &now);
+    if (clock_status != RNS_OK || now < browser->discovery_started) {
+        browser_fail(browser, RNS_ERROR_INVALID_STATE);
+        return browser->error;
+    }
+    if (now - browser->discovery_started >= browser->options.path_timeout_seconds) {
+        browser_fail(browser, RNS_ERROR_TIMEOUT);
+        return browser->error;
+    }
     rns_path_entry route;
     if (rns_runtime_path_lookup(browser->runtime, browser->destination, &route) != RNS_OK)
         return RNS_OK;
