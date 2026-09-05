@@ -7,6 +7,7 @@
 #include "channel_view.h"
 #include "chat_store.h"
 #include "chat_journal.h"
+#include "chat_view.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -35,6 +36,7 @@ static heltec_channel_view channel;
 static heltec_chat_store *saved_chats;
 static rns_storage_t *chat_storage;
 static rns_status_t chat_status = RNS_ERROR_INVALID_STATE;
+static heltec_chat_view chats_ui;
 static rns_status_t persist_message(void *context, const lxmf_message_t *message,
     lxmf_signature_state_t signature, const uint8_t *packet, size_t packet_length) {
     (void)context; (void)packet; (void)packet_length;
@@ -171,13 +173,14 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
             gpio_get_level(RNS_HELTEC_V3_1_GPIO_PRG) == 0, now) : HELTEC_MENU_NONE;
         if (menu.open != was_open || menu.selected != was_selected || action != HELTEC_MENU_NONE)
             next_display = 0;
-        if (menu.open) { preview_until = 0U; active_view = HELTEC_MENU_NONE; menu.browsing = false; }
+        if (menu.open) { preview_until = 0U; active_view = HELTEC_MENU_NONE; menu.browsing = false; menu.hold_action = false; }
         if (action == HELTEC_MENU_ANNOUNCE) {
             rns_status_t announced = lxmf_packet_node_announce(node, (uint64_t)HELTEC_BUILD_EPOCH + now / 1000U);
             ESP_LOGI(TAG, "PRG announce queue status=%d; airtime/CAD scheduling applies", (int)announced);
         }
         if (action == HELTEC_MENU_MESSAGE || action == HELTEC_MENU_NODES || action == HELTEC_MENU_CHANNEL) {
             active_view = action; menu.browsing = true; next_display = 0;
+            menu.hold_action = action == HELTEC_MENU_MESSAGE;
         }
         if (action == HELTEC_MENU_CLEAR) {
             rns_hal_secure_zero(&live, sizeof(live));
@@ -202,11 +205,17 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
             }
             else if (active_view == HELTEC_MENU_MESSAGE || active_view == HELTEC_MENU_NODES) {
                 char lines[8][22];
-                if (active_view == HELTEC_MENU_MESSAGE) heltec_live_messages(&live, action == HELTEC_MENU_NEXT, lines);
+                if (active_view == HELTEC_MENU_MESSAGE) {
+                    if (heltec_chat_view_poll(&chats_ui, saved_chats, action == HELTEC_MENU_NEXT,
+                        action == HELTEC_MENU_SELECT, lines)) {
+                        menu.open = true; menu.hold_action = false;
+                    }
+                }
                 else heltec_live_nodes(&live, &discovery, now, action == HELTEC_MENU_NEXT, lines);
                 if (active_view == HELTEC_MENU_MESSAGE && chat_status != RNS_OK)
                     (void)snprintf(lines[1], 22, "STORAGE ERROR %d", (int)chat_status);
-                rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
+                if (menu.open) rns_heltec_oled_set_menu(oled, heltec_button_menu_label(&menu));
+                else rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
             }
             else if (now >= preview_until) {
                 heltec_home_snapshot snapshot = {.rx_packets = discovery.packets, .tx_packets = tx_done,

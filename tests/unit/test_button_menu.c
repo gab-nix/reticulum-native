@@ -49,5 +49,12 @@ int main(void) {
     assert(press(&m, 80000, 800) == HELTEC_MENU_CHANNEL);
     m.open = true; m.selected = 5;
     assert(press(&m, 82000, 100) == HELTEC_MENU_NONE && m.selected == 0);
+    m.open=false; m.browsing=true; m.hold_action=true;
+    assert(heltec_button_menu_poll(&m,true,84000)==HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m,true,84050)==HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m,true,84550)==HELTEC_MENU_SELECT);
+    assert(heltec_button_menu_poll(&m,true,85000)==HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m,false,85100)==HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m,false,85150)==HELTEC_MENU_NONE && !m.open);
     return 0;
 }

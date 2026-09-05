@@ -154,7 +154,7 @@ int main(void) {
     assert_large_font_grid(oled.frame);
     assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
     settings.screen = RNS_HELTEC_OLED_SCREEN_STATUS;
-    rns_heltec_oled_set_menu(&oled, "MESSAGES");
+    rns_heltec_oled_set_menu(&oled, "CHATS");
     assert(oled.settings.screen == RNS_HELTEC_OLED_SCREEN_MENU);
     assert(rns_heltec_oled_render(&oled));
     assert(oled.frame[3U*128U+125U] == 0x7fU); /* Selected list row is highlighted. */

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "button_menu.h"
 const char *heltec_button_menu_label(const heltec_button_menu *m) {
-    static const char *items[] = {"HOME", "MESSAGES", "ANNOUNCE", "CLEAR VIEW", "NODES", "CHANNEL"};
+    static const char *items[] = {"HOME", "CHATS", "ANNOUNCE", "CLEAR VIEW", "NODES", "CHANNEL"};
     return m ? items[m->selected % 6U] : "HOME";
 }
 heltec_menu_action heltec_button_menu_poll(heltec_button_menu *m, bool pressed, uint64_t now) {
@@ -13,6 +13,7 @@ heltec_menu_action heltec_button_menu_poll(heltec_button_menu *m, bool pressed, 
         if (!pressed || !m->armed || m->consumed || now < m->pressed_at ||
             now - m->pressed_at < 500U) return HELTEC_MENU_NONE;
         m->consumed = true;
+        if (!m->open && m->hold_action) return HELTEC_MENU_SELECT;
         if (!m->open) { m->open = true; m->selected = 0; return HELTEC_MENU_NONE; }
         goto select_item;
     }
@@ -21,6 +22,7 @@ heltec_menu_action heltec_button_menu_poll(heltec_button_menu *m, bool pressed, 
     if (!m->armed) { m->armed = true; return HELTEC_MENU_NONE; }
     if (m->consumed) return HELTEC_MENU_NONE;
     if (!m->open) {
+        if (m->hold_action && now >= m->pressed_at && now-m->pressed_at >= 500U) return HELTEC_MENU_SELECT;
         if (m->browsing && now >= m->pressed_at && now-m->pressed_at < 500U) return HELTEC_MENU_NEXT;
         m->open = true; m->selected = 0; return HELTEC_MENU_NONE;
     }

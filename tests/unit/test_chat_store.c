@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "chat_store.h"
+#include "chat_view.h"
 #include <assert.h>
 #include <string.h>
 static uint8_t records[8][4096]; static size_t lengths[8]; static bool fail;
@@ -34,6 +35,26 @@ int main(void) {
     heltec_chat_store_close(s); assert(heltec_chat_store_open(storage,&s)==RNS_OK);
     assert(heltec_chat_store_get(s,0)->messages[0].timestamp==42);
     assert(!memcmp(heltec_chat_store_get(s,0)->messages[0].text,"hello",5));
+    heltec_chat_view view={0}; char lines[8][22];
+    assert(!heltec_chat_view_poll(&view,s,false,false,lines));
+    assert(!strcmp(lines[0],"CHATS 1"));
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==1);
+    assert(!strcmp(lines[2],"hello"));
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==2);
+    view.action=3;
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==3 && view.action==0);
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==2);
+    assert(heltec_chat_store_get(s,0)); /* Default confirmation cancels. */
+    uint8_t second[16]={2};
+    assert(heltec_chat_store_add(s,second,&m)==RNS_OK);
+    view.screen=0; memcpy(view.sender,second,16); view.selected=true;
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==1);
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==2);
+    view.action=3;
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==3);
+    assert(!heltec_chat_view_poll(&view,s,true,false,lines) && view.action==1);
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines));
+    assert(!heltec_chat_store_get(s,1) && heltec_chat_store_get(s,0));
     for(unsigned i=2;i<12;++i) { m.id[0]=(uint8_t)i; assert(heltec_chat_store_add(s,sender,&m)==RNS_OK); }
     assert(heltec_chat_store_get(s,0)->count==8);
     assert(heltec_chat_store_delete(s,0)==RNS_OK);

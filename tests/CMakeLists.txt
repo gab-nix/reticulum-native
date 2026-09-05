@@ -23,6 +23,7 @@ target_sources(test_chat_journal PRIVATE ${PROJECT_SOURCE_DIR}/firmware/heltec_w
 target_include_directories(test_chat_journal PRIVATE ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main)
 reticulum_add_test(test_chat_store unit/test_chat_store.c)
 target_sources(test_chat_store PRIVATE ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/chat_store.c)
+target_sources(test_chat_store PRIVATE ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/chat_view.c)
 target_include_directories(test_chat_store PRIVATE ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main)
 reticulum_add_test(test_channel_view unit/test_channel_view.c)
 target_sources(test_channel_view PRIVATE ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/channel_view.c)
