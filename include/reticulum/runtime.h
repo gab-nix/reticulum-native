@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "reticulum/config.h"
+#include "reticulum/interface.h"
 #include "reticulum/identity.h"
 #include "reticulum/link.h"
 #include "reticulum/node.h"
@@ -217,6 +218,8 @@ typedef struct rns_runtime_interface_info {
     uint64_t connections_lost;
     /* Dynamic peer carriers, currently populated by AutoInterface. */
     uint64_t peers;
+    char provider_kind[RNS_CONFIG_NAME_MAX];
+    rns_status_t ingress_error;
 } rns_runtime_interface_info_t;
 
 typedef void (*rns_runtime_packet_callback_t)(rns_runtime_t *runtime,
@@ -251,6 +254,16 @@ rns_status_t rns_runtime_create(rns_runtime_t **runtime,
                                 const rns_config_t *config,
                                 const rns_runtime_options_t *options);
 void rns_runtime_destroy(rns_runtime_t *runtime);
+
+/* Caller-polled, nonconcurrent attachment. Name and kind are copied. On
+ * success runtime owns provider until destruction; on failure caller retains
+ * ownership. A started/already attached provider cannot be attached. Indices
+ * and IDs remain stable; detachment is intentionally unsupported. */
+rns_status_t rns_runtime_attach_interface(rns_runtime_t *runtime,
+    rns_interface_t *provider, const char *name, const char *kind,
+    bool same_interface_rebroadcast, size_t *interface_index);
+rns_status_t rns_runtime_interface_provider_stats(const rns_runtime_t *runtime,
+    size_t interface_index, rns_interface_stats_t *stats);
 
 /* Performs bounded non-blocking work. max_packets == 0 uses a bounded default. */
 rns_status_t rns_runtime_poll(rns_runtime_t *runtime,

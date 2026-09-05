@@ -16,6 +16,7 @@
 #include "reticulum/udp.h"
 
 #include "../interfaces/auto_posix.h"
+#include "../platform/interface_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,8 @@
 
 typedef struct runtime_interface {
     rns_runtime_interface_info_t info;
+    rns_interface_t *provider;
+    bool same_interface_rebroadcast;
     rns_udp_endpoint_t *udp;
     rns_udp_address_t udp_forward;
     bool has_udp_forward;
@@ -149,6 +152,7 @@ struct rns_runtime {
     rns_node node;
     runtime_interface_t interfaces[RNS_CONFIG_MAX_INTERFACES + 1U];
     size_t interface_count;
+    size_t poll_cursor;
     rns_runtime_packet_callback_t packet_callback;
     rns_runtime_announce_callback_t announce_callback;
     void *callback_context;
@@ -171,6 +175,7 @@ typedef struct receive_context {
     size_t interface_index;
     size_t remaining;
     size_t processed;
+    bool provider_budget_exceeded;
 } receive_context_t;
 
 static double runtime_clock(void *context) {
@@ -268,10 +273,19 @@ static rns_status_t send_internal(rns_runtime_t *runtime, size_t index,
     if (runtime == NULL || index >= runtime->interface_count || packet == NULL ||
         length == 0U || length > RNS_MTU) return RNS_ERROR_INVALID_ARGUMENT;
     interface = &runtime->interfaces[index];
+    if (interface->provider != NULL) {
+        rns_interface_stats_t stats;
+        rns_status_t check = rns_interface_get_stats(interface->provider, &stats);
+        if (check != RNS_OK) return check;
+        if (!stats.online || !stats.outbound) return RNS_ERROR_INVALID_STATE;
+        if (length > stats.effective_mtu) return RNS_ERROR_OVERFLOW;
+    }
     if (interface->info.state != RNS_RUNTIME_INTERFACE_UP)
         return interface->info.last_error != RNS_OK ? interface->info.last_error
                                                     : RNS_ERROR_INVALID_STATE;
-    if (interface->udp != NULL && interface->has_udp_forward)
+    if (interface->provider != NULL)
+        status = rns_interface_send(interface->provider, packet, length);
+    else if (interface->udp != NULL && interface->has_udp_forward)
         status = rns_udp_send_to(interface->udp, &interface->udp_forward, packet, length);
     else if (interface->accepted != NULL)
         status = rns_tcp_queue_frame(interface->accepted, packet, length);
@@ -1221,6 +1235,13 @@ static void respond_local_path(rns_runtime_t *runtime, size_t interface_index,
     (void)send_internal(runtime, interface_index, raw, raw_length);
 }
 
+static bool broadcast_enabled(const runtime_interface_t *interface) {
+    rns_interface_stats_t stats;
+    return interface->provider == NULL ||
+        (rns_interface_get_stats(interface->provider, &stats) == RNS_OK &&
+         stats.online && stats.outbound && stats.broadcast);
+}
+
 static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, size_t length) {
     rns_runtime_t *runtime = context->runtime;
     runtime_interface_t *source = &runtime->interfaces[context->interface_index];
@@ -1260,9 +1281,35 @@ static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, s
     } else if ((runtime->config.enable_transport || runtime->shared_server) &&
                result.action == RNS_NODE_REBROADCAST) {
         for (size_t i = 0U; i < runtime->interface_count; ++i)
-            if (i != context->interface_index || source->local_server)
+            if ((i != context->interface_index || source->local_server ||
+                 source->same_interface_rebroadcast) &&
+                broadcast_enabled(&runtime->interfaces[i]))
                 (void)send_internal(runtime, i, output,
                                     result.output_length);
+    }
+    return RNS_OK;
+}
+
+static rns_status_t provider_receive(void *opaque, const uint8_t *packet,
+                                      size_t length) {
+    receive_context_t *context = opaque;
+    runtime_interface_t *source = &context->runtime->interfaces[context->interface_index];
+    if (context->processed >= context->remaining) {
+        source->info.packets_dropped++;
+        source->info.ingress_error = RNS_ERROR_OVERFLOW;
+        context->provider_budget_exceeded = true;
+        return RNS_ERROR_OVERFLOW;
+    }
+    if (packet == NULL || length == 0U || length > RNS_MTU) {
+        source->info.packets_dropped++;
+        source->info.ingress_error = RNS_ERROR_OVERFLOW;
+        if (context->processed < context->remaining) context->processed++;
+        return RNS_OK;
+    }
+    rns_status_t status = ingress(context, packet, length);
+    if (status != RNS_OK) {
+        source->info.packets_dropped++;
+        source->info.ingress_error = status;
     }
     return RNS_OK;
 }
@@ -1573,6 +1620,7 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
         runtime->destinations[i] = NULL;
     }
     for (size_t i = 0U; i < runtime->interface_count; ++i) {
+        rns_interface_destroy(runtime->interfaces[i].provider);
         rns_udp_endpoint_destroy(runtime->interfaces[i].udp);
         rns_tcp_endpoint_destroy(runtime->interfaces[i].accepted);
         rns_tcp_endpoint_destroy(runtime->interfaces[i].tcp);
@@ -1588,6 +1636,47 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
     free(runtime->local_announces);
     rns_node_free(&runtime->node);
     free(runtime);
+}
+
+rns_status_t rns_runtime_attach_interface(rns_runtime_t *runtime,
+    rns_interface_t *provider, const char *name, const char *kind,
+    bool same_interface_rebroadcast, size_t *interface_index) {
+    if (runtime == NULL || provider == NULL || name == NULL || kind == NULL ||
+        interface_index == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    size_t name_length = strnlen(name, RNS_CONFIG_NAME_MAX);
+    size_t kind_length = strnlen(kind, RNS_CONFIG_NAME_MAX);
+    if (name_length == 0U || name_length == RNS_CONFIG_NAME_MAX ||
+        kind_length == 0U || kind_length == RNS_CONFIG_NAME_MAX)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    if (runtime->interface_count >= RNS_CONFIG_MAX_INTERFACES + 1U)
+        return RNS_ERROR_OVERFLOW;
+    rns_status_t status = rns_interface_claim(provider);
+    if (status != RNS_OK) return status;
+    size_t index = runtime->interface_count;
+    runtime_interface_t *entry = &runtime->interfaces[index];
+    memset(entry, 0, sizeof *entry);
+    entry->provider = provider;
+    entry->info.type = RNS_CONFIG_PROVIDER;
+    entry->same_interface_rebroadcast = same_interface_rebroadcast;
+    entry->info.id = index + 1U;
+    memcpy(entry->info.name, name, name_length + 1U);
+    memcpy(entry->info.provider_kind, kind, kind_length + 1U);
+    rns_interface_stats_t stats;
+    rns_status_t stats_status = rns_interface_get_stats(provider, &stats);
+    entry->info.last_error = stats_status;
+    entry->info.state = stats_status != RNS_OK ? RNS_RUNTIME_INTERFACE_DOWN :
+        stats.online ? RNS_RUNTIME_INTERFACE_UP : RNS_RUNTIME_INTERFACE_STARTING;
+    runtime->interface_count++;
+    *interface_index = index;
+    return RNS_OK;
+}
+
+rns_status_t rns_runtime_interface_provider_stats(const rns_runtime_t *runtime,
+    size_t index, rns_interface_stats_t *stats) {
+    if (runtime == NULL || stats == NULL || index >= runtime->interface_count)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    if (runtime->interfaces[index].provider == NULL) return RNS_ERROR_UNSUPPORTED;
+    return rns_interface_get_stats(runtime->interfaces[index].provider, stats);
 }
 
 static rns_status_t poll_tcp(rns_runtime_t *runtime, size_t index, receive_context_t *context) {
@@ -1808,11 +1897,26 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
             }
         }
     }
-    for (size_t i = 0U; i < runtime->interface_count && *processed < max_packets; ++i) {
+    for (size_t offset = 0U; offset < runtime->interface_count; ++offset) {
+        size_t i = (runtime->poll_cursor + offset) % runtime->interface_count;
         runtime_interface_t *interface = &runtime->interfaces[i];
-        receive_context_t context = {runtime, i, max_packets - *processed, 0U};
+        receive_context_t context = {runtime, i, max_packets - *processed, 0U, false};
         rns_status_t status = RNS_OK;
-        if (interface->local != NULL) {
+        if (interface->provider != NULL) {
+            /* A zero RX budget still services provider TX and recovery. */
+            status = rns_interface_poll(interface->provider, provider_receive,
+                &context, context.remaining);
+            if (context.provider_budget_exceeded && status == RNS_ERROR_OVERFLOW)
+                status = RNS_OK;
+            rns_interface_stats_t stats;
+            rns_status_t stats_status = rns_interface_get_stats(interface->provider, &stats);
+            if (status == RNS_OK) status = stats_status;
+            interface->info.state = status != RNS_OK ? RNS_RUNTIME_INTERFACE_DOWN :
+                stats.online ? RNS_RUNTIME_INTERFACE_UP : RNS_RUNTIME_INTERFACE_STARTING;
+            interface->info.last_error = status;
+        } else if (context.remaining == 0U) {
+            continue;
+        } else if (interface->local != NULL) {
             status = poll_local(interface, &context);
         } else if (interface->kiss != NULL) {
             status = poll_kiss(interface, &context);
@@ -1836,6 +1940,8 @@ rns_status_t rns_runtime_poll(rns_runtime_t *runtime, size_t max_packets, size_t
             if (first_error == RNS_OK) first_error = status;
         }
     }
+    if (runtime->interface_count != 0U)
+        runtime->poll_cursor = (runtime->poll_cursor + 1U) % runtime->interface_count;
     return first_error;
 }
 
@@ -2066,6 +2172,7 @@ rns_status_t rns_runtime_announce_with_ratchet(
     rns_status_t result = RNS_ERROR_INVALID_STATE;
     for (size_t i = 0U; i < runtime->interface_count; i++) {
         if (runtime->interfaces[i].info.state != RNS_RUNTIME_INTERFACE_UP) continue;
+        if (!broadcast_enabled(&runtime->interfaces[i])) continue;
         rns_status_t status = send_internal(runtime, i, raw, raw_length);
         if (status == RNS_OK) result = RNS_OK;
         else if (result != RNS_OK) result = status;
@@ -2283,6 +2390,7 @@ rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,
     bool succeeded = false;
     for (size_t i = 0U; i < runtime->interface_count; i++) {
         if (runtime->interfaces[i].info.state != RNS_RUNTIME_INTERFACE_UP) continue;
+        if (!broadcast_enabled(&runtime->interfaces[i])) continue;
         sent_on_live_interface = true;
         rns_status_t status = send_internal(runtime, i, raw, raw_length);
         if (status == RNS_OK) succeeded = true;
