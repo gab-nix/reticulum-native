@@ -132,7 +132,8 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform, NVS and crypto adapters exist; target CI compilation and a boot-time KAT are configured, but the crypto host test still uses an OpenSSL symmetric shim and no target/device result is recorded yet |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
 | Pinned Semtech SX126x command driver dependency | IMPLEMENTED | Exact v2.5.0 sources, license, provenance and checksums are recorded; host command/HAL-boundary test passes, but the Heltec backend and hardware remain unverified |
+| Heltec V3.1 SX1262 low-level radio interface | IMPLEMENTED | Host simulations cover SPI command/read alignment, BUSY timing, modem profiles, calibration, health checks, IRQ/RX/TX state, bounded queues, recovery and statistics; ESP-IDF target CI and physical V3.1 RF validation remain required before `VERIFIED` |
 | Bounded RNode split-packet framing codec | IMPLEMENTED | Local boundary, malformed-fragment, duplicate, reorder, timeout, collision, sequence-reuse and callback-failure tests pass; stock RNode interoperability is not yet verified |
-| Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement the SPI/BUSY/DIO1/DIO2/DIO3 backend, radio owner task, OLED and shell; validate on physical hardware |
+| Heltec V3.1 SX1262, OLED and UART shell firmware | WIP | Integrate the simulated low-level radio with Reticulum framing/runtime, OLED and shell; validate the ESP-IDF build and physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |
