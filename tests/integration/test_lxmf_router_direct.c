@@ -538,7 +538,9 @@ int main(void) {
             saw_partial_progress = true;
         confirmed = stored.status == LXMF_DELIVERY_DELIVERED;
         assert(rns_hal_monotonic_ms(&now) == RNS_OK);
-    } while (!confirmed && now - start < 10000u);
+        /* Instrumented CI can exceed ten seconds for this >1 MiB transfer.
+         * This watchdog bounds the test, not any protocol receipt deadline. */
+    } while (!confirmed && now - start < 60000u);
     if (!confirmed || !bob_inbox.received || !saw_partial_progress)
         fprintf(stderr, "segmented transfer: confirmed=%d received=%d partial=%d progress=%u elapsed_ms=%llu\n",
             confirmed, bob_inbox.received, saw_partial_progress, previous_progress,
