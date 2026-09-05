@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "message_archive.h"
+#include "archive_view.h"
 #include <assert.h>
 #include <string.h>
 static uint8_t records[64][1024]; static size_t sizes[64]; static bool fail;
@@ -30,6 +31,23 @@ int main(void) {
     m.signature=LXMF_SIGNATURE_UNVERIFIED; assert(heltec_message_archive_put(a,&m)==RNS_ERROR_INVALID_STATE);
     m.id[0]=1; m.signature=LXMF_SIGNATURE_FAILED; assert(heltec_message_archive_put(a,&m)==RNS_OK);
     assert(heltec_message_archive_get(a,1)->text_length==0);
+    heltec_archive_view view={0}; char lines[8][22];
+    assert(!heltec_archive_view_poll(&view,a,false,false,lines));
+    assert(!strcmp(lines[1],"INVALID SIGNATURE") && !strcmp(lines[2],"CONTENT HIDDEN"));
+    assert(!heltec_archive_view_poll(&view,a,true,false,lines));
+    assert(!strcmp(lines[1],"UNVERIFIED SENDER") && !strncmp(lines[2],"hello",5));
+    assert(!heltec_archive_view_poll(&view,a,false,true,lines));
+    assert(strstr(lines[2],"CANCEL"));
+    assert(heltec_archive_view_poll(&view,a,false,true,lines));
+    assert(!heltec_archive_view_poll(&view,a,false,true,lines));
+    assert(!heltec_archive_view_poll(&view,a,true,false,lines));
+    fail=true;
+    assert(!heltec_archive_view_poll(&view,a,false,true,lines));
+    assert(!view.deleted && heltec_message_archive_get(a,2)); fail=false;
+    assert(!heltec_archive_view_poll(&view,a,false,true,lines));
+    assert(!heltec_archive_view_poll(&view,a,true,false,lines));
+    assert(!heltec_archive_view_poll(&view,a,false,true,lines));
+    assert(view.deleted && !heltec_message_archive_get(a,2));
     heltec_message_archive_close(a); assert(heltec_message_archive_open(storage,&a)==RNS_OK);
     assert(heltec_message_archive_get(a,0)->signature==LXMF_SIGNATURE_VERIFIED);
     assert(!memcmp(heltec_message_archive_get(a,0)->packet,"raw",3));
@@ -45,6 +63,17 @@ int main(void) {
     records[5][6]=3; records[5][22]=9;
     assert(heltec_message_archive_open(storage,&a)==RNS_ERROR_PROTOCOL && !a);
     memset(sizes,0,sizeof(sizes));
+    assert(heltec_message_archive_open(storage,&a)==RNS_OK);
+    m.source[0]=1;
+    for(unsigned i=0;i<4;++i) {
+        m.id[0]=(uint8_t)i; m.signature=LXMF_SIGNATURE_UNVERIFIED;
+        assert(heltec_message_archive_put(a,&m)==RNS_OK);
+        m.signature=LXMF_SIGNATURE_FAILED;
+        assert(heltec_message_archive_put(a,&m)==RNS_OK);
+    }
+    m.id[0]=7; m.signature=LXMF_SIGNATURE_UNVERIFIED;
+    assert(heltec_message_archive_put(a,&m)==RNS_ERROR_OVERFLOW);
+    heltec_message_archive_close(a); memset(sizes,0,sizeof(sizes));
     assert(heltec_message_archive_open(storage,&a)==RNS_OK);
     m.signature=LXMF_SIGNATURE_VERIFIED;
     m.text_length=384; m.packet_length=500;

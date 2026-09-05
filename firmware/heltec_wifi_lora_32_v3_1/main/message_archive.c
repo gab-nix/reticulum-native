@@ -44,14 +44,14 @@ static bool within_limits(const heltec_message_archive *s) {
             if(!p->used || memcmp(e->source,p->source,16)) continue;
             ++count;
             if(j<i) first=false;
-            if(p->signature==LXMF_SIGNATURE_UNVERIFIED) {
+            if(p->signature!=LXMF_SIGNATURE_VERIFIED) {
                 ++unknown;
                 if(j<i) first_unknown=false;
             }
         }
         if(count>8 || unknown>4) return false;
         if(first) ++senders;
-        if(e->signature==LXMF_SIGNATURE_UNVERIFIED && first_unknown) ++unknown_senders;
+        if(e->signature!=LXMF_SIGNATURE_VERIFIED && first_unknown) ++unknown_senders;
     }
     return senders<=8 && unknown_senders<=2;
 }
@@ -100,14 +100,15 @@ rns_status_t heltec_message_archive_put(heltec_message_archive *s,const heltec_a
         if(same_sender) { ++same; sender_known=true; }
         bool first=true, first_unknown=true;
         for(size_t j=0;j<i;++j) if(s->entries[j].used && !memcmp(s->entries[j].source,e->source,16)) {
-            first=false; if(s->entries[j].signature==LXMF_SIGNATURE_UNVERIFIED) first_unknown=false;
+            first=false; if(s->entries[j].signature!=LXMF_SIGNATURE_VERIFIED) first_unknown=false;
         }
         if(first) ++senders;
-        if(e->signature==LXMF_SIGNATURE_UNVERIFIED) {
+        if(e->signature!=LXMF_SIGNATURE_VERIFIED) {
             if(first_unknown) ++unknown_senders;
             if(same_sender) { ++unknown_same; unknown_sender_known=true; }
         }
     }
+    if(!replacement && m->signature==LXMF_SIGNATURE_FAILED) return RNS_ERROR_INVALID_ARGUMENT;
     if(!replacement && (slot==64 || same>=8 || (!sender_known && senders>=8))) return RNS_ERROR_OVERFLOW;
     if(!replacement && m->signature==LXMF_SIGNATURE_UNVERIFIED &&
         (unknown_same>=4 || (!unknown_sender_known && unknown_senders>=2))) return RNS_ERROR_OVERFLOW;

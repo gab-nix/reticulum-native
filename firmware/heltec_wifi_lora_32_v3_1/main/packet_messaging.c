@@ -8,6 +8,7 @@
 #include "chat_store.h"
 #include "chat_journal.h"
 #include "chat_view.h"
+#include "archive_view.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -37,21 +38,84 @@ static heltec_chat_store *saved_chats;
 static rns_storage_t *chat_storage;
 static rns_status_t chat_status = RNS_ERROR_INVALID_STATE;
 static heltec_chat_view chats_ui;
+static heltec_message_archive *archive;
+static heltec_archive_view archive_ui;
+/* Shared scratch belongs to the single polling task, never an ISR. */
+static heltec_archived_message archive_item;
+static size_t archive_cursor = 64;
+static uint64_t archive_generation, archive_next;
+static bool archive_rescan;
+static bool archive_has_id(const uint8_t id[32]) {
+    for(size_t i=0;i<64;++i) {
+        const heltec_archived_message *m=heltec_message_archive_get(archive,i);
+        if(m && !memcmp(m->id,id,32)) return true;
+    }
+    return false;
+}
+static bool admission_available(const lxmf_message_t *message) {
+    uint8_t senders[8][16]; size_t count=0, same=0;
+    bool known=false;
+    for(size_t i=0;i<8;++i) {
+        const heltec_chat *c=heltec_chat_store_get(saved_chats,i);
+        if(!c) continue;
+        memcpy(senders[count++],c->sender,16);
+        if(!memcmp(c->sender,message->source,16)) { known=true; same=c->count; }
+        for(size_t j=0;j<c->count;++j)
+            if(!memcmp(c->messages[j].id,message->message_id,32)) return true;
+    }
+    for(size_t i=0;i<64;++i) {
+        const heltec_archived_message *m=heltec_message_archive_get(archive,i);
+        if(!m || m->signature==LXMF_SIGNATURE_VERIFIED) continue;
+        if(!memcmp(m->id,message->message_id,32)) return true;
+        bool found=false;
+        for(size_t j=0;j<count;++j) if(!memcmp(senders[j],m->source,16)) found=true;
+        if(!found) { if(count==8) return false; memcpy(senders[count++],m->source,16); }
+        if(!memcmp(m->source,message->source,16)) { known=true; ++same; }
+    }
+    return same<8 && (known || count<8);
+}
 static rns_status_t persist_message(void *context, const lxmf_message_t *message,
     lxmf_signature_state_t signature, const uint8_t *packet, size_t packet_length) {
-    (void)context; (void)packet; (void)packet_length;
-    /* Unknown-sender archival requires the per-message representation store;
-     * never mislabel it as a verified record in the legacy chat schema. */
-    if (signature != LXMF_SIGNATURE_VERIFIED) return RNS_ERROR_UNSUPPORTED;
-    if (!saved_chats) return chat_status;
+    (void)context;
+    if (!saved_chats || !archive) return chat_status;
+    if (signature != LXMF_SIGNATURE_VERIFIED && signature != LXMF_SIGNATURE_UNVERIFIED)
+        return RNS_ERROR_PROTOCOL;
     if (message->content.len > HELTEC_CHAT_TEXT || !isfinite(message->timestamp) ||
         message->timestamp < 0 || message->timestamp >= 18446744073709551616.0)
         return chat_status = RNS_ERROR_OVERFLOW;
+    if(!admission_available(message) || !packet || !packet_length || packet_length>500)
+        return chat_status = RNS_ERROR_OVERFLOW;
+    if(signature==LXMF_SIGNATURE_UNVERIFIED || archive_has_id(message->message_id)) {
+        memset(&archive_item,0,sizeof(archive_item));
+        archive_item.signature=signature; archive_item.received=(uint64_t)message->timestamp;
+        archive_item.text_length=(uint16_t)message->content.len;
+        archive_item.packet_length=(uint16_t)packet_length;
+        memcpy(archive_item.source,message->source,16); memcpy(archive_item.id,message->message_id,32);
+        if(message->content.len) memcpy(archive_item.text,message->content.data,message->content.len);
+        memcpy(archive_item.packet,packet,packet_length);
+        /* Keep an unknown record unknown until the verified chat save succeeds. */
+        if(signature==LXMF_SIGNATURE_UNVERIFIED) {
+            chat_status=heltec_message_archive_put(archive,&archive_item);
+            rns_hal_secure_zero(&archive_item,sizeof(archive_item));
+            return chat_status;
+        }
+    }
     heltec_chat_message item = {.timestamp = (uint64_t)message->timestamp,
         .length = (uint16_t)message->content.len, .state = 0};
     memcpy(item.id, message->message_id, 32);
     if (item.length) memcpy(item.text, message->content.data, item.length);
     chat_status = heltec_chat_store_add(saved_chats, message->source, &item);
+    if(chat_status==RNS_OK && archive_has_id(message->message_id)) {
+        /* The verified legacy record is durable first. Remove its quarantine
+         * copy so later confirmed chat deletion does not leave hidden text. */
+        for(size_t i=0;i<64;++i) {
+            const heltec_archived_message *m=heltec_message_archive_get(archive,i);
+            if(m && !memcmp(m->id,message->message_id,32)) {
+                chat_status=heltec_message_archive_remove(archive,i); break;
+            }
+        }
+    }
+    rns_hal_secure_zero(&archive_item,sizeof(archive_item));
     rns_hal_secure_zero(&item, sizeof(item));
     return chat_status;
 }
@@ -125,6 +189,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
     if (status == RNS_OK) {
         chat_status = heltec_chat_flash_open(&chat_storage);
         if (chat_status == RNS_OK) chat_status = heltec_chat_store_open(chat_storage, &saved_chats);
+        if (chat_status == RNS_OK) chat_status = heltec_message_archive_open(chat_storage, &archive);
         if (chat_status == RNS_OK) {
             for (size_t slot = 0; slot < HELTEC_CHAT_COUNT; ++slot) {
                 const heltec_chat *chat = heltec_chat_store_get(saved_chats, slot);
@@ -141,6 +206,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         ESP_LOGE(TAG, "Packet-mode startup failed: %d; storage not erased", (int)status);
         lxmf_packet_node_destroy(node); node = NULL;
         heltec_chat_store_close(saved_chats); saved_chats = NULL;
+        heltec_message_archive_close(archive); archive = NULL;
         if (chat_storage) { rns_storage_destroy(chat_storage); chat_storage = NULL; }
         if (radio) rns_interface_destroy(radio);
         return;
@@ -163,6 +229,35 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         uint64_t now = clock_ms(NULL);
         if (now >= next_cpu) { sample_cpu(); next_cpu = now+1000U; }
         status = rns_interface_poll(radio, received, NULL, 4U);
+        lxmf_packet_node_stats_t archive_stats;
+        lxmf_packet_node_stats(node,&archive_stats);
+        if(archive_generation!=archive_stats.learned_announces) {
+            archive_generation=archive_stats.learned_announces;
+            if(archive_cursor==64) archive_cursor=0;
+            else archive_rescan=true;
+        }
+        /* At most one archived packet per interval; no unbounded crypto scan. */
+        if(archive && archive_cursor<64 && now>=archive_next) {
+            const heltec_archived_message *m=heltec_message_archive_get(archive,archive_cursor++);
+            archive_next=now+250U;
+            if(m && m->signature==LXMF_SIGNATURE_UNVERIFIED) {
+                lxmf_signature_state_t signature=LXMF_SIGNATURE_UNVERIFIED;
+                if(lxmf_packet_node_check_archive(node,m->packet,m->packet_length,m->source,m->id,&signature)==RNS_OK) {
+                    if(signature==LXMF_SIGNATURE_VERIFIED) {
+                        /* Copy: the acceptance callback can replace this record. */
+                        uint8_t raw[500]; size_t length=m->packet_length;
+                        memcpy(raw,m->packet,length);
+                        (void)lxmf_packet_node_receive(node,raw,length);
+                        rns_hal_secure_zero(raw,sizeof(raw));
+                    } else if(signature==LXMF_SIGNATURE_FAILED) {
+                        archive_item=*m; archive_item.signature=signature;
+                        chat_status=heltec_message_archive_put(archive,&archive_item);
+                        rns_hal_secure_zero(&archive_item,sizeof(archive_item));
+                    }
+                }
+            }
+            if(archive_cursor==64 && archive_rescan) { archive_cursor=0; archive_rescan=false; }
+        }
         rns_interface_stats_t radio_stats = {0};
         (void)rns_interface_get_stats(radio, &radio_stats);
         heltec_channel_sample(&channel, now, &radio_stats);
@@ -178,9 +273,9 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
             rns_status_t announced = lxmf_packet_node_announce(node, (uint64_t)HELTEC_BUILD_EPOCH + now / 1000U);
             ESP_LOGI(TAG, "PRG announce queue status=%d; airtime/CAD scheduling applies", (int)announced);
         }
-        if (action == HELTEC_MENU_MESSAGE || action == HELTEC_MENU_NODES || action == HELTEC_MENU_CHANNEL) {
+        if (action == HELTEC_MENU_MESSAGE || action == HELTEC_MENU_NODES || action == HELTEC_MENU_CHANNEL || action == HELTEC_MENU_UNVERIFIED) {
             active_view = action; menu.browsing = true; next_display = 0;
-            menu.hold_action = action == HELTEC_MENU_MESSAGE;
+            menu.hold_action = action == HELTEC_MENU_MESSAGE || action == HELTEC_MENU_UNVERIFIED;
         }
         if (action == HELTEC_MENU_CLEAR) {
             rns_hal_secure_zero(&live, sizeof(live));
@@ -203,12 +298,21 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 heltec_channel_lines(&channel, &radio_stats, lines);
                 rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
             }
-            else if (active_view == HELTEC_MENU_MESSAGE || active_view == HELTEC_MENU_NODES) {
+            else if (active_view == HELTEC_MENU_MESSAGE || active_view == HELTEC_MENU_NODES || active_view == HELTEC_MENU_UNVERIFIED) {
                 char lines[8][22];
                 if (active_view == HELTEC_MENU_MESSAGE) {
                     if (heltec_chat_view_poll(&chats_ui, saved_chats, action == HELTEC_MENU_NEXT,
                         action == HELTEC_MENU_SELECT, lines)) {
                         menu.open = true; menu.hold_action = false;
+                    }
+                }
+                else if(active_view==HELTEC_MENU_UNVERIFIED) {
+                    if(heltec_archive_view_poll(&archive_ui,archive,action==HELTEC_MENU_NEXT,action==HELTEC_MENU_SELECT,lines)) {
+                        menu.open=true; menu.hold_action=false;
+                    }
+                    if(archive_ui.deleted) {
+                        lxmf_packet_node_forget_pending(node,archive_ui.deleted_id);
+                        archive_ui.deleted=false;
                     }
                 }
                 else heltec_live_nodes(&live, &discovery, now, action == HELTEC_MENU_NEXT, lines);

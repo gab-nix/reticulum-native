@@ -93,19 +93,22 @@ strap. There is no automatic startup announcement. All TX, including message
 proofs, uses CAD and a 1% rolling airtime budget; queue acceptance is not RF completion.
 The airtime history is volatile and must not be bypassed by repeated rebooting.
 
-For the first message test, announce the sender first, then send a short
-**opportunistic** LXMF message to the discovered Heltec. Valid messages receive
-an explicit proof and a 30-second plaintext OLED preview in large 10x14-pixel
-letters. Longer previews cycle through 40-character pages every four seconds;
-unsupported Unicode glyphs display as `?`. The last preview remains available
-from the menu after the automatic display times out, until cleared or rebooted. Packet contents are
-never logged. Up to four unknown-sender packets are held in RAM and remain
-eligible for revalidation for five minutes. A verified announce under any
-service for that identity can supply the missing key; no unverified message is
-shown or proved. Direct links/resources, large messages, persistent inbox,
-durable replay protection, ratchet rotation and stamp enforcement are not
-supported by this basic firmware profile. Physical TX/LXMF verification remains
-pending. The full UART shell and full Reticulum runtime are not yet connected.
+Send a short **opportunistic** LXMF message to the discovered Heltec. The
+development firmware saves verified messages before queuing an explicit proof;
+Chats retains sender-grouped history. Unknown-sender integration is in progress:
+the separate Unverified view labels claimed identities, hides invalid-signature
+content and requires confirmation for deletion. Saved encrypted packets can be
+rechecked after verified announces without acknowledging unknown senders.
+The updated firmware still requires an ESP-IDF build and physical acceptance;
+host tests alone do not establish this behavior on the board.
+
+History is **unencrypted on flash** in this development profile. Deletion is
+logical journal deletion, not guaranteed forensic erasure. Clear View does not
+delete saved chats. Packet contents are never logged. Compact OLED previews
+substitute unsupported Unicode glyphs and label shortened text with an ellipsis.
+Quick replies, transport forwarding, direct links/resources, large messages,
+durable replay protection, ratchet rotation and stamp enforcement remain
+unfinished. The full UART shell and full Reticulum runtime are not yet connected.
 Announce time starts at firmware build time, with a persisted increasing floor
 across restart; this is not a synchronized real-time clock.
 
