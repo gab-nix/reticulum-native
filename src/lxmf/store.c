@@ -19,18 +19,22 @@
  * records without discarding their representable state. TYPE_PUT_V4 widens
  * packed length to 32 bits. TYPE_REPLACE_V4 durably replaces a representation
  * under the same ID; ordinary duplicate puts still retain their first bytes.
- * All prior formats remain readable. */
+ * V5 put/replace and V2 delivery updates append a Unix-seconds identity
+ * discovery deadline. All prior formats remain readable by this reader;
+ * older binaries must not open upgraded journals. */
 #define HEADER_SIZE 16u
 #define PUT_FIXED 77u
 #define PUT2_FIXED 80u
 #define PUT3_FIXED 132u
 #define PUT4_FIXED 134u
+#define PUT5_FIXED 142u
 #define STATUS_SIZE 33u
 #define SIGNATURE_SIZE 33u
 #define REMOVE_SIZE 32u
 #define DELIVERY_SIZE 84u
+#define DELIVERY2_SIZE 92u
 #define MAX_PAYLOAD                                                            \
-  (PUT4_FIXED + LXMF_STORE_MAX_CONTENT + LXMF_STORE_MAX_PACKED)
+  (PUT5_FIXED + LXMF_STORE_MAX_CONTENT + LXMF_STORE_MAX_PACKED)
 #define TYPE_PUT 1u
 #define TYPE_STATUS 2u
 #define TYPE_PUT_V2 3u
@@ -40,6 +44,9 @@
 #define TYPE_DELIVERY 7u
 #define TYPE_PUT_V4 8u
 #define TYPE_REPLACE_V4 9u
+#define TYPE_PUT_V5 10u
+#define TYPE_REPLACE_V5 11u
+#define TYPE_DELIVERY_V2 12u
 
 typedef struct {
   uint8_t id[32];
@@ -99,7 +106,7 @@ static bool valid_method(uint8_t method) {
   return method <= LXMF_DELIVERY_METHOD_PROPAGATED;
 }
 static bool valid_queue_reason(uint8_t reason) {
-  return reason <= LXMF_QUEUE_REASON_RETRY_EXHAUSTED;
+  return reason <= LXMF_QUEUE_REASON_STORAGE;
 }
 static bool valid_delivery(const lxmf_delivery_metadata_t *delivery) {
   return delivery && delivery->desired_method >= LXMF_DELIVERY_METHOD_UNKNOWN &&
@@ -151,10 +158,11 @@ static void encode_delivery(uint8_t *payload,
   put32(payload + 16, delivery->progress);
   if (delivery->has_proof_id)
     memcpy(payload + 20, delivery->proof_id, LXMF_MESSAGE_ID_LENGTH);
+  put64(payload + 52, delivery->identity_deadline);
 }
 
 static bool decode_delivery(const uint8_t *payload,
-                            lxmf_delivery_metadata_t *delivery) {
+                            lxmf_delivery_metadata_t *delivery, bool extended) {
   if (!valid_method(payload[0]) || !valid_method(payload[1]) ||
       !valid_queue_reason(payload[2]) || payload[3] > 1u)
     return false;
@@ -166,6 +174,7 @@ static bool decode_delivery(const uint8_t *payload,
   delivery->attempts = get32(payload + 4);
   delivery->retry_at_ms = get64(payload + 8);
   delivery->progress = get32(payload + 16);
+  if (extended) delivery->identity_deadline = get64(payload + 52);
   if (delivery->has_proof_id)
     memcpy(delivery->proof_id, payload + 20, LXMF_MESSAGE_ID_LENGTH);
   return valid_delivery(delivery);
@@ -178,6 +187,7 @@ static bool same_delivery(const lxmf_delivery_metadata_t *left,
          left->attempts == right->attempts &&
          left->queue_reason == right->queue_reason &&
          left->retry_at_ms == right->retry_at_ms &&
+         left->identity_deadline == right->identity_deadline &&
          left->progress == right->progress &&
          left->has_proof_id == right->has_proof_id &&
          (!left->has_proof_id ||
@@ -186,7 +196,7 @@ static bool same_delivery(const lxmf_delivery_metadata_t *left,
 
 /* Serialises only the small fixed prefix; content and opaque representation
  * are streamed separately, so an 8 MiB message needs no stack-sized copy. */
-static void encode_put(uint8_t payload[PUT4_FIXED],
+static void encode_put(uint8_t payload[PUT5_FIXED],
                        const lxmf_store_message_t *m) {
   memcpy(payload, m->message_id, 32);
   memcpy(payload + 32, m->destination, 16);
@@ -204,9 +214,9 @@ static void encode_put(uint8_t payload[PUT4_FIXED],
 static lxmf_status_t append_put_record(FILE *file,
                                        const lxmf_store_message_t *m,
                                        uint8_t type, uint64_t *offset) {
-  uint8_t fixed[PUT4_FIXED];
+  uint8_t fixed[PUT5_FIXED];
   encode_put(fixed, m);
-  uint32_t n = (uint32_t)(PUT4_FIXED + m->content.len + m->packed.len);
+  uint32_t n = (uint32_t)(PUT5_FIXED + m->content.len + m->packed.len);
   if (fseek(file, 0, SEEK_END) != 0)
     return LXMF_ERR_CRYPTO;
   long pos = ftell(file);
@@ -233,7 +243,7 @@ static lxmf_status_t append_put_record(FILE *file,
 
 static lxmf_status_t append_put(FILE *file, const lxmf_store_message_t *m,
                                 uint64_t *offset) {
-  return append_put_record(file, m, TYPE_PUT_V4, offset);
+  return append_put_record(file, m, TYPE_PUT_V5, offset);
 }
 
 static index_entry *upsert(store_impl *s, const uint8_t *payload,
@@ -275,14 +285,19 @@ static lxmf_status_t scan(store_impl *s) {
       break;
     if (got != sizeof h)
       goto recover;
-    if (memcmp(h, "LXMS", 4) != 0 || h[4] != 1 || h[5] < TYPE_PUT ||
-        h[5] > TYPE_REPLACE_V4)
+    if (memcmp(h, "LXMS", 4) != 0)
       goto recover;
+    /* Unknown versions, record types or flags may carry durable state this
+     * reader cannot interpret. Refuse them without truncating the journal;
+     * they are not evidence of an interrupted write. */
+    if (h[4] != 1 || h[5] < TYPE_PUT || h[5] > TYPE_DELIVERY_V2 ||
+        h[6] != 0u || h[7] != 0u)
+      return LXMF_ERR_FORMAT;
     uint32_t n = get32(h + 8);
     if (n == 0 || n > MAX_PAYLOAD ||
         good + HEADER_SIZE + n > LXMF_STORE_MAX_FILE_SIZE)
       goto recover;
-    uint8_t payload[PUT4_FIXED], chunk[4096];
+    uint8_t payload[PUT5_FIXED], chunk[4096];
     size_t prefix = n < sizeof payload ? n : sizeof payload;
     if (fread(payload, 1, prefix, s->file) != prefix)
       goto recover;
@@ -324,9 +339,12 @@ static lxmf_status_t scan(store_impl *s) {
       e->status = payload[72];
       e->signature = payload[77];
     } else if (h[5] == TYPE_PUT_V3 || h[5] == TYPE_PUT_V4 ||
-               h[5] == TYPE_REPLACE_V4) {
+               h[5] == TYPE_REPLACE_V4 || h[5] == TYPE_PUT_V5 ||
+               h[5] == TYPE_REPLACE_V5) {
       bool wide = h[5] != TYPE_PUT_V3;
-      uint16_t fixed = wide ? PUT4_FIXED : PUT3_FIXED;
+      bool extended = h[5] == TYPE_PUT_V5 || h[5] == TYPE_REPLACE_V5;
+      bool replacement = h[5] == TYPE_REPLACE_V4 || h[5] == TYPE_REPLACE_V5;
+      uint16_t fixed = extended ? PUT5_FIXED : wide ? PUT4_FIXED : PUT3_FIXED;
       if (n < fixed || !valid_status(payload[72]) ||
           !valid_signature(payload[77]))
         goto recover;
@@ -336,14 +354,14 @@ static lxmf_status_t scan(store_impl *s) {
       if (content_len > LXMF_STORE_MAX_CONTENT ||
           packed_len > LXMF_STORE_MAX_PACKED ||
           n != fixed + content_len + packed_len ||
-          !decode_delivery(payload + (wide ? 82 : 80), &delivery))
+          !decode_delivery(payload + (wide ? 82 : 80), &delivery, extended))
         goto recover;
-      if (h[5] == TYPE_REPLACE_V4 && !find(s, payload))
+      if (replacement && !find(s, payload))
         goto recover;
       index_entry *e = upsert(s, payload, good, fixed, content_len, packed_len);
       if (!e)
         return LXMF_ERR_BOUNDS;
-      if (h[5] == TYPE_REPLACE_V4) {
+      if (replacement) {
         e->offset = good;
         e->fixed = fixed;
         e->content_len = content_len;
@@ -371,10 +389,11 @@ static lxmf_status_t scan(store_impl *s) {
       if (e)
         drop_index(s, (size_t)(e - s->index));
     } else {
-      if (n != DELIVERY_SIZE)
+      bool extended = h[5] == TYPE_DELIVERY_V2;
+      if (n != (extended ? DELIVERY2_SIZE : DELIVERY_SIZE))
         goto recover;
       lxmf_delivery_metadata_t delivery;
-      if (!decode_delivery(payload + 32, &delivery))
+      if (!decode_delivery(payload + 32, &delivery, extended))
         goto recover;
       index_entry *e = find(s, payload);
       if (e)
@@ -532,13 +551,13 @@ lxmf_status_t lxmf_store_put(lxmf_store_t *store, const lxmf_store_message_t *m,
   }
   if (s->count >= LXMF_STORE_MAX_MESSAGES)
     return LXMF_ERR_BOUNDS;
-  uint8_t payload[PUT4_FIXED];
+  uint8_t payload[PUT5_FIXED];
   encode_put(payload, m);
   uint64_t offset;
   lxmf_status_t st = append_put(s->file, m, &offset);
   if (st != LXMF_OK)
     return st;
-  index_entry *e = upsert(s, payload, offset, (uint16_t)PUT4_FIXED,
+  index_entry *e = upsert(s, payload, offset, (uint16_t)PUT5_FIXED,
                           (uint32_t)m->content.len, (uint32_t)m->packed.len);
   if (!e)
     return LXMF_ERR_BOUNDS;
@@ -600,10 +619,10 @@ lxmf_store_update_delivery(lxmf_store_t *store, const uint8_t id[32],
     return LXMF_ERR_FORMAT;
   if (same_delivery(&e->delivery, delivery))
     return LXMF_OK;
-  uint8_t p[DELIVERY_SIZE];
+  uint8_t p[DELIVERY2_SIZE];
   memcpy(p, id, 32);
   encode_delivery(p + 32, delivery);
-  lxmf_status_t st = append_record(s->file, TYPE_DELIVERY, p, sizeof p, NULL);
+  lxmf_status_t st = append_record(s->file, TYPE_DELIVERY_V2, p, sizeof p, NULL);
   if (st == LXMF_OK)
     e->delivery = *delivery;
   return st;
@@ -640,7 +659,7 @@ lxmf_status_t lxmf_store_read(lxmf_store_t *store, const uint8_t id[32],
   lxmf_status_t st = seek_body(s, e, 0);
   if (st != LXMF_OK)
     return st;
-  uint8_t fixed[PUT4_FIXED];
+  uint8_t fixed[PUT5_FIXED];
   if (fread(fixed, 1, e->fixed, s->file) != e->fixed)
     return LXMF_ERR_CRYPTO;
   memset(m, 0, sizeof *m);
@@ -717,18 +736,18 @@ lxmf_status_t lxmf_store_update_packed(lxmf_store_t *store,
   message.packed = (lxmf_slice_t){packed, packed_len};
   store_impl *s = store->implementation;
   uint64_t offset;
-  status = append_put_record(s->file, &message, TYPE_REPLACE_V4, &offset);
+  status = append_put_record(s->file, &message, TYPE_REPLACE_V5, &offset);
   if (status != LXMF_OK)
     return status;
-  uint8_t fixed[PUT4_FIXED];
+  uint8_t fixed[PUT5_FIXED];
   encode_put(fixed, &message);
   index_entry *entry =
-      upsert(s, fixed, offset, PUT4_FIXED, (uint32_t)message.content.len,
+      upsert(s, fixed, offset, PUT5_FIXED, (uint32_t)message.content.len,
              (uint32_t)packed_len);
   if (!entry)
     return LXMF_ERR_BOUNDS;
   entry->offset = offset;
-  entry->fixed = PUT4_FIXED;
+  entry->fixed = PUT5_FIXED;
   entry->content_len = (uint32_t)message.content.len;
   entry->packed_len = (uint32_t)packed_len;
   entry->status = (uint8_t)message.status;

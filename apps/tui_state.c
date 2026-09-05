@@ -709,8 +709,13 @@ void tui_state_apply_router_event(tui_state_t *state,
                                  lxmf_delivery_method_string(event->method),
                                  lxmf_queue_reason_string(event->queue_reason));
     } else if (event->state == LXMF_DELIVERY_SENDING) {
-        tui_state_set_status(state, "Sending via %s",
-                             lxmf_delivery_method_string(event->method));
+        if (event->queue_reason == LXMF_QUEUE_REASON_STORAGE)
+            tui_state_set_status(state,
+                "Upload completed; cannot save state (%s). Waiting for storage recovery",
+                lxmf_status_string(event->result));
+        else
+            tui_state_set_status(state, "Sending via %s",
+                                 lxmf_delivery_method_string(event->method));
     } else if (event->state == LXMF_DELIVERY_SENT) {
         if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED)
             tui_state_set_status(state,
@@ -722,7 +727,10 @@ void tui_state_apply_router_event(tui_state_t *state,
         tui_state_set_status(state, "Delivered via %s",
                              lxmf_delivery_method_string(event->method));
     } else {
-        if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED &&
+        if (event->queue_reason == LXMF_QUEUE_REASON_IDENTITY_TIMEOUT)
+            tui_state_set_status(state,
+                "Recipient identity discovery timed out; message kept. Retry after an announce or path refresh.");
+        else if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED &&
             event->queue_reason == LXMF_QUEUE_REASON_RETRY_EXHAUSTED)
             tui_state_set_status(state,
                 "Propagation upload stopped after bounded retries: %s",
@@ -973,7 +981,8 @@ static bool propagation_sync_equal(
            left->duplicates == right->duplicates &&
            left->rejected == right->rejected &&
            left->retain_on_node == right->retain_on_node &&
-           left->active == right->active;
+           left->active == right->active &&
+           left->waiting_for_upload == right->waiting_for_upload;
 }
 
 void tui_state_apply_propagation_sync(
@@ -982,6 +991,11 @@ void tui_state_apply_propagation_sync(
     if (state == NULL || status == NULL ||
         propagation_sync_equal(&state->propagation_sync, status)) return;
     state->propagation_sync = *status;
+    if (status->active && status->waiting_for_upload) {
+        tui_state_set_status(state,
+            "Propagation sync queued; starts after the current upload (cancel available)");
+        return;
+    }
     if (status->active) {
         tui_state_set_status(state, "Propagation sync: %s (%zu/%zu messages)",
             propagation_sync_phase(status->state), status->received,
@@ -1578,7 +1592,8 @@ static void poll_browser(tui_state_t *state) {
                 tui_state_set_status(state, "Remote Nomad page loaded at %s",
                                      fragment);
         } else {
-            tui_state_set_status(state, "Remote Nomad page loaded");
+            tui_state_set_status(state, rns_browser_loaded_from_cache(state->browser)
+                ? "Nomad page loaded from session cache" : "Remote Nomad page loaded");
         }
     } else if (current == RNS_BROWSER_FAILED) {
         tui_state_set_status(state, "Page load failed: %s",
@@ -2639,8 +2654,10 @@ static bool browse_request(tui_state_t *state, const char *url,
     (void)snprintf(state->url, sizeof state->url, "%s", requested);
     state->link_selected = 0u;
     state->page_scroll = 0u;
-    state->browser_state = rns_browser_state(state->browser);
-    tui_state_set_status(state, "Discovering route to Nomad page");
+    /* Force the polling presentation path even for synchronous cache hits. */
+    state->browser_state = RNS_BROWSER_IDLE;
+    tui_state_set_status(state, rns_browser_loaded_from_cache(state->browser)
+        ? "Loaded cached Nomad page" : "Discovering route to Nomad page");
     return true;
 }
 
