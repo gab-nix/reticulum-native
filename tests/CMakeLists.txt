@@ -15,6 +15,7 @@ function(reticulum_add_test name source)
     reticulum_set_project_warnings(${name})
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
+reticulum_add_test(test_runtime_provider unit/test_runtime_provider.c)
 
 # Explicit opt-in Python interoperability harness; not part of offline CTest.
 add_executable(lxmf_direct_live_driver interop/lxmf_direct_live_driver.c)

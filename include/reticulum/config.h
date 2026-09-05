@@ -27,7 +27,9 @@ typedef enum rns_config_interface_type {
     RNS_CONFIG_UDP,
     RNS_CONFIG_AUTO,
     RNS_CONFIG_KISS,
-    RNS_CONFIG_RNODE
+    RNS_CONFIG_RNODE,
+    /* Runtime-attached provider; not a textual configuration interface type. */
+    RNS_CONFIG_PROVIDER
 } rns_config_interface_type_t;
 
 typedef struct rns_config_interface {

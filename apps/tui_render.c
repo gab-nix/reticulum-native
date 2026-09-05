@@ -469,6 +469,10 @@ static void config_interface_line(const rns_config_interface_t *interface,
                                   char *line, size_t capacity) {
     const char *state = interface->enabled ? "enabled" : "disabled";
     switch (interface->type) {
+        case RNS_CONFIG_PROVIDER:
+            (void)snprintf(line, capacity, "%s  Runtime provider  %s",
+                           interface->name, state);
+            break;
         case RNS_CONFIG_TCP_CLIENT:
             (void)snprintf(line, capacity, "%s  TCP client  %s  %s:%u",
                            interface->name, state, interface->target_host,
@@ -997,9 +1001,11 @@ static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) 
         tui_hex_format(state->settings.propagation_node, LXMF_DESTINATION_LENGTH,
                        propagation);
         uint8_t cost = 0u;
+        rns_node_record selected_node;
         tui_propagation_state_t route =
-            tui_state_propagation_state(state, NULL, &cost);
-        const char *state_text = route == TUI_PROPAGATION_READY ? "upload ready"
+            tui_state_propagation_state(state, &selected_node, &cost);
+        const char *state_text = route == TUI_PROPAGATION_READY
+            ? (selected_node.reachable ? "upload ready" : "cached route; connection unconfirmed")
             : route == TUI_PROPAGATION_STALE ? "stale; waiting for fresh announce"
             : route == TUI_PROPAGATION_DISABLED ? "announce says disabled"
             : route == TUI_PROPAGATION_INVALID_COST ? "invalid advertised cost"
@@ -1558,8 +1564,9 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             tui_hex_format(state->settings.propagation_node,
                            LXMF_DESTINATION_LENGTH, propagation);
             uint8_t cost = 0u;
+            rns_node_record selected_node;
             tui_propagation_state_t route =
-                tui_state_propagation_state(state, NULL, &cost);
+                tui_state_propagation_state(state, &selected_node, &cost);
             const char *state_text = route == TUI_PROPAGATION_STALE
                 ? "stale; waiting for fresh announce"
                 : route == TUI_PROPAGATION_DISABLED
@@ -1569,8 +1576,10 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
                     : "waiting for verified announce";
             if (route == TUI_PROPAGATION_READY)
                 (void)fprintf(output,
-                    "Propagation node: %s (upload and sync ready, cost %u)\n",
-                    propagation, (unsigned)cost);
+                    "Propagation node: %s (%s, cost %u)\n",
+                    propagation, selected_node.reachable
+                        ? "upload and sync ready" : "cached route; connection unconfirmed",
+                    (unsigned)cost);
             else
                 (void)fprintf(output,
                     "Propagation node: %s (%s)\n",

@@ -865,29 +865,15 @@ rns_status_t rns_sx1262_interface_poll(
     if (interface_value->in_poll) {
         return RNS_ERROR_INVALID_STATE;
     }
-    if (budget == 0U) {
-        return RNS_OK;
-    }
     interface_value->in_poll = true;
     now_ms = current_time(interface_value);
-    (void)rns_radio_reassembler_expire(&interface_value->reassembler, now_ms);
-    if ((interface_value->state == SCHEDULER_CAD ||
-         interface_value->state == SCHEDULER_TX_FRAME_1 ||
-         interface_value->state == SCHEDULER_TX_FRAME_2) &&
-        interface_value->operation_deadline_ms != 0U &&
-        now_ms >= interface_value->operation_deadline_ms) {
-        rns_status_t cancel_status = cancel_active_operation(interface_value);
-        finish_front(interface_value, RNS_SX1262_PACKET_DROPPED_PHY,
-                     cancel_status == RNS_OK ? RNS_ERROR_TIMEOUT
-                                             : cancel_status);
-        while (!interface_value->started &&
-               interface_value->queue_count != 0U) {
-            finish_front(interface_value, RNS_SX1262_PACKET_DROPPED_PHY,
-                         cancel_status);
-        }
-        result = cancel_status == RNS_OK ? RNS_ERROR_TIMEOUT : cancel_status;
+    /* Maintenance cannot consume PHY completions or RX. Defer deadline
+     * evaluation until an event budget is available, preserving queued IRQs. */
+    if (budget == 0U) {
+        result = advance_scheduler(interface_value, now_ms);
         goto poll_done;
     }
+    (void)rns_radio_reassembler_expire(&interface_value->reassembler, now_ms);
     while (handled < budget) {
         rns_sx1262_phy_event_t event;
         rns_status_t status;
@@ -925,6 +911,21 @@ rns_status_t rns_sx1262_interface_poll(
         if (!interface_value->started) {
             break;
         }
+    }
+    /* PHY providers prioritize the active operation's terminal result over
+     * RX/stale events, so a bounded poll resolves completion before timeout. */
+    if ((interface_value->state == SCHEDULER_CAD ||
+         interface_value->state == SCHEDULER_TX_FRAME_1 ||
+         interface_value->state == SCHEDULER_TX_FRAME_2) &&
+        interface_value->operation_deadline_ms != 0U &&
+        now_ms >= interface_value->operation_deadline_ms) {
+        rns_status_t cancel_status = cancel_active_operation(interface_value);
+        finish_front(interface_value, RNS_SX1262_PACKET_DROPPED_PHY,
+                     cancel_status == RNS_OK ? RNS_ERROR_TIMEOUT : cancel_status);
+        while (!interface_value->started && interface_value->queue_count != 0U)
+            finish_front(interface_value, RNS_SX1262_PACKET_DROPPED_PHY, cancel_status);
+        result = cancel_status == RNS_OK ? RNS_ERROR_TIMEOUT : cancel_status;
+        goto poll_done;
     }
     if (interface_value->started) {
         rns_status_t status = advance_scheduler(interface_value, now_ms);

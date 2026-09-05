@@ -104,7 +104,8 @@ static void submit_address(tui_state_t *state) {
 static void submit_message(tui_state_t *state) {
     lxmf_status_t status = tui_state_queue_message(state);
     if (status != LXMF_OK) {
-        tui_state_set_status(state, "Could not queue message (%d)", status);
+        tui_state_set_status(state, "Could not queue message: %s (%d); draft kept",
+                             lxmf_status_string(status), status);
         return;
     }
     /* A caller-polled send is normally pending here. Preserve the router's

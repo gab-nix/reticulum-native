@@ -36,6 +36,7 @@ typedef struct fake_phy {
     bool fail_cad;
     bool fail_poll;
     bool fail_cancel;
+    uint32_t active_token;
 } fake_phy_t;
 
 typedef struct result_capture {
@@ -98,6 +99,16 @@ static rns_status_t fake_poll_event(void *context,
     if (phy->event_count == 0U) {
         return RNS_ERROR_NOT_FOUND;
     }
+    for (size_t i=0U; i<phy->event_count; i++) {
+        size_t slot=(phy->event_head+i)%FAKE_EVENT_CAPACITY;
+        if (phy->events[slot].type != RNS_SX1262_PHY_EVENT_RX_FRAME &&
+            phy->events[slot].operation_token == phy->active_token) {
+            rns_sx1262_phy_event_t first=phy->events[phy->event_head];
+            phy->events[phy->event_head]=phy->events[slot];
+            phy->events[slot]=first;
+            break;
+        }
+    }
     *event = phy->events[phy->event_head];
     phy->event_head = (phy->event_head + 1U) % FAKE_EVENT_CAPACITY;
     phy->event_count--;
@@ -110,6 +121,7 @@ static rns_status_t fake_start_cad(
     fake_phy_t *phy = context;
     assert(config->bandwidth_hz == phy->last_config.bandwidth_hz);
     phy->cad_tokens[phy->cad_count++] = token;
+    phy->active_token = token;
     return phy->fail_cad ? RNS_ERROR_IO : RNS_OK;
 }
 
@@ -126,6 +138,7 @@ static rns_status_t fake_transmit(
     memcpy(phy->transmitted[index], frame, frame_length);
     phy->transmitted_lengths[index] = frame_length;
     phy->transmitted_tokens[index] = token;
+    phy->active_token = token;
     return RNS_OK;
 }
 
@@ -336,12 +349,22 @@ static void test_one_and_two_frame_success(void) {
     assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
                                      1U) == RNS_OK);
     assert(phy.tx_count == 1U && phy.transmitted_lengths[0] == 11U);
+    rns_radio_encoded_packet_t queued_rx;
+    assert(rns_radio_frame_encode(packet,10U,9U,&queued_rx)==RNS_OK);
+    push_frame(&phy,queued_rx.frames[0],queued_rx.lengths[0]);
+    push_control(&phy,RNS_SX1262_PHY_EVENT_TX_DONE,0U,RNS_OK);
     push_control(&phy, RNS_SX1262_PHY_EVENT_TX_DONE,
                  phy.transmitted_tokens[0], RNS_OK);
+    clock.now_ms += 60000U; /* Completion already queued before delayed poll. */
+    assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
+                                     0U) == RNS_OK);
+    assert(phy.event_count == 3U && results.count == 0U);
     assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
                                      1U) == RNS_OK);
     assert(results.count == 1U && results.ids[0] == id1 &&
            results.outcomes[0] == RNS_SX1262_PACKET_SENT);
+    assert(rns_sx1262_interface_poll(interface_value,capture_receive,&receive,4U)==RNS_ERROR_PROTOCOL);
+    assert(phy.event_count==0U);
 
     assert(rns_sx1262_interface_send(interface_value, packet, sizeof(packet),
                                      &id2) == RNS_OK);
@@ -567,8 +590,12 @@ static void test_never_fit_and_operation_timeout(void) {
                                      &id) == RNS_OK);
     reach_cad(interface_value, &receive);
     clock.now_ms = 5U;
+    rns_radio_encoded_packet_t inbound;
+    assert(rns_radio_frame_encode(packet,sizeof packet,9U,&inbound)==RNS_OK);
+    for(size_t i=0;i<4U;i++) push_frame(&phy,inbound.frames[0],inbound.lengths[0]);
     assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
                                      1U) == RNS_ERROR_TIMEOUT);
+    assert(receive.count == 1U && phy.event_count == 3U);
     assert(results.count == 1U &&
            results.outcomes[0] == RNS_SX1262_PACKET_DROPPED_PHY &&
            results.statuses[0] == RNS_ERROR_TIMEOUT);
@@ -851,6 +878,9 @@ static void test_rx_stream_does_not_starve_tx(void) {
     }
     assert(rns_sx1262_interface_send(interface_value, packet, sizeof(packet),
                                      &id) == RNS_OK);
+    assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
+                                     0U) == RNS_OK);
+    assert(phy.event_count == 4U && receive.count == 0U);
     assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
                                      1U) == RNS_OK);
     assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,

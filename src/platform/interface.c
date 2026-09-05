@@ -1,4 +1,5 @@
 #include "reticulum/interface.h"
+#include "interface_internal.h"
 
 #include <string.h>
 
@@ -9,6 +10,7 @@ struct rns_interface {
     const rns_platform_ops_t *platform;
     void *context;
     int started;
+    int claimed;
 };
 
 rns_status_t rns_interface_create(const rns_interface_ops_t *ops, void *context,
@@ -51,12 +53,19 @@ rns_status_t rns_interface_start(rns_interface_t *interface_value) {
     return status;
 }
 
+rns_status_t rns_interface_claim(rns_interface_t *interface_value) {
+    if (interface_value == NULL) return RNS_ERROR_INVALID_ARGUMENT;
+    if (interface_value->claimed) return RNS_ERROR_INVALID_STATE;
+    rns_status_t status = rns_interface_start(interface_value);
+    if (status == RNS_OK) interface_value->claimed = 1;
+    return status;
+}
+
 rns_status_t rns_interface_poll(rns_interface_t *interface_value,
                                 rns_interface_receive_fn receive,
                                 void *receive_context, size_t budget) {
     if (interface_value == NULL || receive == NULL) return RNS_ERROR_INVALID_ARGUMENT;
     if (interface_value->started == 0) return RNS_ERROR_INVALID_STATE;
-    if (budget == 0U) return RNS_OK;
     return interface_value->ops->poll(interface_value->context, receive,
                                       receive_context, budget);
 }
