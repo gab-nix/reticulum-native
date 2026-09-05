@@ -36,8 +36,10 @@ typedef rns_status_t (*rns_interface_receive_fn)(void *context,
  * must not race poll, send, or callbacks on the same handle. */
 typedef struct rns_interface_ops {
     rns_status_t (*start)(void *context);
-    /* budget bounds receive callbacks. Zero performs maintenance/TX/recovery
-     * only and must preserve queued RX without invoking receive. */
+    /* budget bounds receive callbacks. Stop invoking receive if it returns
+     * an error and propagate that status. Zero performs maintenance only and
+     * must preserve queued RX without invoking receive; event processing and
+     * recovery requiring RX delivery resume with a positive budget. */
     rns_status_t (*poll)(void *context, rns_interface_receive_fn receive,
                          void *receive_context, size_t budget);
     rns_status_t (*send)(void *context, const uint8_t *packet, size_t length);

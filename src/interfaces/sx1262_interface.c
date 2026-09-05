@@ -912,10 +912,9 @@ rns_status_t rns_sx1262_interface_poll(
             break;
         }
     }
-    /* An exhausted event budget cannot prove a completion is absent. Give
-     * pending authoritative PHY results priority over software deadlines. */
-    if (handled < budget &&
-        (interface_value->state == SCHEDULER_CAD ||
+    /* PHY providers prioritize the active operation's terminal result over
+     * RX/stale events, so a bounded poll resolves completion before timeout. */
+    if ((interface_value->state == SCHEDULER_CAD ||
          interface_value->state == SCHEDULER_TX_FRAME_1 ||
          interface_value->state == SCHEDULER_TX_FRAME_2) &&
         interface_value->operation_deadline_ms != 0U &&

@@ -43,6 +43,9 @@ struct rns_sx1262_scheduler_config;
  * The PHY and clock contexts are borrowed until destroy. poll_event returns
  * RNS_ERROR_NOT_FOUND when no event is ready. Event frame storage is borrowed
  * only for that call. All methods are invoked by one caller-owned poll thread.
+ * A ready completion for the active operation (CAD clear/busy/failure or TX
+ * done/failure) must precede RX and stale notifications. This lets bounded
+ * polling resolve authoritative completion before evaluating its deadline.
  * CAD_FAILED, TX_DONE and TX_FAILED are terminal and must leave the PHY ready
  * for a later operation. The scheduler calls cancel_operation for its own
  * deadline or a poll failure before releasing any borrowed frame storage.
