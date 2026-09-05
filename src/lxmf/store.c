@@ -106,7 +106,7 @@ static bool valid_method(uint8_t method) {
   return method <= LXMF_DELIVERY_METHOD_PROPAGATED;
 }
 static bool valid_queue_reason(uint8_t reason) {
-  return reason <= LXMF_QUEUE_REASON_IDENTITY_TIMEOUT;
+  return reason <= LXMF_QUEUE_REASON_STORAGE;
 }
 static bool valid_delivery(const lxmf_delivery_metadata_t *delivery) {
   return delivery && delivery->desired_method >= LXMF_DELIVERY_METHOD_UNKNOWN &&

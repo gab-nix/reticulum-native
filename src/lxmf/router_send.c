@@ -459,6 +459,8 @@ static void propagation_fail(lxmf_router_t *router, lxmf_status_t result) {
 static void propagation_poll(lxmf_router_t *router) {
     lxmf_router_propagation_slot_t *slot = &router->propagation;
     if (!slot->used) return;
+    if (slot->storage_retry_at_ms != 0u &&
+        router_monotonic_ms(router) < slot->storage_retry_at_ms) return;
     lxmf_delivery_metadata_t metadata;
     if (lxmf_store_read_delivery(router->config.store, slot->message_id,
                                  &metadata) != LXMF_OK) {
@@ -521,10 +523,26 @@ static void propagation_poll(lxmf_router_t *router) {
         metadata.retry_at_ms = 0u;
         metadata.progress = LXMF_DELIVERY_PROGRESS_COMPLETE;
         metadata.attempts = slot->attempt;
-        (void)lxmf_store_update_delivery(router->config.store,
-                                         slot->message_id, &metadata);
-        (void)lxmf_store_update_status(router->config.store, slot->message_id,
-                                       LXMF_DELIVERY_SENT);
+        lxmf_status_t saved = lxmf_store_update_delivery(router->config.store,
+            slot->message_id, &metadata);
+        if (saved == LXMF_OK)
+            saved = lxmf_store_update_status(router->config.store,
+                slot->message_id, LXMF_DELIVERY_SENT);
+        if (saved != LXMF_OK) {
+            /* Keep the completed session: retry only persistence, not RF or
+             * network upload. No durable-success callback until both writes
+             * succeed. Restart uses the existing interrupted-send recovery. */
+            uint64_t now = router_monotonic_ms(router);
+            slot->storage_retry_at_ms = now > UINT64_MAX - 1000u
+                ? UINT64_MAX : now + 1000u;
+            if (slot->storage_error != saved) {
+                slot->storage_error = saved;
+                report_event(router, slot->message_id,
+                    LXMF_DELIVERY_METHOD_PROPAGATED, LXMF_DELIVERY_SENDING,
+                    LXMF_QUEUE_REASON_STORAGE, saved, slot->attempt);
+            }
+            return;
+        }
         report(router, slot->message_id, LXMF_DELIVERY_SENT, LXMF_OK);
         report_event(router, slot->message_id,
             LXMF_DELIVERY_METHOD_PROPAGATED, LXMF_DELIVERY_SENT,
@@ -712,6 +730,7 @@ const char *lxmf_queue_reason_string(lxmf_queue_reason_t reason) {
         case LXMF_QUEUE_REASON_RETRY_EXHAUSTED: return "retry exhausted";
         case LXMF_QUEUE_REASON_CANCELLED: return "cancelled";
         case LXMF_QUEUE_REASON_IDENTITY_TIMEOUT: return "peer identity discovery timed out; retry explicitly";
+        case LXMF_QUEUE_REASON_STORAGE: return "message storage recovery";
         default: return "invalid";
     }
 }

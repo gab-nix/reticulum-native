@@ -709,8 +709,13 @@ void tui_state_apply_router_event(tui_state_t *state,
                                  lxmf_delivery_method_string(event->method),
                                  lxmf_queue_reason_string(event->queue_reason));
     } else if (event->state == LXMF_DELIVERY_SENDING) {
-        tui_state_set_status(state, "Sending via %s",
-                             lxmf_delivery_method_string(event->method));
+        if (event->queue_reason == LXMF_QUEUE_REASON_STORAGE)
+            tui_state_set_status(state,
+                "Upload completed; cannot save state (%s). Waiting for storage recovery",
+                lxmf_status_string(event->result));
+        else
+            tui_state_set_status(state, "Sending via %s",
+                                 lxmf_delivery_method_string(event->method));
     } else if (event->state == LXMF_DELIVERY_SENT) {
         if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED)
             tui_state_set_status(state,

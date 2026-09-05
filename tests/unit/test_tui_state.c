@@ -685,6 +685,13 @@ static void test_router_events_update_visible_state(void) {
     event.message_id[0] = 0x42u;
     tui_state_apply_router_event(state, &event);
     assert(strstr(state->status, "recipient identity") != NULL);
+    event.state = LXMF_DELIVERY_SENDING;
+    event.queue_reason = LXMF_QUEUE_REASON_STORAGE;
+    event.result = LXMF_ERR_BOUNDS;
+    tui_state_apply_router_event(state, &event);
+    assert(strstr(state->status, "cannot save state") != NULL);
+    assert(state->messages[0].value.status == LXMF_DELIVERY_SENDING);
+    event.result = LXMF_OK;
     event.method = LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
     event.state = LXMF_DELIVERY_SENT;
     event.queue_reason = LXMF_QUEUE_REASON_NONE;

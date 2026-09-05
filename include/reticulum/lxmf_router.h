@@ -227,6 +227,8 @@ typedef struct {
     lxmf_stamp_job_t *stamp_job;
     lxmf_pn_session_t *session;
     uint32_t attempt;
+    uint64_t storage_retry_at_ms;
+    lxmf_status_t storage_error;
 } lxmf_router_propagation_slot_t;
 
 /* COMPLETE describes the finished network transaction. If result is non-OK
