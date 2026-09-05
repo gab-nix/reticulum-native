@@ -275,6 +275,10 @@ static void test_corruption_warning_survives_startup(void) {
     remove_sidecar(store_path, ".paths");
 }
 
+static void delivery_event(void *context, const lxmf_router_event_t *event) {
+    tui_state_apply_router_event(context, event);
+}
+
 static void test_submit_preserves_pending_status(void) {
     char identity_path[] = "/tmp/nomad-submit-identity-XXXXXX";
     char store_path[] = "/tmp/nomad-submit-store-XXXXXX";
@@ -305,14 +309,22 @@ static void test_submit_preserves_pending_status(void) {
     assert(peer.draft_len == 0u);
 
     /* Exercise the pending identity/path branch without opening sockets. */
+    rns_config_t config; rns_config_init(&config);
+    assert(rns_runtime_create(&state->runtime, &config, NULL) == RNS_OK);
+    lxmf_router_config_t router_config = {.identity = &state->identity,
+        .store = &state->store, .runtime = state->runtime,
+        .resolve_identity = tui_state_resolve_peer, .resolve_context = state,
+        .event_callback = delivery_event, .event_context = state};
+    assert(lxmf_router_init(&state->router, &router_config) == LXMF_OK);
     state->router_ready = true;
     state->field = TUI_FIELD_COMPOSE;
     assert(tui_editor_insert_byte(&state->composer, 'b'));
     assert(tui_dispatch_key(state, '\n'));
-    assert(strstr(state->status, "requesting a verified path") != NULL);
+    assert(strstr(state->status, "waiting for peer identity") != NULL);
     assert(strstr(state->status, "failed") == NULL);
     assert(state->message_count == 2u);
     assert(tui_editor_empty(&state->composer));
+    lxmf_router_destroy(&state->router);
     state->router_ready = false;
     assert(tui_dispatch_key(state, '\n'));
     assert(state->field == TUI_FIELD_COMPOSE);

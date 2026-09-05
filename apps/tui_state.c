@@ -675,6 +675,13 @@ void tui_state_apply_router_event(tui_state_t *state,
         state->filter_dirty = true;
     }
     if (event->state == LXMF_DELIVERY_QUEUED) {
+        /* Background discovery for an old conversation is not the result of
+         * the user's current Network/Browser/Settings action. */
+        if (state->screen != TUI_SCREEN_CONVERSATIONS) return;
+        const tui_contact_t *selected = tui_state_selected_contact(state);
+        if (message != NULL && selected != NULL &&
+            memcmp(selected->peer, message_peer(state, &message->value),
+                   LXMF_DESTINATION_LENGTH) != 0) return;
         lxmf_stamp_job_progress_t progress;
         if (event->queue_reason == LXMF_QUEUE_REASON_STAMP &&
             state->router_ready &&
@@ -787,7 +794,7 @@ static void on_announce(rns_runtime_t *runtime, const rns_node_result *announce,
                                      announce->destination_hash, &verified);
 }
 
-static const rns_identity *resolve_peer(void *context,
+const rns_identity *tui_state_resolve_peer(void *context,
                                         const uint8_t destination[LXMF_DESTINATION_LENGTH]) {
     tui_state_t *state = context;
     for (size_t i = 0u; i < state->nodes.count; ++i) {
@@ -797,6 +804,16 @@ static const rns_identity *resolve_peer(void *context,
             rns_identity_from_public(&state->resolved_identity, node->public_key))
             return &state->resolved_identity;
     }
+    rns_path_entry path;
+    static const char *const aspects[] = {"delivery"};
+    uint8_t expected[LXMF_DESTINATION_LENGTH];
+    if (state->runtime != NULL &&
+        rns_runtime_path_lookup(state->runtime, destination, &path) == RNS_OK &&
+        path.has_identity &&
+        rns_identity_from_public(&state->resolved_identity, path.identity_public_key) &&
+        rns_destination_hash(&state->resolved_identity, "lxmf", aspects, 1u, expected) &&
+        memcmp(expected, destination, sizeof expected) == 0)
+        return &state->resolved_identity;
     return NULL;
 }
 
@@ -1191,7 +1208,7 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
             .is_source_blocked = source_blocked,
             .source_policy_context = state,
             .runtime = state->runtime,
-            .resolve_identity = resolve_peer,
+            .resolve_identity = tui_state_resolve_peer,
             .resolve_context = state,
             .resolve_ratchet = resolve_peer_ratchet,
             .ratchet_context = state,
@@ -1777,10 +1794,6 @@ static lxmf_status_t queue_outbound(tui_state_t *state, lxmf_slice_t content,
             state->send_attempted = true;
             (void)lxmf_router_send_message(&state->router,
                                            decoded.message_id);
-        } else if (resolve_peer(state, stored.destination) == NULL) {
-            state->send_attempted =
-                rns_runtime_request_path(state->runtime, stored.destination) == RNS_OK;
-            tui_state_set_status(state, "Queued; requesting a verified path to recipient");
         } else {
             state->send_attempted = true;
             state->send_ok = lxmf_router_send_message(&state->router,

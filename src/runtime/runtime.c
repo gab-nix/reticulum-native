@@ -2182,7 +2182,7 @@ rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,
     rns_packet request = {0};
     memcpy(request.destination_hash, runtime->node.path_request_destination,
            sizeof request.destination_hash);
-    request.transport_type = 1U;
+    request.transport_type = 0U;
     request.destination_type = 2U;
     request.packet_type = 0U;
     request.context = RNS_NODE_PATH_REQUEST_CONTEXT;
@@ -2192,14 +2192,15 @@ rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,
         return RNS_ERROR_INVALID_STATE;
     rns_status_t last_error = RNS_ERROR_INVALID_STATE;
     bool sent_on_live_interface = false;
+    bool succeeded = false;
     for (size_t i = 0U; i < runtime->interface_count; i++) {
         if (runtime->interfaces[i].info.state != RNS_RUNTIME_INTERFACE_UP) continue;
         sent_on_live_interface = true;
         rns_status_t status = send_internal(runtime, i, raw, raw_length);
-        if (status == RNS_OK) return RNS_OK;
+        if (status == RNS_OK) succeeded = true;
         last_error = status;
     }
-    return sent_on_live_interface ? last_error : RNS_ERROR_INVALID_STATE;
+    return succeeded ? RNS_OK : sent_on_live_interface ? last_error : RNS_ERROR_INVALID_STATE;
 }
 
 rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime, const uint8_t hash[16],

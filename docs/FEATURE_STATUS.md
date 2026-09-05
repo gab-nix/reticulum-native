@@ -50,6 +50,8 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior; integration test IDs are distinct from random wire hashes |
 | Direct resource delivery | IMPLEMENTED | Persistent transfer resume |
 | Delivery proofs and durable queue state | IMPLEMENTED | Complete offline retry scheduling |
+| Missing-peer discovery retries and queue fairness | IMPLEMENTED | `test_lxmf_identity_discovery` checks 15-second retry throttling, immediate identity-arrival recovery and broadcast fanout over two UDP interfaces; `test_lxmf_router_recovery` checks round-robin polling, failed-message recovery and restart clock rebasing without transmission-attempt inflation. `test_tui_state` checks background queue events do not overwrite Network actions. Finite discovery deadlines and local C path-response handling remain WIP |
+| Identity resolution after Network entry expiry | IMPLEMENTED | `test_tui_state` retains a cryptographically learned runtime identity after registry eviction, validates its LXMF destination hash, and rejects unknown destinations; durable identity recovery after restart remains WIP |
 | Incoming block, size and stamp policies | IMPLEMENTED | Complete policy controls |
 | Ratchet history | WIP | Rotation and enforcement parity |
 | Stamps and asynchronous stamp generation | WIP | Complete cancellation and peer-policy behavior |
