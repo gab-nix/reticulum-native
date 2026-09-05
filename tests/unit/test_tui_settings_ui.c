@@ -2,6 +2,9 @@
 #include "tui_render.h"
 #include "tui_state.h"
 #include "reticulum/udp.h"
+#include "reticulum/destination.h"
+#include "reticulum/hal.h"
+#include "reticulum/lxmf_propagation.h"
 
 #include <assert.h>
 #include <fcntl.h>
@@ -308,6 +311,13 @@ static void test_submit_preserves_pending_status(void) {
     assert(state->compose_delivery_method == LXMF_DELIVERY_METHOD_PROPAGATED);
     state->field = TUI_FIELD_COMPOSE;
     assert(tui_editor_insert_byte(&state->composer, 'a'));
+    state->last_compose_timestamp_ms = UINT64_MAX;
+    assert(tui_dispatch_key(state, '\n'));
+    assert(strstr(state->status, "buffer bounds") != NULL);
+    assert(strstr(state->status, "draft kept") != NULL);
+    assert(strcmp(tui_editor_text(&state->composer), "a") == 0);
+    assert(state->message_count == 0u);
+    state->last_compose_timestamp_ms = 0u;
     assert(tui_dispatch_key(state, '\n'));
     assert(strstr(state->status, "Queued locally") != NULL);
     assert(strstr(state->status, "failed") == NULL);
@@ -573,6 +583,65 @@ static void test_host_startup_and_announces(void) {
     assert(rmdir(root) == 0);
 }
 
+static void test_propagation_restart_without_reannounce(void) {
+    char root[] = "/tmp/nomad-pn-restart-XXXXXX";
+    assert(mkdtemp(root) != NULL);
+    char identity[512], store[512], config_path[512];
+    (void)snprintf(identity, sizeof identity, "%s/identity", root);
+    (void)snprintf(store, sizeof store, "%s/messages", root);
+    (void)snprintf(config_path, sizeof config_path, "%s/network", root);
+    FILE *file = fopen(identity, "wb");
+    assert(file != NULL && fclose(file) == 0);
+    write_identity(identity);
+    rns_udp_endpoint_t *reservation = NULL; rns_udp_address_t address;
+    assert(rns_udp_endpoint_create(&reservation, RNS_UDP_IPV4) == RNS_OK);
+    assert(rns_udp_bind(reservation, "127.0.0.1", 0u) == RNS_OK);
+    assert(rns_udp_local_address(reservation, &address) == RNS_OK);
+    rns_udp_endpoint_destroy(reservation);
+    file = fopen(config_path, "wb"); assert(file != NULL);
+    assert(fprintf(file, "[reticulum]\nshare_instance = No\n[interfaces]\n[[loopback]]\ntype = UDPInterface\nenabled = True\nlisten_ip = 127.0.0.1\nlisten_port = %u\nforward_ip = 127.0.0.1\nforward_port = %u\n",
+        (unsigned)address.port, (unsigned)address.port) > 0 && fclose(file) == 0);
+    tui_state_t *state = calloc(1u, sizeof *state); assert(state != NULL);
+    assert(tui_state_open(state, identity, store, NULL, config_path) == 0);
+    rns_identity peer; assert(rns_identity_generate(&peer));
+    const char *aspects[] = {"propagation"}; uint8_t destination[16];
+    assert(rns_destination_hash(&peer, "lxmf", aspects, 1u, destination));
+    lxmf_pn_announce_t pn = {.enabled = true, .stamp_cost = 9u};
+    uint8_t data[256]; size_t length;
+    assert(lxmf_pn_announce_encode(&pn, data, sizeof data, &length) == LXMF_OK);
+    assert(rns_runtime_announce(state->runtime, &peer, "lxmf", aspects, 1u, data, length) == RNS_OK);
+    uint64_t start, now; assert(rns_hal_monotonic_ms(&start) == RNS_OK);
+    const rns_node_record *node;
+    do {
+        size_t processed; assert(rns_runtime_poll(state->runtime, 8u, &processed) == RNS_OK);
+        node = rns_node_registry_get(&state->nodes, destination);
+        assert(rns_hal_monotonic_ms(&now) == RNS_OK);
+    } while (node == NULL && now - start < 1000u);
+    assert(node != NULL && tui_state_use_propagation_node(state, node));
+    /* Force old registry monotonic time, as on a different boot. The imported
+     * path, not this timestamp, controls the cached selected-node lifetime. */
+    state->nodes.records[0].expires_at = 1.0;
+    tui_state_close(state); free(state);
+    state = calloc(1u, sizeof *state); assert(state != NULL);
+    assert(tui_state_open(state, identity, store, NULL, config_path) == 0);
+    assert(state->router_ready && state->router.config.propagation_node_identity != NULL);
+    assert(tui_state_propagation_state(state, NULL, NULL) == TUI_PROPAGATION_READY);
+    node = rns_node_registry_get(&state->nodes, destination);
+    assert(node != NULL && !node->reachable);
+    assert(rns_hal_monotonic_ms(&now) == RNS_OK);
+    assert(node->expires_at > (double)now / 1000.0);
+    tui_state_poll(state);
+    assert(tui_state_propagation_state(state, NULL, NULL) == TUI_PROPAGATION_READY);
+    assert(tui_state_propagation_sync_start(state));
+    assert(state->propagation_sync.active);
+    assert(tui_state_propagation_sync_cancel(state));
+    tui_state_close(state); free(state);
+    assert(unlink(identity) == 0 && unlink(store) == 0 && unlink(config_path) == 0);
+    const char *sidecars[] = {".settings", ".peers", ".nodes", ".paths", ".tickets", ".ratchets"};
+    for (size_t i = 0u; i < sizeof sidecars / sizeof sidecars[0]; ++i) remove_sidecar(store, sidecars[i]);
+    assert(rmdir(root) == 0);
+}
+
 static void test_host_narrow_render(void) {
     FILE *input = tmpfile(), *output = tmpfile();
     assert(input != NULL && output != NULL);
@@ -609,6 +678,7 @@ static void test_host_narrow_render(void) {
 }
 
 int main(void) {
+    test_propagation_restart_without_reannounce();
     test_host_startup_and_announces();
     test_host_narrow_render();
     test_host_controls();
