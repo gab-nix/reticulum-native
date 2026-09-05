@@ -283,7 +283,9 @@ static void draw_chrome(const tui_state_t *state, const tui_layout_t *layout) {
         rx += info->bytes_received; tx += info->bytes_sent;
     }
     const char *mode = state->command_active ? "COMMAND"
-        : state->field == TUI_FIELD_NONE ? "NORMAL" : "INSERT";
+        : state->field != TUI_FIELD_NONE ? "INSERT"
+        : state->screen == TUI_SCREEN_CONVERSATIONS
+            ? state->history_focused ? "HISTORY" : "CHATS" : "NORMAL";
     if (layout->columns < 72)
         (void)snprintf(header, sizeof header, " %s | %s | N:%zu U:%zu", mode, link, state->nodes.count, unread);
     else
@@ -548,12 +550,17 @@ static void draw_config(const tui_state_t *state,
 static void draw_sidebar(const tui_state_t *state, const tui_layout_t *layout) {
     char tabline[48];
     (void)attron(A_BOLD);
-    (void)snprintf(tabline, sizeof tabline, "%s (%zu)", trust_name(state->tab),
+    (void)snprintf(tabline, sizeof tabline, "%c %s (%zu)", state->history_focused ? ' ' : '>', trust_name(state->tab),
                    state->visible_count);
     clipped(stdscr, 2, 1, layout->sidebar - 2, tabline);
     (void)attroff(A_BOLD);
-    for (size_t position = 0u;
-         position < state->visible_count && (int)position < layout->content_rows;
+    size_t first = 0u;
+    size_t rows = layout->content_rows > 0 ? (size_t)layout->content_rows : 0u;
+    for (size_t i = 0u; i < state->visible_count; ++i)
+        if (state->visible[i] == state->selected && rows != 0u && i >= rows)
+            first = i - rows + 1u;
+    for (size_t position = first;
+         position < state->visible_count && position - first < rows;
          ++position) {
         size_t index = state->visible[position];
         const tui_contact_t *contact = &state->contacts[index];
@@ -566,7 +573,7 @@ static void draw_sidebar(const tui_state_t *state, const tui_layout_t *layout) {
                        contact->unread ? '!' : ' ',
                        contact->unread ? contact->unread : contact->messages);
         if (selected) (void)attron(A_REVERSE);
-        clipped(stdscr, layout->content_top + (int)position, 0, layout->sidebar - 1, line);
+        clipped(stdscr, layout->content_top + (int)(position - first), 0, layout->sidebar - 1, line);
         if (selected) (void)attroff(A_REVERSE);
     }
     (void)mvvline(1, layout->sidebar - 1, ACS_VLINE, layout->rows - 4);
@@ -598,7 +605,8 @@ static void draw_thread(tui_state_t *state, const tui_layout_t *layout) {
     if (contact != NULL) {
         char peer[TUI_ADDRESS_DIGITS + 1u];
         tui_hex_format(contact->peer, LXMF_DESTINATION_LENGTH, peer);
-        (void)snprintf(peer_line, sizeof peer_line, "%s%s",
+        (void)snprintf(peer_line, sizeof peer_line, "%c %s%s",
+                       state->history_focused ? '>' : ' ',
                        layout->narrow ? "Chat: " : "Conversation: ", peer);
     }
     (void)attron(A_BOLD);
@@ -733,14 +741,17 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
             composing ? layout->columns - 4 : layout->columns, hint);
     clipped(stdscr, layout->legend_row, 0, layout->columns,
             editor != NULL ? state->status
-                : " NORMAL | : commands  Enter compose  PgUp/PgDn history");
+                : state->history_focused
+                ? " HISTORY | j/k scroll  h chats  Home/End  Enter compose"
+                : " CHATS | j/k select  l history  Tab switch  Enter compose");
     if (editor != NULL) (void)move(cursor_y, cursor_x);
 }
 
 static void draw_conversation_overlay(const tui_state_t *state) {
     if (state->overlay == TUI_OVERLAY_HELP) {
         static const char *const help[] = {
-            "j/k or arrows: conversation    PgUp/PgDn: history",
+            "h/l or Left/Right: focus chats/history; Tab switches",
+            "j/k or Up/Down: move in focused pane; Home/End: history",
             "1/2/3: trusted/unknown/untrusted    /: search",
             "Enter: compose    i: peer info    p: pin    x: block",
             "PgUp/PgDn then e: reply to newest visible message",
@@ -1420,7 +1431,8 @@ static void draw_guide(const tui_layout_t *layout) {
         "F validated Reticulum configuration",
         "j/k or arrows select; Enter activates; Esc returns to Conversations",
         "",
-        "Conversations: 1/2/3 trust tabs, / search, a address, Enter compose",
+        "Conversations: h/l focus chats/history, j/k move, Tab switches",
+        "1/2/3 trust tabs, / search, a address, Enter compose; L Logs",
         "Contact actions: i details, p pin, x block, t trust, u untrust",
         "Delivery: d selects direct or propagation-node upload for queued messages",
         "Network: / search, Enter details; b browse, m message, p relay, s sync/cancel",
@@ -1849,6 +1861,7 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
     (void)fprintf(output, "Compose delivery: %s\n",
                   lxmf_delivery_method_string(state->compose_delivery_method));
     (void)fprintf(output, "Conversations: %zu\n", state->contact_count);
+    (void)fprintf(output, "Chat focus: %s\n", state->history_focused ? "history" : "list");
     for (size_t i = 0u; i < state->contact_count; ++i) {
         char peer[TUI_ADDRESS_DIGITS + 1u];
         tui_hex_format(state->contacts[i].peer, LXMF_DESTINATION_LENGTH, peer);
