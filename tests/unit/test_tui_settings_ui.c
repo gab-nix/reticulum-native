@@ -90,6 +90,19 @@ static void test_keys_dump_and_persistence(void) {
     assert(strstr(output, "rejected=1") != NULL);
     assert(fclose(dump) == 0);
 
+    state->propagation_sync.active = true;
+    state->propagation_sync.waiting_for_upload = true;
+    state->propagation_sync.state = LXMF_PN_IDLE;
+    dump = tmpfile();
+    assert(dump != NULL && tui_render_dump(state, dump) == 0);
+    assert(fseek(dump, 0L, SEEK_SET) == 0);
+    length = fread(output, 1u, sizeof output - 1u, dump);
+    assert(!ferror(dump)); output[length] = '\0';
+    assert(strstr(output, "Propagation sync: waiting for upload active=yes") != NULL);
+    assert(fclose(dump) == 0);
+    state->propagation_sync.active = false;
+    state->propagation_sync.waiting_for_upload = false;
+
     state->screen = TUI_SCREEN_INTERFACES;
     dump = tmpfile();
     assert(dump != NULL && tui_render_dump(state, dump) == 0);

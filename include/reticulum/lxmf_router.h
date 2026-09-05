@@ -241,6 +241,8 @@ typedef struct {
     size_t accepted, duplicates, rejected;
     bool retain_on_node;
     bool active;
+    /* Accepted sync intent waiting for the current upload to release its slot. */
+    bool waiting_for_upload;
 } lxmf_router_propagation_sync_status_t;
 
 typedef struct {
@@ -312,7 +314,11 @@ lxmf_status_t lxmf_router_set_propagation_node(
     lxmf_router_t *router, const rns_identity *identity,
     const uint8_t destination[LXMF_DESTINATION_LENGTH], uint8_t stamp_cost);
 /* Starts one caller-polled list/download/ack transaction against the selected
- * verified propagation node. It is serialized with outbound uploads. Received
+ * verified propagation node. It is serialized with outbound uploads: an
+ * accepted request returns OK and waits for the current upload, then takes
+ * priority over subsequent uploads. Repeated starts return PENDING. Deferred
+ * intent is process-local and may be cancelled before a session is created.
+ * Received
  * ciphertext enters the normal inbound signature, stamp, block and durable
  * store path before it can be acknowledged. */
 lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,

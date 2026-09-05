@@ -976,7 +976,8 @@ static bool propagation_sync_equal(
            left->duplicates == right->duplicates &&
            left->rejected == right->rejected &&
            left->retain_on_node == right->retain_on_node &&
-           left->active == right->active;
+           left->active == right->active &&
+           left->waiting_for_upload == right->waiting_for_upload;
 }
 
 void tui_state_apply_propagation_sync(
@@ -985,6 +986,11 @@ void tui_state_apply_propagation_sync(
     if (state == NULL || status == NULL ||
         propagation_sync_equal(&state->propagation_sync, status)) return;
     state->propagation_sync = *status;
+    if (status->active && status->waiting_for_upload) {
+        tui_state_set_status(state,
+            "Propagation sync queued; starts after the current upload (cancel available)");
+        return;
+    }
     if (status->active) {
         tui_state_set_status(state, "Propagation sync: %s (%zu/%zu messages)",
             propagation_sync_phase(status->state), status->received,
