@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "button_menu.h"
 const char *heltec_button_menu_label(const heltec_button_menu *m) {
-    static const char *items[] = {"HOME", "MESSAGES", "ANNOUNCE", "CLEAR MSG", "NODES", "CHANNEL"};
+    static const char *items[] = {"HOME", "MESSAGES", "ANNOUNCE", "CLEAR VIEW", "NODES", "CHANNEL"};
     return m ? items[m->selected % 6U] : "HOME";
 }
 heltec_menu_action heltec_button_menu_poll(heltec_button_menu *m, bool pressed, uint64_t now) {

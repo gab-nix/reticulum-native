@@ -162,9 +162,10 @@ int main(void) {
     lxmf_packet_node_destroy(n);
     assert(lxmf_packet_node_create(storage, radio, NULL, NULL, &n) == RNS_OK);
     lxmf_packet_node_set_accept(n, accept_message, NULL);
+    reject_save = true;
     assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK);
     assert(unverified_events == 1 && verified_events == 0);
-    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 0);
+    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 0 && info.pending_senders == 1);
     p.packet_type = 1; p.context = 0;
     assert(rns_destination_hash(&sender, "nomadnetwork", node_aspects, 1, p.destination_hash));
     assert(rns_announce_build(&sender, p.destination_hash, name, prefix, 3000, NULL, NULL, 0,

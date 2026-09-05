@@ -175,10 +175,12 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
                 if (n->pending[i].used && !memcmp(n->pending[i].id, message.message_id, 32)) duplicate_pending = true;
                 if (!n->pending[i].used && slot == PENDING) slot = i;
             }
-            rns_status_t accepted = RNS_OK;
             if (!duplicate_pending && n->accept)
-                accepted = n->accept(n->accept_context, &message, LXMF_SIGNATURE_UNVERIFIED, raw, length);
-            if (clock_ok && accepted == RNS_OK && !duplicate_pending && slot != PENDING && length <= RNS_MTU) {
+                (void)n->accept(n->accept_context, &message, LXMF_SIGNATURE_UNVERIFIED, raw, length);
+            /* The bounded ciphertext cache remains available even when an
+             * application cannot yet archive unknown senders. No proof is
+             * issued, and later verified acceptance still requires saving. */
+            if (clock_ok && !duplicate_pending && slot != PENDING && length <= RNS_MTU) {
                 memcpy(n->pending[slot].raw, raw, length);
                 memcpy(n->pending[slot].source, message.source, 16);
                 memcpy(n->pending[slot].id, message.message_id, 32);

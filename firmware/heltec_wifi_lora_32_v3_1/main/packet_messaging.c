@@ -5,6 +5,8 @@
 #include "home_view.h"
 #include "cpu_usage.h"
 #include "channel_view.h"
+#include "chat_store.h"
+#include "chat_journal.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -18,6 +20,8 @@
 #include "freertos/task.h"
 #include <inttypes.h>
 #include <string.h>
+#include <math.h>
+#include <stdio.h>
 static const char *TAG = "messaging";
 static heltec_radio_discovery discovery;
 static lxmf_packet_node_t *node;
@@ -28,6 +32,27 @@ static heltec_live_view live;
 static heltec_menu_action active_view;
 static heltec_cpu_usage cpu;
 static heltec_channel_view channel;
+static heltec_chat_store *saved_chats;
+static rns_storage_t *chat_storage;
+static rns_status_t chat_status = RNS_ERROR_INVALID_STATE;
+static rns_status_t persist_message(void *context, const lxmf_message_t *message,
+    lxmf_signature_state_t signature, const uint8_t *packet, size_t packet_length) {
+    (void)context; (void)packet; (void)packet_length;
+    /* Unknown-sender archival requires the per-message representation store;
+     * never mislabel it as a verified record in the legacy chat schema. */
+    if (signature != LXMF_SIGNATURE_VERIFIED) return RNS_ERROR_UNSUPPORTED;
+    if (!saved_chats) return chat_status;
+    if (message->content.len > HELTEC_CHAT_TEXT || !isfinite(message->timestamp) ||
+        message->timestamp < 0 || message->timestamp >= 18446744073709551616.0)
+        return chat_status = RNS_ERROR_OVERFLOW;
+    heltec_chat_message item = {.timestamp = (uint64_t)message->timestamp,
+        .length = (uint16_t)message->content.len, .state = 0};
+    memcpy(item.id, message->message_id, 32);
+    if (item.length) memcpy(item.text, message->content.data, item.length);
+    chat_status = heltec_chat_store_add(saved_chats, message->source, &item);
+    rns_hal_secure_zero(&item, sizeof(item));
+    return chat_status;
+}
 static void sample_cpu(void) {
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS && CONFIG_FREERTOS_USE_TRACE_FACILITY && CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER
     static TaskStatus_t tasks[24];
@@ -95,10 +120,26 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
     ESP_LOGI(TAG, "Radio provider creation: %d", (int)status);
     if (status == RNS_OK) status = lxmf_packet_node_create(storage, radio, incoming_message, NULL, &node);
     ESP_LOGI(TAG, "Packet identity opening: %d", (int)status);
+    if (status == RNS_OK) {
+        chat_status = heltec_chat_flash_open(&chat_storage);
+        if (chat_status == RNS_OK) chat_status = heltec_chat_store_open(chat_storage, &saved_chats);
+        if (chat_status == RNS_OK) {
+            for (size_t slot = 0; slot < HELTEC_CHAT_COUNT; ++slot) {
+                const heltec_chat *chat = heltec_chat_store_get(saved_chats, slot);
+                if (!chat) continue;
+                for (size_t i = chat->count; i-- > 0;)
+                    heltec_live_message(&live, chat->messages[i].text, chat->messages[i].length);
+            }
+        }
+        lxmf_packet_node_set_accept(node, persist_message, NULL);
+        ESP_LOGI(TAG, "Chat storage opening: %d; identity storage unchanged", (int)chat_status);
+    }
     if (status == RNS_OK) status = rns_interface_start(radio);
     if (status != RNS_OK) {
         ESP_LOGE(TAG, "Packet-mode startup failed: %d; storage not erased", (int)status);
         lxmf_packet_node_destroy(node); node = NULL;
+        heltec_chat_store_close(saved_chats); saved_chats = NULL;
+        if (chat_storage) { rns_storage_destroy(chat_storage); chat_storage = NULL; }
         if (radio) rns_interface_destroy(radio);
         return;
     }
@@ -163,6 +204,8 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 char lines[8][22];
                 if (active_view == HELTEC_MENU_MESSAGE) heltec_live_messages(&live, action == HELTEC_MENU_NEXT, lines);
                 else heltec_live_nodes(&live, &discovery, now, action == HELTEC_MENU_NEXT, lines);
+                if (active_view == HELTEC_MENU_MESSAGE && chat_status != RNS_OK)
+                    (void)snprintf(lines[1], 22, "STORAGE ERROR %d", (int)chat_status);
                 rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
             }
             else if (now >= preview_until) {
@@ -173,6 +216,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 snapshot.radio_valid = rns_interface_get_stats(radio, &snapshot.radio) == RNS_OK;
                 char lines[8][22];
                 heltec_home_lines(&snapshot, lines);
+                if (chat_status != RNS_OK) (void)snprintf(lines[7], 22, "STORAGE ERROR %d", (int)chat_status);
                 rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
             }
             if (!rns_heltec_oled_render(oled)) {

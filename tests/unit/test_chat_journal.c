@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "chat_journal.h"
+#include "chat_store.h"
 #include <assert.h>
 #include <stdbool.h>
 #include <string.h>
@@ -23,6 +24,20 @@ int main(void) {
     assert(rns_storage_remove(s,"chat0")==RNS_OK);
     rns_storage_destroy(s); assert(heltec_chat_journal_open(&ops,&s)==RNS_OK);
     assert(rns_storage_read(s,"chat0",out,sizeof(out),&n)==RNS_ERROR_NOT_FOUND);
+    heltec_chat_store *chats=NULL;
+    assert(heltec_chat_store_open(s,&chats)==RNS_OK);
+    heltec_chat_message message={.timestamp=123,.length=5};
+    memcpy(message.text,"hello",5); message.id[0]=1;
+    uint8_t sender[16]={7};
+    assert(heltec_chat_store_add(chats,sender,&message)==RNS_OK);
+    heltec_chat_store_close(chats); rns_storage_destroy(s);
+    assert(heltec_chat_journal_open(&ops,&s)==RNS_OK);
+    assert(heltec_chat_store_open(s,&chats)==RNS_OK);
+    const heltec_chat *restored=heltec_chat_store_get(chats,0);
+    assert(restored && restored->sender[0]==7 && restored->count==1);
+    assert(restored->messages[0].length==5 && !memcmp(restored->messages[0].text,"hello",5));
+    assert(heltec_chat_store_add(chats,sender,&message)==RNS_OK && restored->count==1);
+    heltec_chat_store_close(chats);
     rns_storage_destroy(s); memset(flash,0,sizeof(flash));
     assert(heltec_chat_journal_open(&ops,&s)==RNS_ERROR_PROTOCOL && !s);
     return 0;
