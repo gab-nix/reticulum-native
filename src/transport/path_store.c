@@ -8,7 +8,8 @@
 #define PATH_STORE_HEADER_SIZE 32u
 #define PATH_STORE_RECORD_BASE_SIZE 104u
 #define PATH_STORE_RECORD_PREFIX_SIZE 2u
-#define PATH_STORE_VERSION 1u
+#define PATH_STORE_VERSION 2u
+#define PATH_STORE_IDENTITY_SIZE 64u
 
 static const uint8_t path_store_magic[8] = {'R', 'N', 'S', 'P', 'A', 'T', 'H', '1'};
 
@@ -90,7 +91,8 @@ rns_status_t rns_path_store_encode(const rns_transport *transport,
             entry->random_blob_count > RNS_TRANSPORT_MAX_RANDOM_BLOBS)
             return RNS_ERROR_INVALID_STATE;
         size_t record_size = PATH_STORE_RECORD_BASE_SIZE +
-                             entry->random_blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE;
+                             entry->random_blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE +
+                             (entry->has_identity ? PATH_STORE_IDENTITY_SIZE : 0u);
         if (record_size > UINT16_MAX || required > SIZE_MAX - record_size - 2u)
             return RNS_ERROR_OVERFLOW;
         required += PATH_STORE_RECORD_PREFIX_SIZE + record_size;
@@ -118,7 +120,8 @@ rns_status_t rns_path_store_encode(const rns_transport *transport,
             !seconds_to_ms(now > entry->updated_at ? now - entry->updated_at : 0.0,
                            &age_ms)) return RNS_ERROR_INVALID_STATE;
         size_t record_size = PATH_STORE_RECORD_BASE_SIZE +
-                             entry->random_blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE;
+                             entry->random_blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE +
+                             (entry->has_identity ? PATH_STORE_IDENTITY_SIZE : 0u);
         put16(cursor, (uint16_t)record_size);
         cursor += 2u;
         memcpy(cursor, entry->destination_hash, 16u); cursor += 16u;
@@ -134,10 +137,14 @@ rns_status_t rns_path_store_encode(const rns_transport *transport,
         *cursor++ = entry->hops;
         *cursor++ = entry->unresponsive != 0 ? 1u : 0u;
         *cursor++ = (uint8_t)entry->random_blob_count;
-        *cursor++ = 0u;
+        *cursor++ = entry->has_identity ? 1u : 0u;
         memcpy(cursor, entry->random_blobs,
                entry->random_blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE);
         cursor += entry->random_blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE;
+        if (entry->has_identity) {
+            memcpy(cursor, entry->identity_public_key, PATH_STORE_IDENTITY_SIZE);
+            cursor += PATH_STORE_IDENTITY_SIZE;
+        }
     }
     put32(output + 28u, crc32_bytes(output + PATH_STORE_HEADER_SIZE,
                                     required - PATH_STORE_HEADER_SIZE));
@@ -162,9 +169,10 @@ rns_status_t rns_path_store_decode(rns_transport *transport,
         return RNS_ERROR_INVALID_ARGUMENT;
     if (input_length < PATH_STORE_HEADER_SIZE ||
         memcmp(input, path_store_magic, sizeof path_store_magic) != 0 ||
-        get16(input + 8u) != PATH_STORE_VERSION ||
+        (get16(input + 8u) != 1u && get16(input + 8u) != PATH_STORE_VERSION) ||
         get16(input + 10u) != PATH_STORE_HEADER_SIZE)
         return RNS_ERROR_PROTOCOL;
+    uint16_t version = get16(input + 8u);
     uint32_t declared_count = get32(input + 12u);
     uint32_t payload_length = get32(input + 16u);
     if (declared_count > transport->config.path_capacity ||
@@ -197,10 +205,12 @@ rns_status_t rns_path_store_decode(rns_transport *transport,
         }
         const uint8_t *record = cursor;
         uint8_t blob_count = record[102u];
-        if (record[101u] > 1u || record[103u] != 0u || blob_count == 0u ||
+        bool has_identity = version >= 2u && record[103u] == 1u;
+        if (record[101u] > 1u || record[103u] > (version >= 2u ? 1u : 0u) || blob_count == 0u ||
             blob_count > RNS_TRANSPORT_MAX_RANDOM_BLOBS ||
             record_size != PATH_STORE_RECORD_BASE_SIZE +
-                           (size_t)blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE ||
+                           (size_t)blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE +
+                           (has_identity ? PATH_STORE_IDENTITY_SIZE : 0u) ||
             duplicate_destination(candidate, retained, record)) {
             status = RNS_ERROR_PROTOCOL; break;
         }
@@ -232,6 +242,13 @@ rns_status_t rns_path_store_decode(rns_transport *transport,
             entry->random_blob_count = blob_count;
             memcpy(entry->random_blobs, record + PATH_STORE_RECORD_BASE_SIZE,
                    (size_t)blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE);
+            if (has_identity) {
+                memcpy(entry->identity_public_key,
+                       record + PATH_STORE_RECORD_BASE_SIZE +
+                           (size_t)blob_count * RNS_TRANSPORT_RANDOM_BLOB_SIZE,
+                       PATH_STORE_IDENTITY_SIZE);
+                entry->has_identity = 1;
+            }
             double total_age = (double)age_ms / 1000.0 +
                                (double)offline_ms / 1000.0;
             entry->updated_at = now - total_age;

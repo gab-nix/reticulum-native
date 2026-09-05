@@ -11,7 +11,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define TUI_PATHS_FILE_MAX (64u * 1024u)
+/* 4096 paths with all 16 random blobs and public identities need < 1.3 MiB. */
+#define TUI_PATHS_FILE_MAX (2u * 1024u * 1024u)
 #define TUI_PATHS_PATH_MAX 1024u
 
 static bool sync_parent(const char *path) {
@@ -95,17 +96,21 @@ bool tui_paths_save(const rns_runtime_t *runtime, const char *path,
     if (runtime == NULL || path == NULL || saved_count == NULL) return false;
     size_t path_length = strnlen(path, TUI_PATHS_PATH_MAX + 1u);
     if (path_length == 0u || path_length > TUI_PATHS_PATH_MAX) return false;
-    uint8_t *data = malloc(TUI_PATHS_FILE_MAX);
-    if (data == NULL) return false;
     uint64_t wall_time_ms = 0u;
     size_t length = 0u;
     size_t encoded_count = 0u;
     rns_status_t result = rns_hal_wallclock_ms(&wall_time_ms);
-    if (result == RNS_OK)
-        result = rns_runtime_paths_export(runtime, wall_time_ms, data,
-                                          TUI_PATHS_FILE_MAX, &length,
-                                          &encoded_count);
-    if (result != RNS_OK || length == 0u || length > TUI_PATHS_FILE_MAX) {
+    if (result != RNS_OK) return false;
+    result = rns_runtime_paths_export(runtime, wall_time_ms, NULL, 0u,
+                                      &length, &encoded_count);
+    if (result != RNS_ERROR_OVERFLOW || length == 0u || length > TUI_PATHS_FILE_MAX)
+        return false;
+    size_t capacity = length;
+    uint8_t *data = malloc(capacity);
+    if (data == NULL) return false;
+    result = rns_runtime_paths_export(runtime, wall_time_ms, data, capacity,
+                                      &length, &encoded_count);
+    if (result != RNS_OK || length == 0u || length > capacity) {
         free(data);
         return false;
     }

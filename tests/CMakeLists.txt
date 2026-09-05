@@ -90,6 +90,14 @@ if(RETICULUM_PYTHON_INTEROP)
                 LABELS "interop;python;${transport}" TIMEOUT 600 RUN_SERIAL TRUE)
         endforeach()
     endforeach()
+    add_test(NAME interop_lxmf_ticket_worker_race_udp
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_lxmf_direct_live.py
+            --reticulum ${RETICULUM_PYTHON_RNS}
+            --lxmf ${RETICULUM_PYTHON_LXMF}
+            --driver $<TARGET_FILE:lxmf_direct_live_driver>
+            --transport udp --delay-inbound-ms 500)
+    set_tests_properties(interop_lxmf_ticket_worker_race_udp PROPERTIES
+        LABELS "interop;python;udp;ticket;adversarial" TIMEOUT 600 RUN_SERIAL TRUE)
     add_test(NAME interop_rrc_python
         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_rrc_live.py
             --reticulum ${RETICULUM_PYTHON_RNS}
