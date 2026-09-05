@@ -36,4 +36,11 @@ bool tui_utf8_valid(const uint8_t *data, size_t length);
 /* Counts display columns, treating each UTF-8 sequence as a single column. */
 size_t tui_utf8_columns(const char *text, size_t length);
 
+/* Terminal-cell-aware wrapping. Each call consumes at least one byte; LF is
+ * a hard break, other controls/invalid bytes occupy a safe replacement cell.
+ * Returned span excludes LF. Spaces are preserved at soft word boundaries. */
+size_t tui_text_cell_width(const char *text, size_t length);
+bool tui_text_wrap_next(const char *text, size_t length, size_t columns,
+                        size_t *offset, size_t *start, size_t *bytes);
+
 #endif

@@ -1,4 +1,5 @@
 #include "tui_editor.h"
+#include <locale.h>
 
 #include <assert.h>
 #include <string.h>
@@ -103,7 +104,50 @@ static void test_horizontal_view(void) {
     assert(tui_editor_text(&editor)[offset] == '\xc3' && cursor == 7u);
 }
 
+static void test_wrapped_motion(void) {
+    tui_editor_t editor; tui_editor_init(&editor, 128u);
+    insert_text(&editor, "ab cdef"); editor.cursor = 6u;
+    size_t row, column;
+    tui_editor_position(&editor, 4u, &row, &column);
+    assert(row == 1u && column == 3u);
+    assert(tui_editor_move_vertical(&editor, 4u, -1));
+    tui_editor_position(&editor, 4u, &row, &column);
+    assert(row == 0u && column == 2u);
+    assert(tui_editor_move_vertical(&editor, 4u, 1));
+    tui_editor_position(&editor, 4u, &row, &column);
+    assert(row == 1u && column == 2u);
+    tui_editor_clear(&editor); assert(tui_editor_insert(&editor, "hello\nworld\n", 12u));
+    tui_editor_position(&editor, 20u, &row, &column);
+    assert(row == 2u && column == 0u);
+    assert(tui_editor_move_vertical(&editor, 20u, -1));
+    assert(editor.cursor == 6u);
+    assert(tui_editor_apply(&editor, TUI_EDIT_BACKSPACE));
+    assert(strcmp(editor.text, "helloworld\n") == 0);
+    tui_editor_clear(&editor); insert_text(&editor, "abcd");
+    tui_editor_position(&editor, 4u, &row, &column);
+    assert(row == 1u && column == 0u);
+}
+
+static void test_terminal_cells(void) {
+    assert(setlocale(LC_CTYPE, "C.UTF-8") != NULL ||
+           setlocale(LC_CTYPE, "en_US.UTF-8") != NULL);
+    tui_editor_t editor; tui_editor_init(&editor, 128u);
+    assert(tui_editor_insert(&editor, "界界界", 9u));
+    size_t offset, column, row;
+    assert(tui_editor_view(&editor, 4u, &offset, &column));
+    assert(offset == 6u && column == 2u);
+    tui_editor_position(&editor, 4u, &row, &column);
+    assert(row == 1u && column == 2u);
+    tui_editor_clear(&editor);
+    assert(tui_editor_insert(&editor, "a\xcc\x81" "bc", 5u));
+    assert(tui_editor_view(&editor, 3u, &offset, &column));
+    assert(offset == 3u && column == 2u);
+    assert(setlocale(LC_CTYPE, "C") != NULL);
+}
+
 int main(void) {
+    test_terminal_cells();
+    test_wrapped_motion();
     test_horizontal_view();
     test_ascii_editing();
     test_capacity_and_control();

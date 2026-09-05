@@ -213,6 +213,8 @@ static const tui_message_t *viewport_reference_message(tui_state_t *state) {
     tui_state_refresh(state);
     size_t end = state->thread_count > state->scroll
                      ? state->thread_count - state->scroll : 0u;
+    if (state->thread_layout_valid && state->thread_count != 0u)
+        return tui_state_thread_message(state, state->thread_visible_last);
     return end == 0u ? NULL : tui_state_thread_message(state, end - 1u);
 }
 
@@ -396,7 +398,9 @@ void tui_state_refresh(tui_state_t *state) {
     for (size_t i = 0u; i < state->message_count; ++i)
         if (thread_matches(state, &state->messages[i]))
             state->thread[state->thread_count++] = i;
-    if (state->scroll > state->thread_count) state->scroll = state->thread_count;
+    size_t scroll_limit = state->thread_layout_valid
+        ? state->thread_scroll_limit : state->thread_count;
+    if (state->scroll > scroll_limit) state->scroll = scroll_limit;
     state->filter_dirty = false;
 }
 
@@ -1654,6 +1658,7 @@ void tui_state_select_offset(tui_state_t *state, int delta) {
     restore_selected_draft(state);
     state->contacts[state->selected].unread = 0u;
     state->scroll = 0u;
+    state->thread_layout_valid = false;
     state->filter_dirty = true;
 }
 
@@ -1662,6 +1667,7 @@ void tui_state_set_tab(tui_state_t *state, tui_trust_t tab) {
     tui_state_cancel_reference(state);
     state->tab = tab;
     state->scroll = 0u;
+    state->thread_layout_valid = false;
     state->filter_dirty = true;
     tui_state_refresh(state);
     if (state->visible_count > 0u) {
@@ -1694,7 +1700,9 @@ void tui_state_scroll_by(tui_state_t *state, int lines) {
         state->scroll = state->scroll > back ? state->scroll - back : 0u;
     } else {
         state->scroll += (size_t)lines;
-        if (state->scroll > state->thread_count) state->scroll = state->thread_count;
+        size_t limit = state->thread_layout_valid
+            ? state->thread_scroll_limit : state->thread_count;
+        if (state->scroll > limit) state->scroll = limit;
     }
 }
 
@@ -1709,6 +1717,8 @@ bool tui_state_open_conversation(tui_state_t *state,
     tui_state_save_draft(state);
     tui_state_cancel_reference(state);
     state->selected = index;
+    state->scroll = 0u;
+    state->thread_layout_valid = false;
     state->tab = state->contacts[index].trust;
     state->screen = TUI_SCREEN_CONVERSATIONS;
     state->overlay = TUI_OVERLAY_NONE;

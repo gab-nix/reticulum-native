@@ -77,6 +77,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | --- | --- | --- |
 | Terminal application shell and screen dispatcher | IMPLEMENTED | Additional accessibility controls |
 | Conversation list and message composer | WIP | Notifications and complete attachment workflows |
+| Wrapped conversation text and composing | IMPLEMENTED | Word-wrapped cached bodies/metadata, preserved LF, visual-row scrolling, a cursor-following multirow composer (Ctrl-N newline, Enter send, Up/Down movement), terminal-cell-aware clipping and connection/node/unread/traffic bar. `test_tui_text`, `test_tui_editor`, `test_tui_settings_ui` cover long lines, wide/combining text, vertical motion, narrow cursor position and scrolling. Existing 4096-byte preview limit and rich browser/RRC/dialog wrapping remain WIP |
 | Per-conversation drafts | IMPLEMENTED | Draft management controls |
 | Search, trust, pin, note and block state | IMPLEMENTED | Complete contact management UI |
 | Reply and reaction composition | IMPLEMENTED | Complete per-message navigation |

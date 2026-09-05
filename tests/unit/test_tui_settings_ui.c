@@ -608,7 +608,51 @@ static void test_host_narrow_render(void) {
     assert(fclose(input) == 0 && fclose(output) == 0);
 }
 
+static void test_wrapped_chat_render(void) {
+    FILE *input = tmpfile(), *output = tmpfile();
+    assert(input != NULL && output != NULL);
+    SCREEN *screen = newterm("xterm", output, input); assert(screen != NULL);
+    assert(resizeterm(16, 50) == OK);
+    tui_state_t *state = make_state("unused-render-only");
+    state->screen = TUI_SCREEN_CONVERSATIONS;
+    state->contact_count = 1u; state->contacts[0].peer[0] = 0x42u;
+    state->visible_count = 1u;
+    state->contacts[0].unread = 3u;
+    state->message_count = 1u; state->thread_count = 1u;
+    tui_message_t *message = &state->messages[0];
+    message->value.source[0] = 0x42u;
+    const char *body = "FIRST\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth\nninth\ntenth\neleventh\nLAST";
+    memcpy(message->content, body, strlen(body));
+    message->value.content = (lxmf_slice_t){message->content, strlen(body)};
+    tui_render_draw(state);
+    assert(state->thread_layout_valid && state->thread_scroll_limit > 0u);
+    char line[128]; assert(mvinnstr(0, 0, line, 50) != ERR);
+    assert(strstr(line, "OFFLINE") != NULL && strstr(line, "U:3") != NULL);
+    tui_state_scroll_by(state, 100);
+    tui_render_draw(state);
+    assert(mvinnstr(3, 0, line, 50) != ERR && strstr(line, "FIRST") != NULL);
+    tui_state_scroll_by(state, -100); tui_render_draw(state);
+    assert(mvinnstr(11, 0, line, 50) != ERR && strstr(line, "LAST") != NULL);
+    state->field = TUI_FIELD_COMPOSE;
+    const char *draft = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen";
+    assert(tui_editor_insert(&state->composer, draft, strlen(draft)));
+    tui_render_draw(state);
+    int y, x; getyx(stdscr, y, x);
+    assert(y >= 11 && y <= 13 && x >= 9 && x < 50);
+    assert(tui_dispatch_key(state, 14));
+    assert(strchr(state->composer.text, '\n') != NULL);
+    tui_render_draw(state); getyx(stdscr, y, x);
+    assert(x == 9 && y <= 13);
+    assert(tui_dispatch_key(state, KEY_UP));
+    assert(state->composer.cursor < state->composer.length);
+    assert(resizeterm(10, 38) == OK); tui_render_draw(state);
+    getyx(stdscr, y, x); assert(y >= 6 && y <= 7 && x >= 9 && x < 38);
+    destroy_state(state); (void)endwin(); delscreen(screen);
+    assert(fclose(input) == 0 && fclose(output) == 0);
+}
+
 int main(void) {
+    test_wrapped_chat_render();
     test_host_startup_and_announces();
     test_host_narrow_render();
     test_host_controls();

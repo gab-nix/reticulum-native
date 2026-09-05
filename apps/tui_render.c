@@ -30,6 +30,7 @@ typedef struct {
     int content_rows;
     int divider_row;
     int input_row;
+    int input_rows;
     int hint_row;
     int legend_row;
 } tui_layout_t;
@@ -147,13 +148,29 @@ static tui_layout_t layout_of(int rows, int columns) {
     layout.content_rows = rows - 7;
     layout.divider_row = rows - 4;
     layout.input_row = rows - 3;
+    layout.input_rows = 1;
     layout.hint_row = rows - 2;
     layout.legend_row = rows - 1;
     return layout;
 }
 
 static void clipped(WINDOW *window, int y, int x, int width, const char *text) {
-    if (width > 0) (void)mvwaddnstr(window, y, x, text, width);
+    if (width <= 0 || text == NULL) return;
+    int rows, columns; getmaxyx(window, rows, columns);
+    if (y < 0 || y >= rows || x < 0 || x >= columns) return;
+    if (width > columns - x) width = columns - x;
+    size_t length = strlen(text), cells = 0u;
+    if (wmove(window, y, x) == ERR) return;
+    for (size_t at = 0u; at < length;) {
+        size_t n = tui_utf8_length((const uint8_t *)text + at, length - at);
+        size_t w = tui_text_cell_width(text + at, length - at);
+        if (cells + w > (size_t)width) break;
+        if (n == 0u || (unsigned char)text[at] < 32u ||
+            (unsigned char)text[at] == 127u)
+            (void)waddch(window, ' ');
+        else (void)waddnstr(window, text + at, (int)n);
+        cells += w; at += n != 0u ? n : 1u;
+    }
 }
 
 /*
@@ -257,7 +274,21 @@ static void draw_chrome(const tui_state_t *state, const tui_layout_t *layout) {
      */
     const char *link = state->runtime == NULL ? "OFFLINE"
                        : tui_state_link_ready(state) ? "ONLINE" : "NO LINK";
-    (void)snprintf(header, sizeof header, " Nomad Chat  %.32s  %s ", address, link);
+    size_t unread = 0u, up = 0u;
+    uint64_t rx = 0u, tx = 0u;
+    for (size_t i = 0u; i < state->contact_count; ++i) unread += state->contacts[i].unread;
+    for (size_t i = 0u; i < state->interfaces.count; ++i) {
+        const rns_runtime_interface_info_t *info = &state->interfaces.items[i];
+        if (info->state == RNS_RUNTIME_INTERFACE_UP) ++up;
+        rx += info->bytes_received; tx += info->bytes_sent;
+    }
+    if (layout->columns < 72)
+        (void)snprintf(header, sizeof header, " Nomad | %s | N:%zu U:%zu", link, state->nodes.count, unread);
+    else
+        (void)snprintf(header, sizeof header,
+            " Nomad | %s %zu/%zu | Nodes:%zu Unread:%zu | RX:%lluK TX:%lluK | %.8s",
+            link, up, state->interfaces.count, state->nodes.count, unread,
+            (unsigned long long)(rx / 1024u), (unsigned long long)(tx / 1024u), address + 24u);
     (void)attron(A_REVERSE | A_BOLD);
     clipped(stdscr, 0, 0, layout->columns, header);
     for (int x = (int)strlen(header); x < layout->columns; ++x) (void)addch(' ');
@@ -535,7 +566,27 @@ static void draw_sidebar(const tui_state_t *state, const tui_layout_t *layout) {
     (void)mvvline(1, layout->sidebar - 1, ACS_VLINE, layout->rows - 4);
 }
 
-static void draw_thread(const tui_state_t *state, const tui_layout_t *layout) {
+static void message_text(const tui_state_t *state, const tui_message_t *message,
+                          char *rendered, size_t capacity) {
+    char text[LXMF_STORE_MAX_CONTENT + 1u], metadata[448];
+    size_t length = message->value.content.len;
+    if (length > sizeof text - 1u) length = sizeof text - 1u;
+    for (size_t i = 0u; i < length; ++i) {
+        unsigned char c = message->value.content.data[i];
+        text[i] = (c < 32u && c != '\n') || c == 127u ? ' ' : (char)c;
+    }
+    text[length] = '\0';
+    tui_render_message_metadata(&message->metadata, metadata, sizeof metadata);
+    bool outgoing = tui_state_outgoing(state, message);
+    bool referenced = state->compose_reference.kind != TUI_COMPOSE_REFERENCE_NONE &&
+        memcmp(state->compose_reference.message_id, message->value.message_id,
+               LXMF_MESSAGE_ID_LENGTH) == 0;
+    (void)snprintf(rendered, capacity, "%c%s %s %s%s", referenced ? '*' : ' ',
+        outgoing ? ">" : "<", outgoing ? delivery_marker(message->value.status) : "   ",
+        text, metadata);
+}
+
+static void draw_thread(tui_state_t *state, const tui_layout_t *layout) {
     char peer_line[80] = "No conversation selected";
     const tui_contact_t *contact = tui_state_selected_contact(state);
     if (contact != NULL) {
@@ -548,36 +599,44 @@ static void draw_thread(const tui_state_t *state, const tui_layout_t *layout) {
     clipped(stdscr, 2, layout->pane_x, layout->pane_width, peer_line);
     (void)attroff(A_BOLD);
 
-    size_t total = tui_state_thread_count(state);
+    size_t messages = tui_state_thread_count(state), total = 0u;
+    char rendered[LXMF_STORE_MAX_CONTENT + 512u];
+    for (size_t index = 0u; index < messages; ++index) {
+        const tui_message_t *message = tui_state_thread_message(state, index);
+        if (message == NULL) continue;
+        message_text(state, message, rendered, sizeof rendered);
+        size_t offset = 0u, start, bytes;
+        while (tui_text_wrap_next(rendered, strlen(rendered), (size_t)layout->pane_width,
+                                  &offset, &start, &bytes)) ++total;
+    }
     size_t capacity = layout->content_rows > 0 ? (size_t)layout->content_rows : 0u;
+    state->thread_scroll_limit = total > capacity ? total - capacity : 0u;
+    state->thread_layout_valid = true;
+    if (state->scroll > state->thread_scroll_limit) state->scroll = state->thread_scroll_limit;
     size_t end = total > state->scroll ? total - state->scroll : 0u;
     size_t first = end > capacity ? end - capacity : 0u;
-    for (size_t index = first; index < end; ++index) {
+    size_t row = 0u;
+    for (size_t index = 0u; index < messages && row < end; ++index) {
         const tui_message_t *message = tui_state_thread_message(state, index);
-        char text[LXMF_STORE_MAX_CONTENT + 1u];
-        char rendered[LXMF_STORE_MAX_CONTENT + 512u];
-        char metadata[448];
         if (message == NULL) break;
-        bool outgoing = tui_state_outgoing(state, message);
-        (void)tui_text_sanitize(message->value.content.data, message->value.content.len,
-                                text, sizeof text);
-        tui_render_message_metadata(&message->metadata, metadata, sizeof metadata);
-        bool referenced = state->compose_reference.kind !=
-                              TUI_COMPOSE_REFERENCE_NONE &&
-                          memcmp(state->compose_reference.message_id,
-                                 message->value.message_id,
-                                 LXMF_MESSAGE_ID_LENGTH) == 0;
-        (void)snprintf(rendered, sizeof rendered, "%c%s %s %s%s",
-                       referenced ? '*' : ' ',
-                       outgoing ? ">" : "<",
-                       outgoing ? delivery_marker(message->value.status) : "   ",
-                       text, metadata);
-        clipped(stdscr, layout->content_top + (int)(index - first), layout->pane_x,
-                layout->pane_width, rendered);
+        message_text(state, message, rendered, sizeof rendered);
+        size_t length = strlen(rendered), offset = 0u, start, bytes;
+        while (row < end && tui_text_wrap_next(rendered, length,
+                (size_t)layout->pane_width, &offset, &start, &bytes)) {
+            if (row >= first) {
+                state->thread_visible_last = index;
+                char saved = rendered[start + bytes]; rendered[start + bytes] = '\0';
+                clipped(stdscr, layout->content_top + (int)(row - first),
+                        layout->pane_x, layout->pane_width, rendered + start);
+                rendered[start + bytes] = saved;
+            }
+            ++row;
+        }
     }
 }
 
 static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
+    int cursor_y = layout->input_row, cursor_x = 0;
     const tui_editor_t *editor = NULL;
     const char *prompt = "Search: ";
     switch (state->field) {
@@ -608,15 +667,33 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
     clipped(stdscr, layout->input_row, 0, layout->columns,
             editor != NULL ? prompt : state->status);
     if (editor != NULL) {
-        clipped(stdscr, layout->input_row, TUI_PROMPT_WIDTH,
-                layout->columns - TUI_PROMPT_WIDTH, tui_editor_text(editor));
-        int cursor_x = TUI_PROMPT_WIDTH + (int)tui_editor_column(editor);
-        (void)move(layout->input_row,
-                   cursor_x < layout->columns ? cursor_x : layout->columns - 1);
+        size_t width = (size_t)(layout->columns - TUI_PROMPT_WIDTH - 1);
+        if (state->field == TUI_FIELD_COMPOSE) {
+            size_t row, column, offset = 0u, start, bytes, line = 0u;
+            tui_editor_position(editor, width, &row, &column);
+            size_t first = row >= (size_t)layout->input_rows ? row - (size_t)layout->input_rows + 1u : 0u;
+            char text[TUI_EDITOR_MAX + 1u];
+            while (tui_text_wrap_next(editor->text, editor->length, width, &offset, &start, &bytes)) {
+                if (line >= first && line < first + (size_t)layout->input_rows) {
+                    memcpy(text, editor->text + start, bytes); text[bytes] = '\0';
+                    clipped(stdscr, layout->input_row + (int)(line - first),
+                            TUI_PROMPT_WIDTH, (int)width, text);
+                }
+                ++line;
+            }
+            cursor_y = layout->input_row + (int)(row - first);
+            cursor_x = TUI_PROMPT_WIDTH + (int)column;
+        } else {
+            size_t offset = 0u, column = 0u;
+            (void)tui_editor_view(editor, width, &offset, &column);
+            clipped(stdscr, layout->input_row, TUI_PROMPT_WIDTH, (int)width,
+                    tui_editor_text(editor) + offset);
+            cursor_x = TUI_PROMPT_WIDTH + (int)column;
+        }
     }
     char reference_hint[TUI_FIELD_PREVIEW_MAX + 80u];
     const char *hint = editor != NULL
-                           ? "Enter accept  Esc cancel  Home/End  Ctrl-A/E/U/K/W"
+                           ? "Enter send  Ctrl-N newline  Up/Down move  Esc leave"
                            : "e reply  z react  d route  v save  / search  i info  ? help";
     if (editor != NULL && state->compose_reference.kind !=
                               TUI_COMPOSE_REFERENCE_NONE) {
@@ -628,6 +705,7 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
     clipped(stdscr, layout->hint_row, 0, layout->columns, hint);
     clipped(stdscr, layout->legend_row, 0, layout->columns,
             "[.] queued  [>] sending  [+] sent  [x] delivered  [!] failed");
+    if (editor != NULL) (void)move(cursor_y, cursor_x);
 }
 
 static void draw_conversation_overlay(const tui_state_t *state) {
@@ -1367,6 +1445,20 @@ void tui_render_draw(tui_state_t *state) {
         draw_too_small(&layout);
         (void)refresh();
         return;
+    }
+    if (state->screen == TUI_SCREEN_CONVERSATIONS && state->field == TUI_FIELD_COMPOSE) {
+        size_t row, column;
+        state->composer_columns = (size_t)(columns - TUI_PROMPT_WIDTH - 1);
+        tui_editor_position(&state->composer, state->composer_columns, &row, &column);
+        size_t offset = 0u, start, bytes, count = 0u;
+        while (tui_text_wrap_next(state->composer.text, state->composer.length,
+                state->composer_columns, &offset, &start, &bytes)) ++count;
+        if (count <= row) count = row + 1u;
+        size_t maximum = rows >= 16 ? 4u : 2u;
+        layout.input_rows = (int)(count < maximum ? count : maximum);
+        layout.input_row -= layout.input_rows - 1;
+        layout.divider_row -= layout.input_rows - 1;
+        layout.content_rows -= layout.input_rows - 1;
     }
     draw_chrome(state, &layout);
     if (state->screen == TUI_SCREEN_NODE) {

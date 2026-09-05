@@ -1,7 +1,9 @@
+#define _XOPEN_SOURCE 700
 #include "tui_text.h"
 
 #include <ctype.h>
 #include <string.h>
+#include <wchar.h>
 
 void tui_hex_format(const uint8_t *bytes, size_t length, char *out) {
     static const char digits[] = "0123456789abcdef";
@@ -112,4 +114,42 @@ size_t tui_utf8_columns(const char *text, size_t length) {
         offset += width != 0u ? width : 1u;
     }
     return columns;
+}
+
+size_t tui_text_cell_width(const char *text, size_t length) {
+    if (text == NULL || length == 0u) return 0u;
+    size_t n = tui_utf8_length((const uint8_t *)text, length);
+    if (n == 0u) return 1u;
+    uint32_t cp = (uint8_t)text[0];
+    if (n > 1u) {
+        cp &= n == 2u ? 0x1fu : n == 3u ? 0x0fu : 0x07u;
+        for (size_t i = 1u; i < n; ++i)
+            cp = (cp << 6u) | ((uint8_t)text[i] & 0x3fu);
+    }
+    int width = wcwidth((wchar_t)cp);
+    return width < 0 ? 1u : (size_t)width;
+}
+
+bool tui_text_wrap_next(const char *text, size_t length, size_t columns,
+                        size_t *offset, size_t *start, size_t *bytes) {
+    if (text == NULL || offset == NULL || start == NULL || bytes == NULL ||
+        columns == 0u || *offset >= length) return false;
+    size_t begin = *offset, at = begin, cells = 0u, word = begin;
+    while (at < length) {
+        if (text[at] == '\n') {
+            *start = begin; *bytes = at - begin; *offset = at + 1u;
+            return true;
+        }
+        size_t n = tui_utf8_length((const uint8_t *)text + at, length - at);
+        if (n == 0u) n = 1u;
+        size_t width = tui_text_cell_width(text + at, length - at);
+        if (cells + width > columns && at > begin) break;
+        cells += width;
+        at += n;
+        if (text[at - 1u] == ' ') word = at;
+        if (cells > columns) break; /* A wide glyph in a one-cell pane. */
+    }
+    if (at < length && text[at] != '\n' && word > begin) at = word;
+    *start = begin; *bytes = at - begin; *offset = at;
+    return true;
 }

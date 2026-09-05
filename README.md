@@ -39,6 +39,13 @@ interface configuration:
 Never commit identities, private keys, message stores, local configuration,
 packet captures or logs containing private traffic.
 
+Conversation text wraps to the available width. Page Up/Page Down scroll by
+display lines. While composing, Enter sends, Ctrl-N inserts a newline, and
+Up/Down move through wrapped lines. The editor grows to four rows and scrolls
+with the cursor; Escape leaves the editor without discarding the draft.
+The top bar shows connection state, known nodes, unread messages and (on wider
+terminals) cumulative interface RX/TX totals in KiB.
+
 In Browser, press `i` to request identification for a restricted page, then
 Enter to confirm or Escape to cancel. Your public identity is disclosed only
 to that node for this session. Following a link to another node switches back
