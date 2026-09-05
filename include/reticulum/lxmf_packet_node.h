@@ -15,6 +15,7 @@ typedef struct {
     uint64_t ingress, malformed, ifac_rejected, announces, learned_announces;
     uint64_t packet_types[4], other_destinations, local_data, local_other;
     uint64_t unsupported_data_layout;
+    uint64_t pending_senders, expired_pending;
     lxmf_status_t last_message_status;
     rns_status_t last_send_status;
 } lxmf_packet_node_stats_t;
@@ -27,7 +28,8 @@ void lxmf_packet_node_destroy(lxmf_packet_node_t *node);
 const uint8_t *lxmf_packet_node_address(const lxmf_packet_node_t *node);
 rns_status_t lxmf_packet_node_announce(lxmf_packet_node_t *node, uint64_t unix_seconds);
 /* Caller dispatches complete, IFAC-free Reticulum packets, not PHY frames.
- * Unknown signers are rejected without proof; announce sender before sending.
+ * Up to four unknown-signer packets are retained without proof for five
+ * minutes, then revalidated after a verified announce. No unverified preview.
  * Duplicate cache is bounded and volatile; this is not a durable inbox. */
 rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *node,
     const uint8_t *packet, size_t length);

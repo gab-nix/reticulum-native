@@ -5,11 +5,14 @@
 #include "reticulum/destination.h"
 #include "reticulum/packet.h"
 #include "reticulum/proof.h"
+#include "reticulum/hal.h"
 #include <assert.h>
 #include <string.h>
 static uint8_t record[105], sent[500];
 static size_t record_length, sent_length;
 static unsigned messages;
+static uint64_t now_ms;
+static rns_status_t test_clock(void *context, uint64_t *now) { (void)context; *now = now_ms; return RNS_OK; }
 static rns_status_t write_status = RNS_OK;
 static rns_status_t read_record(void *c, const char *key, uint8_t *out, size_t cap, size_t *len) {
     (void)c; assert(!strcmp(key, "identity"));
@@ -36,6 +39,9 @@ static void message(void *c, const lxmf_message_t *m) {
     (void)c; assert(m->content.len == 5 && !memcmp(m->content.data, "hello", 5)); ++messages;
 }
 int main(void) {
+    rns_platform_ops_t platform = *rns_platform_current();
+    platform.monotonic_ms = test_clock;
+    assert(rns_platform_install(&platform) == RNS_OK);
     rns_storage_t *storage;
     rns_interface_t *radio;
     const rns_storage_ops_t storage_ops = {.read = read_record, .write_atomic = write_record, .remove = remove_record};
@@ -75,14 +81,18 @@ int main(void) {
     assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK && messages == 0);
     lxmf_packet_node_stats_t info; lxmf_packet_node_stats(n, &info);
     assert(info.unknown_senders == 1 && info.proofs_queued == 0);
+    assert(info.pending_senders == 1);
     uint8_t body[465], name[10], prefix[5] = {0}, ann[500]; size_t ann_length;
     rns_packet p = {.packet_type = 1, .data = body};
-    memcpy(p.destination_hash, m.source, 16);
-    assert(rns_destination_name_hash("lxmf", aspects, 1, name));
-    assert(rns_announce_build(&sender, m.source, name, prefix, 1234, NULL, NULL, 0,
+    const char *node_aspects[] = {"node"};
+    assert(rns_destination_hash(&sender, "nomadnetwork", node_aspects, 1, p.destination_hash));
+    assert(rns_destination_name_hash("nomadnetwork", node_aspects, 1, name));
+    assert(rns_announce_build(&sender, p.destination_hash, name, prefix, 1234, NULL, NULL, 0,
         body, sizeof(body), &p.data_length, &p.context_flag));
     assert(rns_packet_encode(&p, ann, sizeof(ann), &ann_length));
     assert(lxmf_packet_node_receive(n, ann, ann_length) == RNS_OK);
+    assert(messages == 1);
+    lxmf_packet_node_stats(n, &info); assert(info.pending_senders == 0 && info.proofs_queued == 1);
     assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK && messages == 1);
     rns_packet proof; uint8_t hash[32];
     assert(rns_packet_decode(&proof, sent, sent_length) && proof.packet_type == 3);
@@ -90,12 +100,12 @@ int main(void) {
     assert(!memcmp(proof.destination_hash, hash, 16));
     assert(rns_proof_validate(&local, hash, proof.data, proof.data_length));
     assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK && messages == 1);
-    lxmf_packet_node_stats(n, &info); assert(info.duplicates == 1 && info.proofs_queued == 2);
+    lxmf_packet_node_stats(n, &info); assert(info.duplicates == 2 && info.proofs_queued == 3);
     wire[wire_length - 1] ^= 1;
     assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK && messages == 1);
-    lxmf_packet_node_stats(n, &info); assert(info.rejected == 2 && info.proofs_queued == 2);
-    assert(info.ingress == 5 && info.announces == 1 && info.learned_announces == 1);
-    assert(info.packet_types[0] == 4 && info.local_data == 4);
+    lxmf_packet_node_stats(n, &info); assert(info.rejected == 2 && info.proofs_queued == 3);
+    assert(info.ingress == 6 && info.announces == 1 && info.learned_announces == 1);
+    assert(info.packet_types[0] == 5 && info.local_data == 5);
     assert(lxmf_packet_node_receive(n, NULL, 0) == RNS_ERROR_PROTOCOL);
     uint8_t invalid[] = {0x80};
     assert(lxmf_packet_node_receive(n, invalid, sizeof(invalid)) == RNS_ERROR_PROTOCOL);
@@ -114,7 +124,7 @@ int main(void) {
     assert(rns_packet_encode(&p, ann, sizeof(ann), &ann_length));
     assert(lxmf_packet_node_receive(n, ann, ann_length) == RNS_OK);
     lxmf_packet_node_stats(n, &info);
-    assert(info.ingress == 12 && info.malformed == 2 && info.ifac_rejected == 1);
+    assert(info.ingress == 13 && info.malformed == 2 && info.ifac_rejected == 1);
     assert(info.other_destinations == 1 && info.unsupported_packets == 1);
     assert(info.unsupported_data_layout == 1 && info.local_other == 1);
     lxmf_packet_node_destroy(n);
@@ -127,8 +137,23 @@ int main(void) {
     assert(lxmf_packet_node_announce(n, 1236) == RNS_ERROR_IO);
     write_status = RNS_OK;
     lxmf_packet_node_destroy(n);
+    assert(lxmf_packet_node_create(storage, radio, message, NULL, &n) == RNS_OK);
+    for (unsigned i = 0; i < 5; ++i) {
+        m.timestamp = 2000 + i;
+        assert(lxmf_opportunistic_packet_pack_ratchet(&m, &sender, &local, ratchet,
+            wire, sizeof(wire), &wire_length) == LXMF_OK);
+        assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK);
+    }
+    lxmf_packet_node_stats(n, &info);
+    assert(info.pending_senders == 4 && info.proofs_queued == 0);
+    now_ms = 300000;
+    assert(lxmf_packet_node_receive(n, NULL, 0) == RNS_ERROR_PROTOCOL);
+    lxmf_packet_node_stats(n, &info);
+    assert(info.pending_senders == 0 && info.expired_pending == 4);
+    lxmf_packet_node_destroy(n);
     record[0] = 2;
     assert(lxmf_packet_node_create(storage, radio, message, NULL, &n) == RNS_ERROR_PROTOCOL && n == NULL);
     rns_interface_destroy(radio); rns_storage_destroy(storage);
+    rns_platform_restore_default();
     return 0;
 }

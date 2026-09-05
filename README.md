@@ -95,8 +95,10 @@ For the first message test, announce the sender first, then send a short
 an explicit proof and a 30-second plaintext OLED preview in large 10x14-pixel
 letters. Longer previews cycle through 40-character pages every four seconds;
 unsupported Unicode glyphs display as `?`. Packet contents are
-never logged. Unknown senders are rejected until their verified delivery
-announce arrives. Direct links/resources, large messages, persistent inbox,
+never logged. Up to four unknown-sender packets are held in RAM and remain
+eligible for revalidation for five minutes. A verified announce under any
+service for that identity can supply the missing key; no unverified message is
+shown or proved. Direct links/resources, large messages, persistent inbox,
 durable replay protection, ratchet rotation and stamp enforcement are not
 supported by this basic firmware profile. Physical TX/LXMF verification remains
 pending. The full UART shell and full Reticulum runtime are not yet connected.
