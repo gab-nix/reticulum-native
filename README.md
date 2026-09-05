@@ -99,8 +99,8 @@ Chats retains sender-grouped history. Unknown-sender integration is in progress:
 the separate Unverified view labels claimed identities, hides invalid-signature
 content and requires confirmation for deletion. Saved encrypted packets can be
 rechecked after verified announces without acknowledging unknown senders.
-The updated firmware still requires an ESP-IDF build and physical acceptance;
-host tests alone do not establish this behavior on the board.
+The updated firmware compiles with ESP-IDF 5.5.4, but still requires physical
+acceptance; host tests and compilation do not establish this behavior on the board.
 
 History is **unencrypted on flash** in this development profile. Deletion is
 logical journal deletion, not guaranteed forensic erasure. Clear View does not
