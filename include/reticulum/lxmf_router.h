@@ -129,6 +129,10 @@ typedef struct {
     rns_ratchet_store_t *ratchet_store;
     lxmf_clock_fn wall_clock;
     void *wall_clock_context;
+    /* Zero selects 300 seconds. Persisted deadlines count offline time.
+     * Without wall_clock, the platform wall clock is used for discovery.
+     * Requires a stable wall clock: backward adjustments extend the wait. */
+    uint32_t identity_discovery_timeout_seconds;
     /* Zero disables inbound stamp enforcement. Costs 1..254 accept either a
      * valid issued-ticket stamp or a proof-of-work stamp. */
     uint8_t inbound_stamp_cost;
@@ -223,6 +227,8 @@ typedef struct {
     lxmf_stamp_job_t *stamp_job;
     lxmf_pn_session_t *session;
     uint32_t attempt;
+    uint64_t storage_retry_at_ms;
+    lxmf_status_t storage_error;
 } lxmf_router_propagation_slot_t;
 
 /* COMPLETE describes the finished network transaction. If result is non-OK
@@ -237,6 +243,8 @@ typedef struct {
     size_t accepted, duplicates, rejected;
     bool retain_on_node;
     bool active;
+    /* Accepted sync intent waiting for the current upload to release its slot. */
+    bool waiting_for_upload;
 } lxmf_router_propagation_sync_status_t;
 
 typedef struct {
@@ -308,7 +316,11 @@ lxmf_status_t lxmf_router_set_propagation_node(
     lxmf_router_t *router, const rns_identity *identity,
     const uint8_t destination[LXMF_DESTINATION_LENGTH], uint8_t stamp_cost);
 /* Starts one caller-polled list/download/ack transaction against the selected
- * verified propagation node. It is serialized with outbound uploads. Received
+ * verified propagation node. It is serialized with outbound uploads: an
+ * accepted request returns OK and waits for the current upload, then takes
+ * priority over subsequent uploads. Repeated starts return PENDING. Deferred
+ * intent is process-local and may be cancelled before a session is created.
+ * Received
  * ciphertext enters the normal inbound signature, stamp, block and durable
  * store path before it can be acknowledged. */
 lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,

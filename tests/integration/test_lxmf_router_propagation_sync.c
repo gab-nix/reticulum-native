@@ -307,7 +307,26 @@ int main(void) {
         &router, &node_identity, node_destination, 1u) == LXMF_OK);
 
     node.selected = 0u;
-    start_and_pump(client_runtime, node_runtime, &router, false, &status);
+    /* Reserve the upload slot without a network transfer: accepted sync intent
+     * must not allocate a second session or change its retain policy on repeat. */
+    router.propagation.used = true;
+    assert(lxmf_router_propagation_sync_start(&router, true) == LXMF_OK);
+    assert(lxmf_router_propagation_sync_status(&router, &status) == LXMF_OK);
+    assert(status.active && status.waiting_for_upload && status.retain_on_node);
+    assert(router.propagation_sync.session == NULL);
+    assert(lxmf_router_propagation_sync_start(&router, false) == LXMF_ERR_PENDING);
+    assert(lxmf_router_set_propagation_node(&router, &second_node,
+        second_node_destination, 1u) == LXMF_ERR_PENDING);
+    assert(lxmf_router_propagation_sync_cancel(&router) == LXMF_OK);
+    assert(router.propagation.used); /* Cancelling sync must not cancel upload. */
+    assert(lxmf_router_propagation_sync_status(&router, &status) == LXMF_OK);
+    assert(!status.active && !status.waiting_for_upload);
+    assert(status.state == LXMF_PN_CANCELLED);
+    assert(lxmf_router_propagation_sync_start(&router, false) == LXMF_OK);
+    router.propagation.used = false;
+    /* Polling starts the deferred transaction without another user action. */
+    pump(client_runtime, node_runtime, &router, &status);
+    assert(!status.waiting_for_upload);
     assert(status.state == LXMF_PN_COMPLETE && status.result == LXMF_OK);
     assert(status.accepted == 1u && status.duplicates == 0u &&
            status.rejected == 0u && status.acknowledged == 1u);
@@ -326,7 +345,14 @@ int main(void) {
     uint8_t outbound_id[LXMF_MESSAGE_ID_LENGTH];
     queue_propagated(&store, &local, local_destination,
                      client.sender_destination, outbound_id);
+    router.propagation.used = true;
     assert(lxmf_router_propagation_sync_start(&router, false) == LXMF_OK);
+    router.propagation.used = false;
+    lxmf_router_poll_result_t scheduled;
+    assert(lxmf_router_poll(&router, 1u, &scheduled) == LXMF_OK);
+    assert(router.propagation_sync.status.active);
+    assert(!router.propagation_sync.status.waiting_for_upload);
+    assert(!router.propagation.used); /* The next upload cannot leapfrog sync. */
     assert(lxmf_router_send_message(&router, outbound_id) == LXMF_ERR_PENDING);
     lxmf_delivery_metadata_t outbound_delivery;
     assert(lxmf_store_read_delivery(&store, outbound_id,

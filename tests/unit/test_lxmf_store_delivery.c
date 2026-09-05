@@ -51,6 +51,30 @@ static void append_v2_message(const char *path) {
     assert(close(descriptor) == 0);
 }
 
+/* Synthetic previous-generation put and delivery-update records. */
+static void append_v4_message(const char *path) {
+    uint8_t payload[134] = {0};
+    uint8_t header[16] = {'L', 'X', 'M', 'S', 1u, 8u, 0u, 0u};
+    payload[0] = 0x94u;
+    payload[72] = (uint8_t)LXMF_DELIVERY_QUEUED;
+    payload[82] = (uint8_t)LXMF_DELIVERY_METHOD_DIRECT;
+    payload[84] = (uint8_t)LXMF_QUEUE_REASON_PEER_IDENTITY;
+    put32(header + 8, sizeof payload);
+    put32(header + 12, crc32_bytes(payload, sizeof payload));
+    int fd = open(path, O_WRONLY | O_APPEND);
+    assert(fd >= 0);
+    assert(write(fd, header, sizeof header) == (ssize_t)sizeof header);
+    assert(write(fd, payload, sizeof payload) == (ssize_t)sizeof payload);
+    uint8_t update[84] = {0x94u};
+    memcpy(update + 32, payload + 82, 52u);
+    header[5] = 7u;
+    put32(header + 8, sizeof update);
+    put32(header + 12, crc32_bytes(update, sizeof update));
+    assert(write(fd, header, sizeof header) == (ssize_t)sizeof header);
+    assert(write(fd, update, sizeof update) == (ssize_t)sizeof update);
+    assert(close(fd) == 0);
+}
+
 static void assert_metadata(const lxmf_delivery_metadata_t *delivery,
                             uint32_t attempts,
                             lxmf_queue_reason_t queue_reason) {
@@ -59,6 +83,7 @@ static void assert_metadata(const lxmf_delivery_metadata_t *delivery,
     assert(delivery->attempts == attempts);
     assert(delivery->queue_reason == queue_reason);
     assert(delivery->retry_at_ms == UINT64_C(987654321));
+    assert(delivery->identity_deadline == UINT64_C(1234567890));
     assert(delivery->progress == 456789u);
     assert(delivery->has_proof_id);
     assert(delivery->proof_id[0] == 0xa5u && delivery->proof_id[31] == 0x5au);
@@ -71,6 +96,7 @@ int main(void) {
     assert(close(descriptor) == 0);
 
     append_v2_message(path);
+    append_v4_message(path);
     lxmf_store_t store = {0};
     assert(lxmf_store_open(&store, path) == LXMF_OK);
     uint8_t legacy_id[LXMF_MESSAGE_ID_LENGTH] = {0x91u};
@@ -81,6 +107,12 @@ int main(void) {
     assert(legacy.status == LXMF_DELIVERY_SENT);
     assert(legacy.delivery.desired_method == LXMF_DELIVERY_METHOD_UNKNOWN);
     assert(legacy.delivery.attempts == 0u && !legacy.delivery.has_proof_id);
+    assert(legacy.delivery.identity_deadline == 0u);
+    uint8_t v4_id[32] = {0x94u};
+    lxmf_store_message_t v4;
+    assert(lxmf_store_read(&store, v4_id, &v4, content, sizeof content) == LXMF_OK);
+    assert(v4.delivery.identity_deadline == 0u);
+    assert(v4.delivery.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY);
 
     lxmf_store_message_t message = {0};
     message.message_id[0] = 0x41u;
@@ -95,6 +127,7 @@ int main(void) {
     message.delivery.attempts = 3u;
     message.delivery.queue_reason = LXMF_QUEUE_REASON_LINK;
     message.delivery.retry_at_ms = UINT64_C(987654321);
+    message.delivery.identity_deadline = UINT64_C(1234567890);
     message.delivery.progress = 456789u;
     message.delivery.has_proof_id = true;
     message.delivery.proof_id[0] = 0xa5u;
