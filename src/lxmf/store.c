@@ -285,9 +285,14 @@ static lxmf_status_t scan(store_impl *s) {
       break;
     if (got != sizeof h)
       goto recover;
-    if (memcmp(h, "LXMS", 4) != 0 || h[4] != 1 || h[5] < TYPE_PUT ||
-        h[5] > TYPE_DELIVERY_V2)
+    if (memcmp(h, "LXMS", 4) != 0)
       goto recover;
+    /* Unknown versions, record types or flags may carry durable state this
+     * reader cannot interpret. Refuse them without truncating the journal;
+     * they are not evidence of an interrupted write. */
+    if (h[4] != 1 || h[5] < TYPE_PUT || h[5] > TYPE_DELIVERY_V2 ||
+        h[6] != 0u || h[7] != 0u)
+      return LXMF_ERR_FORMAT;
     uint32_t n = get32(h + 8);
     if (n == 0 || n > MAX_PAYLOAD ||
         good + HEADER_SIZE + n > LXMF_STORE_MAX_FILE_SIZE)
