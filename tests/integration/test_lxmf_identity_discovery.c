@@ -67,11 +67,14 @@ int main(void) {
     bool inserted;
     assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
     uint64_t now = 1000u;
+    uint64_t wall = 100u;
     const rns_identity *known = NULL;
     lxmf_router_config_t options = {.identity = &identity, .store = &store,
         .runtime = runtime, .resolve_identity = unknown,
         .resolve_context = &known,
-        .monotonic_clock = fake_now, .monotonic_clock_context = &now};
+        .monotonic_clock = fake_now, .monotonic_clock_context = &now,
+        .wall_clock = fake_now, .wall_clock_context = &wall,
+        .identity_discovery_timeout_seconds = 30u};
     lxmf_router_t router; assert(lxmf_router_init(&router, &options) == LXMF_OK);
     assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
     for (size_t i = 0; i < 2u; ++i) receive_count(peers[i], 1u);
@@ -87,6 +90,47 @@ int main(void) {
     lxmf_store_message_t resumed;
     assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
     assert(resumed.delivery.queue_reason == LXMF_QUEUE_REASON_PATH);
+    assert(resumed.delivery.identity_deadline == 0u);
+    known = NULL;
+    message.message_id[0] = 2u;
+    assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
+    assert(resumed.delivery.identity_deadline == 130u);
+    lxmf_router_destroy(&router); lxmf_store_close(&store);
+    wall = 129u; now = 1u; /* A reboot cannot replenish the discovery budget. */
+    assert(lxmf_store_open(&store, path) == LXMF_OK);
+    assert(lxmf_router_init(&router, &options) == LXMF_OK);
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    wall = 130u;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_TIMEOUT);
+    assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
+    assert(resumed.status == LXMF_DELIVERY_FAILED);
+    assert(resumed.delivery.queue_reason == LXMF_QUEUE_REASON_IDENTITY_TIMEOUT);
+    assert(resumed.delivery.attempts == 0u);
+    /* A crash between terminal metadata and status writes is repaired, not
+     * interpreted as permission to retry. */
+    assert(lxmf_store_update_status(&store, message.message_id, LXMF_DELIVERY_QUEUED) == LXMF_OK);
+    lxmf_router_destroy(&router); lxmf_store_close(&store);
+    assert(lxmf_store_open(&store, path) == LXMF_OK);
+    assert(lxmf_router_init(&router, &options) == LXMF_OK);
+    assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
+    assert(resumed.status == LXMF_DELIVERY_FAILED);
+    lxmf_router_poll_result_t result;
+    assert(lxmf_router_poll(&router, 8u, &result) == LXMF_OK);
+    assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
+    assert(resumed.status == LXMF_DELIVERY_FAILED);
+    /* Explicit retry starts a new budget without inventing a transmission. */
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
+    assert(resumed.delivery.identity_deadline == 160u);
+    assert(resumed.delivery.attempts == 0u);
+    /* Backward wall-clock changes are an explicit limitation of this profile:
+     * do not silently replace the persisted deadline on every poll. */
+    wall = 120u;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
+    assert(resumed.delivery.identity_deadline == 160u);
     lxmf_router_destroy(&router); lxmf_store_close(&store);
     rns_runtime_destroy(runtime);
     for (size_t i = 0; i < 2u; ++i) rns_udp_endpoint_destroy(peers[i]);

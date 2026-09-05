@@ -126,6 +126,11 @@ static void test_empty_network_and_filtered_contact(void) {
     assert(tui_dispatch_key(state, 'x'));
     assert(state->field == TUI_FIELD_NONE && state->overlay == TUI_OVERLAY_NONE);
     assert(!state->contacts[state->selected].blocked);
+    assert(tui_dispatch_key(state, 'l'));
+    assert(tui_dispatch_key(state, 'k'));
+    assert(state->scroll == 0u && state->selected == 0u);
+    assert(tui_dispatch_key(state, 27));
+    assert(!state->history_focused);
     state_destroy(state);
 }
 
@@ -678,7 +683,96 @@ static void test_address_qr_shortcuts(void) {
     state_destroy(state);
 }
 
+static void command_type(tui_state_t *state, const char *text) {
+    assert(tui_dispatch_key(state, ':') && state->command_active);
+    for (size_t i = 0u; text[i] != '\0'; ++i)
+        assert(tui_dispatch_key(state, (unsigned char)text[i]));
+}
+
+static void test_command_mode(void) {
+    tui_state_t *state = state_create();
+    command_type(state, "network");
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->screen == TUI_SCREEN_NETWORK && !state->command_active);
+    command_type(state, "!touch forbidden");
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->command_active && strstr(state->status, "Unknown command") != NULL);
+    assert(state->screen == TUI_SCREEN_NETWORK);
+    assert(tui_dispatch_key(state, 27) && !state->command_active);
+    command_type(state, "chats");
+    assert(tui_dispatch_key(state, '\n') && state->screen == TUI_SCREEN_CONVERSATIONS);
+    assert(tui_dispatch_key(state, ':'));
+    assert(tui_dispatch_key(state, KEY_UP));
+    assert(strcmp(state->command.text, "chats") == 0);
+    assert(tui_dispatch_key(state, 27));
+    state->thread_layout_valid = true; state->thread_scroll_limit = 20u;
+    assert(tui_dispatch_key(state, 21) && state->scroll == 5u);
+    assert(tui_dispatch_key(state, 4) && state->scroll == 0u);
+    state->field = TUI_FIELD_COMPOSE;
+    assert(tui_dispatch_key(state, ':'));
+    assert(!state->command_active && strcmp(state->composer.text, ":") == 0);
+    assert(tui_dispatch_key(state, 27));
+    command_type(state, "announce");
+    assert(tui_dispatch_key(state, '\n') && !state->command_active);
+    assert(strstr(state->status, "offline") != NULL);
+    assert(strcmp(state->composer.text, ":") == 0);
+    state->overlay = TUI_OVERLAY_HELP;
+    assert(tui_dispatch_key(state, ':') && !state->command_active);
+    assert(tui_dispatch_key(state, 27));
+    command_type(state, "q");
+    assert(!tui_dispatch_key(state, '\n'));
+    state_destroy(state);
+}
+
+static void test_chat_pane_navigation(void) {
+    tui_state_t *state = state_create();
+    state->thread_layout_valid = true;
+    state->thread_scroll_limit = 120u;
+    assert(tui_dispatch_key(state, 'l'));
+    assert(state->history_focused && state->screen == TUI_SCREEN_CONVERSATIONS);
+    assert(tui_dispatch_key(state, 'k'));
+    assert(state->scroll == 1u && state->selected == 0u);
+    assert(tui_dispatch_key(state, KEY_UP));
+    assert(state->scroll == 2u);
+    assert(tui_dispatch_key(state, 'j'));
+    assert(state->scroll == 1u);
+    assert(tui_dispatch_key(state, KEY_HOME));
+    assert(state->scroll == 120u);
+    assert(tui_dispatch_key(state, 'k'));
+    assert(state->scroll == 120u);
+    assert(tui_dispatch_key(state, KEY_END));
+    assert(tui_dispatch_key(state, 'j'));
+    assert(state->scroll == 0u);
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->field == TUI_FIELD_COMPOSE);
+    for (const char *s = "hjkl"; *s; ++s) assert(tui_dispatch_key(state, *s));
+    assert(strcmp(tui_editor_text(&state->composer), "hjkl") == 0);
+    assert(tui_dispatch_key(state, 27));
+    assert(state->history_focused);
+    assert(tui_dispatch_key(state, 27));
+    assert(!state->history_focused);
+    assert(tui_dispatch_key(state, 'j'));
+    assert(state->selected == 1u);
+    assert(tui_dispatch_key(state, KEY_RIGHT));
+    assert(state->history_focused);
+    assert(tui_dispatch_key(state, KEY_LEFT));
+    assert(!state->history_focused);
+    assert(tui_dispatch_key(state, '\t'));
+    assert(state->history_focused);
+    state->overlay = TUI_OVERLAY_HELP;
+    assert(tui_dispatch_key(state, 'h'));
+    assert(state->history_focused);
+    assert(tui_dispatch_key(state, 27));
+    assert(tui_dispatch_key(state, 'h'));
+    assert(!state->history_focused);
+    assert(tui_dispatch_key(state, 'L'));
+    assert(state->screen == TUI_SCREEN_LOGS);
+    state_destroy(state);
+}
+
 int main(void) {
+    test_chat_pane_navigation();
+    test_command_mode();
     test_address_qr_shortcuts();
     assert(!tui_dispatch_key(NULL, '\n'));
     test_screen_scoping();
