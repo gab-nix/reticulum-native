@@ -605,6 +605,15 @@ typedef struct {
 static bool recover_interrupted(void *context,
                                 const lxmf_store_message_t *message) {
     recovery_context_t *recovery = context;
+    if ((message->status == LXMF_DELIVERY_QUEUED || message->status == LXMF_DELIVERY_FAILED) &&
+        message->delivery.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY &&
+        message->delivery.retry_at_ms != 0u) {
+        lxmf_delivery_metadata_t discovery = message->delivery;
+        discovery.retry_at_ms = 0u;
+        recovery->status = lxmf_store_update_delivery(recovery->router->config.store,
+            message->message_id, &discovery);
+        return recovery->status == LXMF_OK;
+    }
     bool interrupted = message->status == LXMF_DELIVERY_SENDING ||
                        (message->status == LXMF_DELIVERY_SENT &&
                         message->delivery.has_proof_id);
@@ -1515,6 +1524,28 @@ lxmf_status_t lxmf_router_send_message(
         stored.delivery.retry_at_ms != 0U &&
         router_monotonic_ms(router) < stored.delivery.retry_at_ms)
         return LXMF_ERR_PENDING;
+    const rns_identity *destination = router->config.resolve_identity(
+        router->config.resolve_context, stored.destination);
+    /* Discovery must also run after restart/retry, not only from the initial
+     * application send action. Check identity before the retry timer so a
+     * freshly verified announce can immediately unblock this message. */
+    if (destination == NULL) {
+        uint64_t now = router_monotonic_ms(router);
+        if (stored.delivery.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY &&
+            stored.delivery.retry_at_ms > now) return LXMF_ERR_PENDING;
+        if (router->config.runtime != NULL)
+            (void)rns_runtime_request_path(router->config.runtime, stored.destination);
+        stored.delivery.desired_method = method;
+        stored.delivery.queue_reason = LXMF_QUEUE_REASON_PEER_IDENTITY;
+        stored.delivery.retry_at_ms = now > UINT64_MAX - 15000u ? UINT64_MAX : now + 15000u;
+        if (lxmf_store_update_delivery(router->config.store, id, &stored.delivery) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
+        if (lxmf_store_update_status(router->config.store, id, LXMF_DELIVERY_QUEUED) != LXMF_OK)
+            return LXMF_ERR_CRYPTO;
+        report_event(router, id, method, LXMF_DELIVERY_QUEUED,
+                     LXMF_QUEUE_REASON_PEER_IDENTITY, LXMF_ERR_PENDING, stored.delivery.attempts);
+        return LXMF_ERR_PENDING;
+    }
     stored.delivery.desired_method = method;
     stored.delivery.actual_method = LXMF_DELIVERY_METHOD_UNKNOWN;
     stored.delivery.queue_reason = LXMF_QUEUE_REASON_NONE;
@@ -1525,19 +1556,6 @@ lxmf_status_t lxmf_router_send_message(
     if (lxmf_store_update_delivery(router->config.store, id,
                                    &stored.delivery) != LXMF_OK)
         return LXMF_ERR_CRYPTO;
-    const rns_identity *destination = router->config.resolve_identity(
-        router->config.resolve_context, stored.destination);
-    /* A missing announce is a normal discovery state, not a delivery failure. */
-    if (destination == NULL) {
-        stored.delivery.queue_reason = LXMF_QUEUE_REASON_PEER_IDENTITY;
-        if (lxmf_store_update_delivery(router->config.store, id,
-                                       &stored.delivery) != LXMF_OK)
-            return LXMF_ERR_CRYPTO;
-        report_event(router, id, method,
-                     LXMF_DELIVERY_QUEUED, LXMF_QUEUE_REASON_PEER_IDENTITY,
-                     LXMF_ERR_PENDING, stored.delivery.attempts);
-        return LXMF_ERR_PENDING;
-    }
     lxmf_status_t stamp_status = prepare_outbound_stamp(router, &stored, id);
     if (stamp_status != LXMF_OK) {
         stored.delivery.queue_reason = LXMF_QUEUE_REASON_STAMP;
@@ -1779,7 +1797,6 @@ lxmf_status_t lxmf_router_cancel_message(
 typedef struct {
     uint8_t ids[LXMF_STORE_MAX_MESSAGES][LXMF_MESSAGE_ID_LENGTH];
     size_t count;
-    size_t limit;
 } pending_messages_t;
 
 static bool collect_pending(void *context, const lxmf_store_message_t *message) {
@@ -1787,10 +1804,10 @@ static bool collect_pending(void *context, const lxmf_store_message_t *message) 
     if (message->delivery.queue_reason != LXMF_QUEUE_REASON_CANCELLED &&
         message->delivery.queue_reason != LXMF_QUEUE_REASON_RETRY_EXHAUSTED &&
         (message->status == LXMF_DELIVERY_QUEUED ||
-         message->status == LXMF_DELIVERY_FAILED) && pending->count < pending->limit)
+         message->status == LXMF_DELIVERY_FAILED) && pending->count < LXMF_STORE_MAX_MESSAGES)
         memcpy(pending->ids[pending->count++], message->message_id,
                LXMF_MESSAGE_ID_LENGTH);
-    return pending->count < pending->limit;
+    return pending->count < LXMF_STORE_MAX_MESSAGES;
 }
 
 lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
@@ -1811,17 +1828,20 @@ lxmf_status_t lxmf_router_poll(lxmf_router_t *router, size_t max_messages,
         memset(slot, 0, sizeof *slot);
     }
     if (max_messages == 0u) return LXMF_OK;
-    pending_messages_t pending = {.limit = max_messages};
+    pending_messages_t pending = {0};
     lxmf_status_t status = lxmf_store_list(router->config.store, collect_pending,
                                            &pending);
     if (status != LXMF_OK) return status;
-    for (size_t i = 0; i < pending.count; i++) {
-        status = lxmf_router_send_message(router, pending.ids[i]);
+    size_t count = pending.count < max_messages ? pending.count : max_messages;
+    size_t start = pending.count != 0u ? router->pending_cursor % pending.count : 0u;
+    for (size_t i = 0; i < count; i++) {
+        status = lxmf_router_send_message(router, pending.ids[(start + i) % pending.count]);
         result->attempted++;
         if (status == LXMF_OK) result->sent++;
         else if (status == LXMF_ERR_PENDING) result->deferred++;
         else result->failed++;
     }
+    router->pending_cursor = pending.count != 0u ? (start + count) % pending.count : 0u;
     return LXMF_OK;
 }
 

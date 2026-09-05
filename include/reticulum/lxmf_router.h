@@ -267,6 +267,9 @@ struct lxmf_router {
                              [LXMF_MESSAGE_ID_LENGTH];
     size_t paper_transient_count;
     size_t next_paper_transient;
+    /* Round-robin pending queue position; one unavailable peer must not
+     * monopolize a caller's bounded polling batch. */
+    size_t pending_cursor;
 };
 
 typedef struct {
