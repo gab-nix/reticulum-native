@@ -50,6 +50,9 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior; integration test IDs are distinct from random wire hashes |
 | Direct resource delivery | IMPLEMENTED | Persistent transfer resume |
 | Delivery proofs and durable queue state | IMPLEMENTED | Complete offline retry scheduling |
+| Missing-peer discovery retries and queue fairness | IMPLEMENTED | `test_lxmf_identity_discovery` checks 15-second retry throttling, immediate identity-arrival recovery and broadcast fanout over two UDP interfaces; `test_lxmf_router_recovery` checks round-robin polling, failed-message recovery and restart clock rebasing without transmission-attempt inflation. `test_tui_state` checks background queue events do not overwrite Network actions. Finite discovery deadlines remain WIP |
+| Local announced-service path responses | IMPLEMENTED | `test_runtime_path_response` verifies fresh signatures, app-data/ratchet retention, ingress-only replies, duplicate/cooldown limits and last-registration cleanup. Explicitly announced registered services only; cached-route transport responses remain WIP |
+| Identity resolution after Network entry expiry | IMPLEMENTED | `test_tui_state` retains a cryptographically learned runtime identity after registry eviction, validates its LXMF destination hash, and rejects unknown destinations; durable identity recovery after restart remains WIP |
 | Incoming block, size and stamp policies | IMPLEMENTED | Complete policy controls |
 | Ratchet history | WIP | Rotation and enforcement parity |
 | Stamps and asynchronous stamp generation | WIP | Complete cancellation and peer-policy behavior |
@@ -106,13 +109,16 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 
 | Acceptance behavior | Status | Evidence and remaining work |
 | --- | --- | --- |
-| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Seven opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
+| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Eleven opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
 | Direct packet and multi-segment LXMF, UDP/TCP | VERIFIED | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp` pass bidirectionally with pinned Python; loss/restart scenarios remain outside this evidence |
+| Bidirectional local-service path discovery, UDP/TCP | VERIFIED | `interop_discovery_udp/tcp` prove stock Python requests recover the C identity/path after losing its startup announce, and C requests discover a never-announced Python destination; public keys match in both directions. Multi-hop cached-route responses and adversarial discovery remain outside this evidence |
 | Bidirectional ticket exchange and stamped resource replies, UDP/TCP | VERIFIED | Direct drivers exchange signed ticket fields, then validate ticket-backed stamps for packet and multi-segment replies against pinned Python; renewal, expiry-boundary and restart scenarios remain outside this evidence |
 | Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
 | RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |
-| C browser to pinned Nomad page handler, UDP/TCP | IMPLEMENTED | `interop_browser_udp` and `interop_browser_tcp` validate small and resource-backed rendered pages; reverse-direction C hosting remains |
-| C browser executable-page form submissions, UDP/TCP | IMPLEMENTED | `interop_browser_udp/tcp` send two distinct MessagePack forms to pinned unmodified `Node.serve_page`; field/variable values and ignored keys checked; reverse C-host direction remains |
+| C browser to pinned Nomad page handler, UDP/TCP | IMPLEMENTED | `interop_browser_udp` and `interop_browser_tcp` validate small and resource-backed rendered pages; integrated stock TUI acceptance remains |
+| C browser executable-page form submissions, UDP/TCP | IMPLEMENTED | `interop_browser_udp/tcp` send two distinct MessagePack forms to pinned unmodified `Node.serve_page`; field/variable values and ignored keys checked; OS executable sandboxing remains separate |
+| Python client to C hosted page service, UDP/TCP | IMPLEMENTED | `interop_hosted_udp/tcp` check exact small/resource responses, two in-process executable-provider form results and anonymous denial/identified allowlist access; paired reverse browser tests cover protocol direction, not stock Nomad TUI rendering or OS executable sandboxing |
+| Bidirectional hosted page/request bytes, UDP/TCP | VERIFIED | Paired `interop_browser_udp/tcp` and `interop_hosted_udp/tcp` pass with pinned upstream for small/resource pages, form values, anonymous denial and identified access; evidence excludes complete TUI/hosting controls and OS execution policy |
 | Stock Nomad file acceptance | PLANNED | Add bidirectional client/host live drivers |
 | Complete keyboard workflow acceptance | WIP | Existing headless tests cover subsets; every screen/action needs mapped cases |
 | Remote hosted file transfer | PLANNED | Hosted files currently support local reads only; add upstream file metadata/resource exchange |
@@ -130,7 +136,9 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Provider API boundaries for embedded ports | IMPLEMENTED | ESP-IDF platform, NVS and crypto adapters exist; target CI compilation and a boot-time KAT are configured, but the crypto host test still uses an OpenSSL symmetric shim and no target/device result is recorded yet |
 | Heltec WiFi LoRa 32 V3.1 ESP-IDF scaffold and BSP descriptor | WIP | ESP-IDF build, hardware drivers and physical-board validation |
 | Pinned Semtech SX126x command driver dependency | IMPLEMENTED | Exact v2.5.0 sources, license, provenance and checksums are recorded; host command/HAL-boundary test passes, but the Heltec backend and hardware remain unverified |
+| Heltec V3.1 SX1262 low-level radio interface | IMPLEMENTED | Host simulations cover SPI command/read alignment, BUSY timing, modem profiles, calibration, health checks, IRQ/RX/TX state, bounded queues, recovery and statistics; ESP-IDF target CI and physical V3.1 RF validation remain required before `VERIFIED` |
 | Bounded RNode split-packet framing codec | IMPLEMENTED | Local boundary, malformed-fragment, duplicate, reorder, timeout, collision, sequence-reuse and callback-failure tests pass; stock RNode interoperability is not yet verified |
-| Heltec V3.1 SX1262, OLED and UART shell firmware | PLANNED | Implement the SPI/BUSY/DIO1/DIO2/DIO3 backend, radio owner task, OLED and shell; validate on physical hardware |
+| Heltec V3.1 OLED status/preview and bounded shell cores | IMPLEMENTED | Host simulations cover Vext/reset/I2C sequencing, display failure isolation, independent preview disable-and-clear, explicit zero-timeout behavior, malformed UTF-8, line/token/registry bounds and SHA-256-bound guarded invocations with mandatory secure randomness; ESP-IDF I2C/UART0 adapters, `app_main` integration and physical hardware remain WIP |
+| Heltec V3.1 SX1262, OLED and UART shell firmware integration | WIP | Connect the low-level radio and RNode framing to the Reticulum runtime, attach the OLED/shell cores to ESP-IDF I2C/UART0 adapters and application handlers, then validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |

@@ -131,5 +131,43 @@ int main(void) {
     assert(sending.delivery.retry_at_ms == 1020U);
     lxmf_store_close(&store);
     assert(unlink(path) == 0);
+    /* A missing first peer must not starve later messages in a one-item
+     * caller batch. Discovery timers advance, not transmission attempts. */
+    assert(lxmf_store_open(&store, path) == LXMF_OK);
+    for (uint8_t i = 1u; i <= 3u; ++i)
+        put_message(&store, i, i == 1u ? LXMF_DELIVERY_FAILED : LXMF_DELIVERY_QUEUED, 0u, false,
+                    LXMF_QUEUE_REASON_NONE, 0u);
+    assert(lxmf_router_init(&router, &config) == LXMF_OK);
+    lxmf_router_poll_result_t result;
+    for (size_t i = 0; i < 3u; ++i)
+        assert(lxmf_router_poll(&router, 1u, &result) == LXMF_OK && result.deferred == 1u);
+    for (uint8_t i = 1u; i <= 3u; ++i) {
+        lxmf_store_message_t waiting = read_message(&store, i, content);
+        assert(waiting.delivery.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY);
+        assert(waiting.status == LXMF_DELIVERY_QUEUED);
+        assert(waiting.delivery.attempts == 0u);
+        assert(waiting.delivery.retry_at_ms == monotonic_now + 15000u);
+    }
+    monotonic_now += 100u;
+    assert(lxmf_router_poll(&router, 3u, &result) == LXMF_OK && result.deferred == 3u);
+    sending = read_message(&store, 1u, content);
+    assert(sending.delivery.retry_at_ms == monotonic_now + 14900u);
+    monotonic_now += 15000u;
+    assert(lxmf_router_poll(&router, 3u, &result) == LXMF_OK);
+    sending = read_message(&store, 1u, content);
+    assert(sending.delivery.retry_at_ms == monotonic_now + 15000u);
+    lxmf_router_destroy(&router);
+    lxmf_store_close(&store);
+    monotonic_now = 1u; /* New boot must not inherit the old monotonic epoch. */
+    assert(lxmf_store_open(&store, path) == LXMF_OK);
+    assert(lxmf_router_init(&router, &config) == LXMF_OK);
+    sending = read_message(&store, 1u, content);
+    assert(sending.delivery.retry_at_ms == 0u);
+    assert(lxmf_router_poll(&router, 3u, &result) == LXMF_OK);
+    sending = read_message(&store, 1u, content);
+    assert(sending.delivery.retry_at_ms == 15001u);
+    lxmf_router_destroy(&router);
+    lxmf_store_close(&store);
+    assert(unlink(path) == 0);
     return 0;
 }

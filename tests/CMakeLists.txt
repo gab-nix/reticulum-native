@@ -37,6 +37,14 @@ add_executable(browser_live_driver interop/browser_live_driver.c)
 target_link_libraries(browser_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(browser_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(browser_live_driver)
+add_executable(hosted_live_driver interop/hosted_live_driver.c)
+target_link_libraries(hosted_live_driver PRIVATE reticulum::reticulum)
+target_compile_features(hosted_live_driver PRIVATE c_std_17)
+reticulum_set_project_warnings(hosted_live_driver)
+add_executable(discovery_live_driver interop/discovery_live_driver.c)
+target_link_libraries(discovery_live_driver PRIVATE reticulum::reticulum)
+target_compile_features(discovery_live_driver PRIVATE c_std_17)
+reticulum_set_project_warnings(discovery_live_driver)
 
 option(RETICULUM_PYTHON_INTEROP "Run opt-in pinned Python interoperability tests" OFF)
 if(RETICULUM_PYTHON_INTEROP)
@@ -50,6 +58,18 @@ if(RETICULUM_PYTHON_INTEROP)
         endif()
     endforeach()
     foreach(transport udp tcp)
+        add_test(NAME interop_discovery_${transport}
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_discovery_live.py
+                --reticulum ${RETICULUM_PYTHON_RNS}
+                --driver $<TARGET_FILE:discovery_live_driver> --transport ${transport})
+        set_tests_properties(interop_discovery_${transport} PROPERTIES
+            LABELS "interop;python;discovery;${transport}" TIMEOUT 90 RUN_SERIAL TRUE)
+        add_test(NAME interop_hosted_${transport}
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_hosted_live.py
+                --reticulum ${RETICULUM_PYTHON_RNS}
+                --driver $<TARGET_FILE:hosted_live_driver> --transport ${transport})
+        set_tests_properties(interop_hosted_${transport} PROPERTIES
+            LABELS "interop;python;hosting;${transport}" TIMEOUT 150 RUN_SERIAL TRUE)
         add_test(NAME interop_browser_${transport}
             COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_browser_live.py
                 --reticulum ${RETICULUM_PYTHON_RNS}
@@ -127,6 +147,27 @@ target_compile_features(test_heltec_v3_1_bsp PRIVATE c_std_17)
 reticulum_set_project_warnings(test_heltec_v3_1_bsp)
 add_test(NAME test_heltec_v3_1_bsp COMMAND test_heltec_v3_1_bsp)
 
+add_executable(test_heltec_status_ui
+    unit/test_heltec_status_ui.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_status_ui/heltec_status_ui.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_v3_1_bsp/heltec_wifi_lora_32_v3_1.c)
+target_include_directories(test_heltec_status_ui PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_status_ui/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_v3_1_bsp/include)
+target_compile_features(test_heltec_status_ui PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_status_ui)
+add_test(NAME test_heltec_status_ui COMMAND test_heltec_status_ui)
+
+add_executable(test_heltec_shell_core
+    unit/test_heltec_shell_core.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_shell_core/heltec_shell_core.c)
+target_include_directories(test_heltec_shell_core PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_shell_core/include)
+target_link_libraries(test_heltec_shell_core PRIVATE reticulum::reticulum)
+target_compile_features(test_heltec_shell_core PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_shell_core)
+add_test(NAME test_heltec_shell_core COMMAND test_heltec_shell_core)
+
 # Compile the exact vendored Semtech sources on the host and exercise their
 # public command/HAL boundary. This is not a substitute for an ESP-IDF build or
 # physical SX1262 validation.
@@ -146,6 +187,27 @@ target_link_libraries(test_semtech_sx126x PRIVATE semtech_sx126x_host)
 target_compile_features(test_semtech_sx126x PRIVATE c_std_17)
 reticulum_set_project_warnings(test_semtech_sx126x)
 add_test(NAME test_semtech_sx126x COMMAND test_semtech_sx126x)
+
+add_executable(test_heltec_sx1262_radio unit/test_heltec_sx1262_radio.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262/sx1262_bus.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262/sx1262_radio.c)
+target_include_directories(test_heltec_sx1262_radio PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262)
+target_link_libraries(test_heltec_sx1262_radio PRIVATE reticulum::reticulum)
+target_compile_features(test_heltec_sx1262_radio PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_sx1262_radio)
+add_test(NAME test_heltec_sx1262_radio COMMAND test_heltec_sx1262_radio)
+
+add_executable(test_heltec_sx1262_semtech unit/test_heltec_sx1262_semtech.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262/sx1262_semtech.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262/sx1262_radio.c)
+target_include_directories(test_heltec_sx1262_semtech PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262/include)
+target_link_libraries(test_heltec_sx1262_semtech PRIVATE reticulum::reticulum semtech_sx126x_host)
+target_compile_features(test_heltec_sx1262_semtech PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_sx1262_semtech)
+add_test(NAME test_heltec_sx1262_semtech COMMAND test_heltec_sx1262_semtech)
 
 reticulum_add_test(test_crypto unit/test_crypto.c)
 
@@ -290,8 +352,10 @@ reticulum_add_test(test_local_instance integration/test_local_instance.c)
 reticulum_add_test(test_runtime_local integration/test_runtime_local.c)
 reticulum_add_test(test_udp_lxmf integration/test_udp_lxmf.c)
 reticulum_add_test(test_runtime_receipt integration/test_runtime_receipt.c)
+reticulum_add_test(test_runtime_path_response integration/test_runtime_path_response.c)
 reticulum_add_test(test_lxmf_router_receipt integration/test_lxmf_router_receipt.c)
 reticulum_add_test(test_lxmf_router_recovery unit/test_lxmf_router_recovery.c)
+reticulum_add_test(test_lxmf_identity_discovery integration/test_lxmf_identity_discovery.c)
 reticulum_add_test(test_lxmf_router_direct integration/test_lxmf_router_direct.c)
 reticulum_add_test(test_runtime_inbound_link integration/test_runtime_inbound_link.c)
 reticulum_add_test(test_runtime_link_transport integration/test_runtime_link_transport.c)

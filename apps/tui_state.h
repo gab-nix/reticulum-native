@@ -18,6 +18,9 @@
 #include "reticulum/runtime.h"
 #include "reticulum/ratchet_store.h"
 
+/* Borrowed scratch identity: overwritten by the next resolution call. */
+const rns_identity *tui_state_resolve_peer(void *context, const uint8_t destination[16]);
+
 #define TUI_MAX_CONTACTS 64u
 #define TUI_MAX_MESSAGES 256u
 #define TUI_NOTE_MAX 48u

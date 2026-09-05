@@ -1,5 +1,7 @@
 #include "tui_state.h"
 #include "reticulum/destination.h"
+#include "reticulum/udp.h"
+#include "reticulum/hal.h"
 
 #include <assert.h>
 #include <fcntl.h>
@@ -667,6 +669,16 @@ static void test_router_events_update_visible_state(void) {
         .result = LXMF_OK
     };
     event.message_id[0] = 0x42u;
+    state->screen = TUI_SCREEN_NETWORK;
+    strcpy(state->status, "Selected node details");
+    event.state = LXMF_DELIVERY_QUEUED;
+    event.queue_reason = LXMF_QUEUE_REASON_PEER_IDENTITY;
+    tui_state_apply_router_event(state, &event);
+    assert(strcmp(state->status, "Selected node details") == 0);
+    assert(state->messages[0].value.status == LXMF_DELIVERY_QUEUED);
+    state->screen = TUI_SCREEN_CONVERSATIONS;
+    event.state = LXMF_DELIVERY_SENT;
+    event.queue_reason = LXMF_QUEUE_REASON_NONE;
     tui_state_apply_router_event(state, &event);
     assert(state->messages[0].value.status == LXMF_DELIVERY_SENT);
     assert(strstr(state->status, "awaiting delivery proof") != NULL);
@@ -811,7 +823,59 @@ static void test_drafts_follow_contacts_and_persist(void) {
     destroy_state(state);
 }
 
+static void test_identity_survives_registry_expiry(void) {
+    tui_state_t *state = make_state();
+    rns_config_t config; rns_config_init(&config);
+    rns_udp_endpoint_t *reservation = NULL;
+    rns_udp_address_t address;
+    assert(rns_udp_endpoint_create(&reservation, RNS_UDP_IPV4) == RNS_OK);
+    assert(rns_udp_bind(reservation, "127.0.0.1", 0u) == RNS_OK);
+    assert(rns_udp_local_address(reservation, &address) == RNS_OK);
+    rns_udp_endpoint_destroy(reservation);
+    config.interface_count = 1u;
+    config.interfaces[0].enabled = true;
+    config.interfaces[0].type = RNS_CONFIG_UDP;
+    config.interfaces[0].type_set = true;
+    strcpy(config.interfaces[0].name, "synthetic loopback");
+    strcpy(config.interfaces[0].listen_ip, "127.0.0.1");
+    strcpy(config.interfaces[0].forward_ip, "127.0.0.1");
+    config.interfaces[0].listen_port = address.port;
+    config.interfaces[0].forward_port = address.port;
+    assert(rns_runtime_create(&state->runtime, &config, NULL) == RNS_OK);
+    rns_identity peer;
+    assert(rns_identity_generate(&peer));
+    const char *aspects[] = {"delivery"};
+    uint8_t hash[16];
+    assert(rns_destination_hash(&peer, "lxmf", aspects, 1u, hash));
+    assert(rns_runtime_announce(state->runtime, &peer, "lxmf", aspects, 1u, NULL, 0u) == RNS_OK);
+    rns_path_entry path = {0};
+    uint64_t start, now;
+    assert(rns_hal_monotonic_ms(&start) == RNS_OK);
+    do {
+        size_t processed;
+        assert(rns_runtime_poll(state->runtime, 8u, &processed) == RNS_OK);
+        assert(rns_hal_monotonic_ms(&now) == RNS_OK);
+    } while (rns_runtime_path_lookup(state->runtime, hash, &path) != RNS_OK && now - start < 1000u);
+    assert(path.has_identity);
+    rns_node_registry_init(&state->nodes, 1.0);
+    rns_node_record record = {0};
+    memcpy(record.destination, hash, 16u); record.expires_at = 1.0;
+    assert(rns_node_registry_upsert(&state->nodes, &record));
+    assert(rns_node_registry_expire(&state->nodes, 2.0) == 1u);
+    const rns_identity *resolved = tui_state_resolve_peer(state, hash);
+    assert(resolved != NULL);
+    uint8_t expected[64], actual[64];
+    rns_identity_export_public(&peer, expected);
+    rns_identity_export_public(resolved, actual);
+    assert(memcmp(expected, actual, sizeof actual) == 0);
+    hash[0] ^= 1u;
+    assert(tui_state_resolve_peer(state, hash) == NULL);
+    rns_runtime_destroy(state->runtime);
+    destroy_state(state);
+}
+
 int main(void) {
+    test_identity_survives_registry_expiry();
     test_node_filter_hides_and_reselects();
     test_drafts_follow_contacts_and_persist();
     test_saved_block_policy_and_deferred_rejection();

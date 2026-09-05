@@ -50,8 +50,23 @@ link; this cannot undo identity information already disclosed to the node.
 An early ESP-IDF project scaffold lives in
 `firmware/heltec_wifi_lora_32_v3_1`. It currently provides the immutable board
 descriptor, a safe OLED power/reset sequence, and the pinned Semtech SX126x
-command driver; it does not yet provide the Heltec SPI/IRQ radio backend or
-drive the OLED, Reticulum runtime or LXMF services.
+command driver. It also contains an application-independent SSD1306 status UI
+core and bounded serial-shell parser/command registry. The UI core sequences
+Vext and reset through the immutable V3.1 BSP, configures the 17/18 I2C pins
+through a caller-supplied adapter, and fails independently of networking. The
+shell requires explicit confirmation before standard identity import/export,
+identity erase, or configuration reset commands and never echoes command
+arguments in its own diagnostics. Confirmation is bound to a SHA-256 digest of
+the complete invocation, and guarded commands are unavailable unless the
+adapter supplies secure randomness and SHA-256. OLED message previews have a
+separate enable setting; disabling previews immediately clears retained text.
+
+These cores are intentionally not connected in `app_main.c` yet. A later
+integration change must supply the ESP-IDF I2C/UART0 adapters and register
+device, identity, radio, path, and LXMF handlers. The shell only dispatches
+application handlers; it cannot construct Reticulum packets or access private
+identity material by itself. The firmware still does not provide the Heltec
+SPI/IRQ radio backend, active OLED display, Reticulum runtime, or LXMF services.
 
 The descriptor follows Heltec's official V3 board pin definition and the
 upstream RNode `BOARD_HELTEC32_V3` mapping. V3.1 keeps the V3 radio/display
@@ -91,8 +106,9 @@ reviewed and committed from an actual ESP-IDF build rather than fabricated on a
 host without the ESP-IDF toolchain.
 
 Do not flash or transmit without a suitable 868 MHz antenna. The host test
-suite validates the V3.1 descriptor, but an ESP-IDF firmware build and physical
-board validation remain required before the board support is operational.
+suite validates the V3.1 descriptor plus simulated OLED and shell state, but an
+ESP-IDF firmware build and physical board validation remain required before the
+board support is operational.
 
 ## Python interoperability tests
 
@@ -115,8 +131,13 @@ ctest --test-dir build -L interop --output-on-failure
 ```
 
 These tests require loopback socket access and may take several minutes each.
+The discovery tests exercise both directions against stock pinned Reticulum,
+including recovery after a missed startup announcement. A registered C service
+answers path requests only after its application explicitly announces it;
+unregistering the service removes its retained announcement identity and data.
 They cover direct and propagated LXMF over UDP/TCP, small and resource-backed
-pages served by the pinned NomadNet page handler, plus an RRC schema fixture
+pages served by the pinned NomadNet page handler, Python requests to C-hosted
+pages/forms and restricted pages, plus an RRC schema fixture
 hub using upstream codecs. The RRC test does not certify a stock RRC server.
 Use `ctest --test-dir build -LE interop` for the ordinary suite. Offline builds
 leave `RETICULUM_PYTHON_INTEROP` disabled and require no Python installation.

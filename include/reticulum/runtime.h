@@ -293,6 +293,12 @@ void rns_packet_receipt_destroy(rns_packet_receipt_t *receipt);
 /*
  * Broadcasts a signed announce for the destination derived from identity and
  * the given aspects, so peers can discover and route back to it.
+ * For a registered local destination, successful construction retains a
+ * bounded private identity copy and the last advertised app-data/public
+ * ratchet, even if interfaces are offline. This enables signed path responses
+ * on the requesting interface, limited to one per second per service.
+ * Removing the last registration or destroying the runtime securely erases
+ * the retained identity. Unregistered announcements are not retained.
  */
 rns_status_t rns_runtime_announce(rns_runtime_t *runtime,
                                   const rns_identity *identity,
