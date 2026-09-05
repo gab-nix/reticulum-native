@@ -250,7 +250,7 @@ static rns_status_t parse_interface_value(rns_config_interface_t *interface,
             interface->speed = 115200U;
         return RNS_OK;
     }
-    if (strcmp(key, "enabled") == 0) {
+    if (strcmp(key, "enabled") == 0 || strcmp(key, "interface_enabled") == 0) {
         if (parse_bool(value, &interface->enabled)) return RNS_OK;
     } else if (strcmp(key, "target_host") == 0) {
         if (copy_value(interface->target_host, sizeof(interface->target_host), value)) return RNS_OK;
@@ -474,6 +474,7 @@ rns_status_t rns_config_parse(const char *text,
     size_t line_number = 0U;
     parse_section_t section = SECTION_NONE;
     rns_config_interface_t *current = NULL;
+    bool enabled_value = false, legacy_enabled_value = false;
 
     if (text == NULL || config == NULL || (text_length != 0U && memchr(text, '\0', text_length) != NULL)) {
         return RNS_ERROR_INVALID_ARGUMENT;
@@ -520,6 +521,7 @@ rns_status_t rns_config_parse(const char *text,
                     return RNS_ERROR_OVERFLOW;
                 }
                 current = &config->interfaces[config->interface_count++];
+                enabled_value = false; legacy_enabled_value = false;
                 memset(current, 0, sizeof(*current));
                 current->speed = 9600U;
                 current->discovery_port = 29716u;
@@ -573,6 +575,14 @@ rns_status_t rns_config_parse(const char *text,
                 status = parse_reticulum_value(config, key, value, line_number, diagnostic);
             } else if (section == SECTION_INTERFACE && current != NULL) {
                 status = parse_interface_value(current, key, value, line_number, diagnostic);
+                if (status == RNS_OK &&
+                    (strcmp(key, "enabled") == 0 || strcmp(key, "interface_enabled") == 0)) {
+                    /* Pinned Python enables an interface if either spelling
+                     * is true, independently of their order in the file. */
+                    if (strcmp(key, "enabled") == 0) enabled_value = current->enabled;
+                    else legacy_enabled_value = current->enabled;
+                    current->enabled = enabled_value || legacy_enabled_value;
+                }
             } else {
                 set_diagnostic(diagnostic, line_number, RNS_ERROR_PROTOCOL,
                                "option '%s' is not inside a supported value section", key);
