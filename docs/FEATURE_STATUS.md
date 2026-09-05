@@ -27,6 +27,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | RNode serial | IMPLEMENTED | Hardware interoperability coverage; chunked handshake and asynchronous old-firmware rejection tests exist |
 | IFAC processing | IMPLEMENTED | Broader interface integration |
 | Transport forwarding and reverse paths | WIP | Complete multi-hop transport behavior |
+| Transport test endpoint reservation | IMPLEMENTED | `test_runtime_link_transport` holds all four UDP reservations until runtime handoff to prevent self-reuse of ephemeral ports. This fixes the observed uniqueness assertion; external-process bind races during handoff remain outside this guarantee |
 | Persistent node and path registries | IMPLEMENTED | Migration and long-running deployment coverage |
 
 ## Links, requests and resources
