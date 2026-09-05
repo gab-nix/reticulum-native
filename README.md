@@ -110,9 +110,12 @@ preamble. Raw over-air reception has been observed with a matching external peer
 incoming announces have also passed signature verification on the board, with
 stable heap and more than 2 KiB stack headroom. Outbound interoperability remains unverified.
 
-Packet-mode LXMF now uses a persistent NVS identity and ratchet. Briefly press
-and release PRG to queue a signed `Heltec` delivery announce (50 ms debounce,
-60-second cooldown). Keep PRG released during reset: it is also the GPIO0 boot
+Packet-mode LXMF now uses a persistent NVS identity and ratchet. Tap PRG to
+open the menu, then tap to cycle Status, Last message, Announce and Clear message.
+Hold for about one second and release to select. Announce queues a signed
+`Heltec` delivery announce with a 60-second cooldown; ordinary taps never transmit.
+Last message reopens the last verified preview retained in RAM; Clear message
+erases that preview. Keep PRG released during reset: it is also the GPIO0 boot
 strap. There is no automatic startup announcement. All TX, including message
 proofs, uses CAD and a 1% rolling airtime budget; queue acceptance is not RF completion.
 The airtime history is volatile and must not be bypassed by repeated rebooting.
@@ -121,9 +124,12 @@ For the first message test, announce the sender first, then send a short
 **opportunistic** LXMF message to the discovered Heltec. Valid messages receive
 an explicit proof and a 30-second plaintext OLED preview in large 10x14-pixel
 letters. Longer previews cycle through 40-character pages every four seconds;
-unsupported Unicode glyphs display as `?`. Packet contents are
-never logged. Unknown senders are rejected until their verified delivery
-announce arrives. Direct links/resources, large messages, persistent inbox,
+unsupported Unicode glyphs display as `?`. The last preview remains available
+from the menu after the automatic display times out, until cleared or rebooted. Packet contents are
+never logged. Up to four unknown-sender packets are held in RAM and remain
+eligible for revalidation for five minutes. A verified announce under any
+service for that identity can supply the missing key; no unverified message is
+shown or proved. Direct links/resources, large messages, persistent inbox,
 durable replay protection, ratchet rotation and stamp enforcement are not
 supported by this basic firmware profile. Physical TX/LXMF verification remains
 pending. The full UART shell and full Reticulum runtime are not yet connected.

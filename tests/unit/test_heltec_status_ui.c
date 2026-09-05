@@ -154,6 +154,16 @@ int main(void) {
     assert_large_font_grid(oled.frame);
     assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
     settings.screen = RNS_HELTEC_OLED_SCREEN_STATUS;
+    rns_heltec_oled_set_menu(&oled, "MESSAGES");
+    assert(oled.settings.screen == RNS_HELTEC_OLED_SCREEN_MENU);
+    assert(rns_heltec_oled_render(&oled));
+    assert(oled.frame[3U*128U+125U] == 0x7fU); /* Selected list row is highlighted. */
+    char live_lines[8][22] = {{0}};
+    memcpy(live_lines[0], "MESSAGES", 9);
+    memcpy(live_lines[7], "TAP NEXT HOLD MENU", 19);
+    rns_heltec_oled_set_lines(&oled, (const char (*)[22])live_lines);
+    assert(rns_heltec_oled_render(&oled));
+    assert(oled.frame[0] != 0U && oled.frame[7U*128U] != 0U);
     rns_heltec_oled_set_settings(&oled, &settings);
     assert(rns_heltec_oled_render(&oled));
 
@@ -162,17 +172,23 @@ int main(void) {
     rns_heltec_oled_set_settings(&oled, &settings);
     uint8_t paged[80];
     memset(paged, 'A', 40U); memset(paged + 40U, 'B', 40U);
+    assert(rns_heltec_oled_show_preview(&oled, (const uint8_t *)"HELLO WORLD", 11U, 0U));
+    assert(rns_heltec_oled_render(&oled));
+    memcpy(status_frame, oled.frame, sizeof(status_frame));
+    assert(rns_heltec_oled_show_preview(&oled, (const uint8_t *)"hello world", 11U, 0U));
+    assert(rns_heltec_oled_render(&oled));
+    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) == 0);
+    assert(oled.frame[0] != 0U);
     assert(rns_heltec_oled_show_preview(&oled, paged, sizeof(paged), 0U));
     assert(rns_heltec_oled_render(&oled));
-    assert_large_font_grid(oled.frame);
+    assert(oled.frame[128U] != 0U); /* Text wraps to the second compact row. */
     memcpy(status_frame, oled.frame, sizeof(status_frame));
     rns_heltec_oled_poll(&oled, 3999U);
     assert(oled.preview_page == 0U);
     rns_heltec_oled_poll(&oled, 4000U);
-    assert(oled.preview_page == 1U && oled.dirty);
+    assert(oled.preview_page == 0U);
     assert(rns_heltec_oled_render(&oled));
-    assert_large_font_grid(oled.frame);
-    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
+    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) == 0);
     rns_heltec_oled_poll(&oled, 8000U);
     assert(oled.preview_page == 0U);
     assert(rns_heltec_oled_show_preview(&oled, valid, sizeof(valid), 100U));

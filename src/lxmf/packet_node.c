@@ -12,6 +12,7 @@
 #include <string.h>
 #define PEERS 32U
 #define REPLAYS 32U
+#define PENDING 4U
 struct lxmf_packet_node {
     rns_storage_t *storage;
     rns_interface_t *interface_value;
@@ -22,6 +23,7 @@ struct lxmf_packet_node {
     uint64_t last_announce;
     uint8_t replay[REPLAYS][32];
     bool replay_used[REPLAYS];
+    struct { bool used; uint8_t raw[RNS_MTU], source[16], id[32]; size_t length; uint64_t received_ms; } pending[PENDING];
     uint8_t plain[RNS_MTU], raw[RNS_MTU], body[RNS_MTU];
     lxmf_packet_message_fn callback;
     void *context;
@@ -105,23 +107,41 @@ rns_status_t lxmf_packet_node_announce(lxmf_packet_node_t *n, uint64_t timestamp
 static void learn(lxmf_packet_node_t *n, const rns_packet *p) {
     rns_announce a;
     if (p->destination_type != 0 || !rns_announce_parse(&a, p->data, p->data_length, p->context_flag) ||
-        memcmp(a.name_hash, n->name_hash, 10) != 0 ||
         !rns_announce_verify(p->destination_hash, p->data, p->data_length, p->context_flag)) return;
+    rns_identity identity;
+    uint8_t delivery[16];
+    if (!rns_identity_from_public(&identity, a.public_key) ||
+        !rns_destination_hash(&identity, "lxmf", aspects, 1, delivery)) return;
     size_t slot = PEERS;
     for (size_t i = 0; i < PEERS; ++i)
-        if (n->peers[i].used && memcmp(n->peers[i].address, p->destination_hash, 16) == 0) {
+        if (n->peers[i].used && memcmp(n->peers[i].address, delivery, 16) == 0) {
             if (a.timestamp < n->peers[i].timestamp) return;
             slot = i; break;
         }
     if (slot == PEERS) { slot = n->next_peer; n->next_peer = (slot + 1) % PEERS; }
     if (!rns_identity_from_public(&n->peers[slot].identity, a.public_key)) return;
-    memcpy(n->peers[slot].address, p->destination_hash, 16);
+    memcpy(n->peers[slot].address, delivery, 16);
     n->peers[slot].timestamp = a.timestamp; n->peers[slot].used = true;
     ++n->stats.learned_announces;
+    for (size_t i = 0; i < PENDING; ++i) {
+        if (!n->pending[i].used || memcmp(n->pending[i].source, delivery, 16)) continue;
+        n->pending[i].used = false; --n->stats.pending_senders;
+        (void)lxmf_packet_node_receive(n, n->pending[i].raw, n->pending[i].length);
+        rns_hal_secure_zero(&n->pending[i], sizeof(n->pending[i]));
+    }
 }
 rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw, size_t length) {
     rns_packet p;
     if (!n) return RNS_ERROR_INVALID_ARGUMENT;
+    uint64_t now = 0;
+    bool clock_ok = rns_hal_monotonic_ms(&now) == RNS_OK;
+    for (size_t i = 0; i < PENDING; ++i) {
+        if (n->pending[i].used && (!clock_ok || now < n->pending[i].received_ms ||
+            now - n->pending[i].received_ms >= 300000U)) {
+            rns_hal_secure_zero(&n->pending[i], sizeof(n->pending[i]));
+            --n->stats.pending_senders; ++n->stats.expired_pending;
+        }
+    }
     ++n->stats.ingress;
     if (!raw || !length) { ++n->stats.malformed; return RNS_ERROR_PROTOCOL; }
     if (raw[0] & 0x80U) { ++n->stats.ifac_rejected; return RNS_ERROR_PROTOCOL; }
@@ -142,7 +162,22 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
     n->stats.last_message_status = status;
     if (status != LXMF_OK) {
         ++n->stats.rejected;
-        if (status == LXMF_ERR_UNKNOWN_SIGNER) ++n->stats.unknown_senders;
+        if (status == LXMF_ERR_UNKNOWN_SIGNER) {
+            ++n->stats.unknown_senders;
+            size_t slot = PENDING;
+            bool duplicate_pending = false;
+            for (size_t i = 0; i < PENDING; ++i) {
+                if (n->pending[i].used && !memcmp(n->pending[i].id, message.message_id, 32)) duplicate_pending = true;
+                if (!n->pending[i].used && slot == PENDING) slot = i;
+            }
+            if (clock_ok && !duplicate_pending && slot != PENDING && length <= RNS_MTU) {
+                memcpy(n->pending[slot].raw, raw, length);
+                memcpy(n->pending[slot].source, message.source, 16);
+                memcpy(n->pending[slot].id, message.message_id, 32);
+                n->pending[slot].length = length; n->pending[slot].received_ms = now;
+                n->pending[slot].used = true; ++n->stats.pending_senders;
+            }
+        }
         rns_hal_secure_zero(n->plain, sizeof(n->plain));
         return RNS_OK;
     }
