@@ -3,7 +3,7 @@
 #define HELTEC_BUTTON_MENU_H
 #include <stdbool.h>
 #include <stdint.h>
-typedef enum { HELTEC_MENU_NONE, HELTEC_MENU_ANNOUNCE, HELTEC_MENU_MESSAGE, HELTEC_MENU_CLEAR, HELTEC_MENU_NODES, HELTEC_MENU_NEXT } heltec_menu_action;
+typedef enum { HELTEC_MENU_NONE, HELTEC_MENU_ANNOUNCE, HELTEC_MENU_MESSAGE, HELTEC_MENU_CLEAR, HELTEC_MENU_NODES, HELTEC_MENU_NEXT, HELTEC_MENU_CHANNEL } heltec_menu_action;
 typedef struct {
     bool raw, stable, armed, open, announced, consumed, browsing;
     uint8_t selected;

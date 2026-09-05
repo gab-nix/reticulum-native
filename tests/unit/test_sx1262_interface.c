@@ -854,6 +854,8 @@ static void test_generic_adapter(void) {
     assert(rns_interface_get_stats(adapter, &stats) == RNS_OK &&
            stats.effective_mtu == RNS_RADIO_PACKET_MTU && stats.pending_tx == 1U &&
            stats.online == 1);
+    assert(stats.radio_telemetry_valid == 1 && stats.radio_rx_frames == 0U &&
+           stats.radio_tx_frames == 0U && stats.radio_cad_busy == 0U);
     rns_interface_destroy(adapter);
     assert(phy.stop_count == 1U && results.count == 1U &&
            results.outcomes[0] == RNS_SX1262_PACKET_DROPPED_STOPPED);

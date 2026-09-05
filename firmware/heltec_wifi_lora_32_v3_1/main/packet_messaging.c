@@ -4,6 +4,7 @@
 #include "live_view.h"
 #include "home_view.h"
 #include "cpu_usage.h"
+#include "channel_view.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -26,6 +27,7 @@ static heltec_button_menu menu;
 static heltec_live_view live;
 static heltec_menu_action active_view;
 static heltec_cpu_usage cpu;
+static heltec_channel_view channel;
 static void sample_cpu(void) {
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS && CONFIG_FREERTOS_USE_TRACE_FACILITY && CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER
     static TaskStatus_t tasks[24];
@@ -118,6 +120,9 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         uint64_t now = clock_ms(NULL);
         if (now >= next_cpu) { sample_cpu(); next_cpu = now+1000U; }
         status = rns_interface_poll(radio, received, NULL, 4U);
+        rns_interface_stats_t radio_stats = {0};
+        (void)rns_interface_get_stats(radio, &radio_stats);
+        heltec_channel_sample(&channel, now, &radio_stats);
         heltec_radio_discovery_poll(&discovery, now);
         bool was_open = menu.open;
         uint8_t was_selected = menu.selected;
@@ -130,7 +135,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
             rns_status_t announced = lxmf_packet_node_announce(node, (uint64_t)HELTEC_BUILD_EPOCH + now / 1000U);
             ESP_LOGI(TAG, "PRG announce queue status=%d; airtime/CAD scheduling applies", (int)announced);
         }
-        if (action == HELTEC_MENU_MESSAGE || action == HELTEC_MENU_NODES) {
+        if (action == HELTEC_MENU_MESSAGE || action == HELTEC_MENU_NODES || action == HELTEC_MENU_CHANNEL) {
             active_view = action; menu.browsing = true; next_display = 0;
         }
         if (action == HELTEC_MENU_CLEAR) {
@@ -149,6 +154,11 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
             rns_heltec_oled_t *oled = rns_heltec_oled_esp_core(display);
             rns_heltec_oled_poll(oled, now);
             if (menu.open) rns_heltec_oled_set_menu(oled, heltec_button_menu_label(&menu));
+            else if (active_view == HELTEC_MENU_CHANNEL) {
+                char lines[8][22];
+                heltec_channel_lines(&channel, &radio_stats, lines);
+                rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
+            }
             else if (active_view == HELTEC_MENU_MESSAGE || active_view == HELTEC_MENU_NODES) {
                 char lines[8][22];
                 if (active_view == HELTEC_MENU_MESSAGE) heltec_live_messages(&live, action == HELTEC_MENU_NEXT, lines);
@@ -169,7 +179,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 rns_heltec_oled_esp_close(display); display = NULL;
                 ESP_LOGE(TAG, "OLED offline; radio continues");
             }
-            next_display = now + 250U;
+            next_display = now + (active_view == HELTEC_MENU_CHANNEL && !menu.open ? 1000U : 250U);
         }
         if (now >= next_log) {
             ESP_LOGI(TAG, "Ingress=%" PRIu64 " malformed=%" PRIu64 " ifac=%" PRIu64
