@@ -43,6 +43,18 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 
 ## LXMF messaging
 
+Reliability work is owned by the desktop task; firmware and physical-radio gates
+remain with the Heltec task. An implemented mechanism does not complete its
+remaining acceptance requirements below.
+
+| Reliability acceptance item | Status | Evidence / remaining gate |
+| --- | --- | --- |
+| Persisted recipient discovery deadline and explicit retry | IMPLEMENTED | `test_lxmf_identity_discovery` covers deadline expiry, offline restart, identity-arrival bypass, no attempt inflation and manual retry. `test_lxmf_store_delivery` covers old records, delivery updates and compaction. Five-minute default uses wall time; backward clock adjustment handling remains WIP. Local policy tests are not upstream verification |
+| Clock changes during discovery | WIP | Persisted wall deadline survives restart, but rollback can extend the wait; add a bounded monotonic session guard and deterministic clock-change tests |
+| Public identity lifetime independent of routes | WIP | Current recall depends on unexpired path snapshots; add a separately bounded durable verified-key store and eviction/restart tests without implying service availability |
+| Fair deferred propagation sync | WIP | Busy diagnostics exist; add pending sync scheduling alongside uploads, cancellation and restart tests against pinned peers |
+| Failed durable writes during queue transitions | WIP | Retain existing records and drafts; inject failures at each metadata/status transition and verify no false delivery or automatic revival of terminal messages |
+
 | Feature | Status | Remaining work |
 | --- | --- | --- |
 | Message codec, signatures and unknown fields | IMPLEMENTED | Broader compatibility coverage |
@@ -51,7 +63,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior; integration test IDs are distinct from random wire hashes |
 | Direct resource delivery | IMPLEMENTED | Persistent transfer resume |
 | Delivery proofs and durable queue state | IMPLEMENTED | Complete offline retry scheduling |
-| Missing-peer discovery retries and queue fairness | IMPLEMENTED | `test_lxmf_identity_discovery` checks 15-second retry throttling, immediate identity-arrival recovery and broadcast fanout over two UDP interfaces; `test_lxmf_router_recovery` checks round-robin polling, failed-message recovery and restart clock rebasing without transmission-attempt inflation. `test_tui_state` checks background queue events do not overwrite Network actions. Finite discovery deadlines remain WIP |
+| Missing-peer discovery retries and queue fairness | IMPLEMENTED | `test_lxmf_identity_discovery` checks 15-second retry throttling, immediate identity-arrival recovery and broadcast fanout over two UDP interfaces; `test_lxmf_router_recovery` checks round-robin polling, failed-message recovery and restart clock rebasing without transmission-attempt inflation. `test_tui_state` checks background queue events do not overwrite Network actions. Deadline and clock-change gates are tracked separately above |
 | Local announced-service path responses | IMPLEMENTED | `test_runtime_path_response` verifies fresh signatures, app-data/ratchet retention, ingress-only replies, duplicate/cooldown limits and last-registration cleanup. Explicitly announced registered services only; cached-route transport responses remain WIP |
 | Identity resolution after Network entry expiry and restart | IMPLEMENTED | `test_tui_state` retains a cryptographically learned runtime identity after registry eviction and runtime export/destroy/recreate/import, validates its LXMF destination hash, and rejects unknown destinations; stock-peer restart messaging remains outside this evidence |
 | Recipient identity recall across service announces | IMPLEMENTED | Runtime bounded public-key recall derives and checks the requested service hash across unexpired paths. `test_tui_state` covers delivery/site/propagation announces, registry expiry, restart, unknown and expired identities. `test_lxmf_router_propagation` uploads a recipient-encrypted message learned only via its site announce, without an inbox route; unrelated relay keys cannot substitute for the recipient |

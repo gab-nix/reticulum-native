@@ -722,7 +722,10 @@ void tui_state_apply_router_event(tui_state_t *state,
         tui_state_set_status(state, "Delivered via %s",
                              lxmf_delivery_method_string(event->method));
     } else {
-        if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED &&
+        if (event->queue_reason == LXMF_QUEUE_REASON_IDENTITY_TIMEOUT)
+            tui_state_set_status(state,
+                "Recipient identity discovery timed out; message kept. Retry after an announce or path refresh.");
+        else if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED &&
             event->queue_reason == LXMF_QUEUE_REASON_RETRY_EXHAUSTED)
             tui_state_set_status(state,
                 "Propagation upload stopped after bounded retries: %s",
