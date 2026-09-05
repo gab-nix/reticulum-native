@@ -6,6 +6,7 @@
 #include "cpu_usage.h"
 #include "channel_view.h"
 #include "chat_store.h"
+#include "chat_admission.h"
 #include "chat_journal.h"
 #include "chat_view.h"
 #include "archive_view.h"
@@ -52,28 +53,6 @@ static bool archive_has_id(const uint8_t id[32]) {
     }
     return false;
 }
-static bool admission_available(const lxmf_message_t *message) {
-    uint8_t senders[8][16]; size_t count=0, same=0;
-    bool known=false;
-    for(size_t i=0;i<8;++i) {
-        const heltec_chat *c=heltec_chat_store_get(saved_chats,i);
-        if(!c) continue;
-        memcpy(senders[count++],c->sender,16);
-        if(!memcmp(c->sender,message->source,16)) { known=true; same=c->count; }
-        for(size_t j=0;j<c->count;++j)
-            if(!memcmp(c->messages[j].id,message->message_id,32)) return true;
-    }
-    for(size_t i=0;i<64;++i) {
-        const heltec_archived_message *m=heltec_message_archive_get(archive,i);
-        if(!m || m->signature==LXMF_SIGNATURE_VERIFIED) continue;
-        if(!memcmp(m->id,message->message_id,32)) return true;
-        bool found=false;
-        for(size_t j=0;j<count;++j) if(!memcmp(senders[j],m->source,16)) found=true;
-        if(!found) { if(count==8) return false; memcpy(senders[count++],m->source,16); }
-        if(!memcmp(m->source,message->source,16)) { known=true; ++same; }
-    }
-    return same<8 && (known || count<8);
-}
 static rns_status_t persist_message(void *context, const lxmf_message_t *message,
     lxmf_signature_state_t signature, const uint8_t *packet, size_t packet_length) {
     (void)context;
@@ -83,7 +62,7 @@ static rns_status_t persist_message(void *context, const lxmf_message_t *message
     if (message->content.len > HELTEC_CHAT_TEXT || !isfinite(message->timestamp) ||
         message->timestamp < 0 || message->timestamp >= 18446744073709551616.0)
         return chat_status = RNS_ERROR_OVERFLOW;
-    if(!admission_available(message) || !packet || !packet_length || packet_length>500)
+    if(!heltec_chat_admission_available(saved_chats,archive,message,signature==LXMF_SIGNATURE_VERIFIED) || !packet || !packet_length || packet_length>500)
         return chat_status = RNS_ERROR_OVERFLOW;
     if(signature==LXMF_SIGNATURE_UNVERIFIED || archive_has_id(message->message_id)) {
         memset(&archive_item,0,sizeof(archive_item));
@@ -200,6 +179,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         }
         lxmf_packet_node_set_accept(node, persist_message, NULL);
         ESP_LOGI(TAG, "Chat storage opening: %d; identity storage unchanged", (int)chat_status);
+        if(heltec_chat_flash_quarantined()) ESP_LOGW(TAG,"Storage degraded: quarantined records preserved");
     }
     if (status == RNS_OK) status = rns_interface_start(radio);
     if (status != RNS_OK) {
@@ -331,6 +311,9 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 heltec_home_lines(&snapshot, lines);
                 if (chat_status != RNS_OK) (void)snprintf(lines[7], 22, "STORAGE ERROR %d", (int)chat_status);
                 rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
+            }
+            if(heltec_chat_flash_quarantined() && oled->settings.screen==RNS_HELTEC_OLED_SCREEN_LIVE) {
+                (void)snprintf(oled->model.lines[7],22,"STORAGE DEGRADED"); oled->dirty=true;
             }
             if (!rns_heltec_oled_render(oled)) {
                 rns_heltec_oled_esp_close(display); display = NULL;

@@ -11,6 +11,7 @@
 typedef struct {
     heltec_chat_flash_ops ops;
     uint8_t sectors[2][SECTOR], payload[PAYLOAD];
+    bool quarantined[HELTEC_CHAT_JOURNAL_RECORDS];
 } journal;
 static bool key_slot(const char *key, size_t *slot) {
     if (!key) return false;
@@ -47,6 +48,7 @@ static rns_status_t inspect(journal *j,const char *key,size_t slot,int valid[2],
 static rns_status_t read_record(void *ctx,const char *key,uint8_t *out,size_t cap,size_t *length) {
     journal *j=ctx; size_t slot; int valid[2]={0}; uint32_t gen[2]={0}; char selected;
     if(!key_slot(key,&slot)) return RNS_ERROR_INVALID_ARGUMENT;
+    if(j->quarantined[slot]) return RNS_ERROR_QUARANTINED;
     rns_status_t st=inspect(j,key,slot,valid,gen); if(st!=RNS_OK) return st;
     st=rns_storage_record_select_slot(valid[0],gen[0],valid[1],gen[1],&selected); if(st!=RNS_OK) return st;
     size_t n=0; uint32_t generation=0;
@@ -61,6 +63,7 @@ static rns_status_t read_record(void *ctx,const char *key,uint8_t *out,size_t ca
 static rns_status_t replace(journal *j,const char *key,const uint8_t *data,size_t len,bool present) {
     size_t slot; int valid[2]={0}; uint32_t gen[2]={0},next; char selected;
     if(!key_slot(key,&slot)) return RNS_ERROR_INVALID_ARGUMENT;
+    if(j->quarantined[slot]) return RNS_ERROR_QUARANTINED;
     if(len>PAYLOAD-3U) return RNS_ERROR_OVERFLOW;
     rns_status_t st=inspect(j,key,slot,valid,gen); if(st!=RNS_OK) return st;
     st=rns_storage_record_next_slot(valid[0],gen[0],valid[1],gen[1],&selected,&next); if(st!=RNS_OK) return st;
@@ -80,17 +83,29 @@ static rns_status_t write_record(void *ctx,const char *key,const uint8_t *data,s
 }
 static rns_status_t remove_record(void *ctx,const char *key) { return replace(ctx,key,NULL,0,false); }
 static void destroy(void *ctx) { journal *j=ctx; rns_hal_secure_zero(j,sizeof(*j)); free(j); }
-rns_status_t heltec_chat_journal_open(const heltec_chat_flash_ops *ops,rns_storage_t **out) {
+rns_status_t heltec_chat_journal_open_report(const heltec_chat_flash_ops *ops,rns_storage_t **out,size_t *quarantined) {
     if(!ops || !ops->read || !ops->write || !ops->erase || !out) return RNS_ERROR_INVALID_ARGUMENT;
+    if(quarantined) *quarantined=0;
     *out=NULL; journal *j=calloc(1,sizeof(*j)); if(!j) return RNS_ERROR_NO_MEMORY; j->ops=*ops;
+    size_t damaged=0, healthy=0;
     for(unsigned i=0;i<HELTEC_CHAT_JOURNAL_RECORDS;++i) {
         char key[8]; int valid[2]={0}; uint32_t gen[2]={0};
         if(i<8U) (void)snprintf(key,sizeof(key),"chat%u",i);
         else if(i<72U) (void)snprintf(key,sizeof(key),"msg%02u",i-8U);
         else if(i<76U) (void)snprintf(key,sizeof(key),"out%u",i-72U);
         else memcpy(key,"prefs",6);
-        rns_status_t st=inspect(j,key,i,valid,gen); if(st!=RNS_OK) { destroy(j); return st; }
+        rns_status_t st=inspect(j,key,i,valid,gen);
+        if(st==RNS_ERROR_PROTOCOL) { j->quarantined[i]=true; ++damaged; }
+        else if(st!=RNS_OK) { destroy(j); return st; }
+        else if(valid[0] || valid[1]) ++healthy;
     }
+    if(damaged && !healthy) { destroy(j); return RNS_ERROR_PROTOCOL; }
     static const rns_storage_ops_t storage_ops={.read=read_record,.write_atomic=write_record,.remove=remove_record,.destroy=destroy};
-    rns_status_t st=rns_storage_create(&storage_ops,j,out); if(st!=RNS_OK) destroy(j); return st;
+    rns_status_t st=rns_storage_create(&storage_ops,j,out);
+    if(st!=RNS_OK) destroy(j);
+    else if(quarantined) *quarantined=damaged;
+    return st;
+}
+rns_status_t heltec_chat_journal_open(const heltec_chat_flash_ops *ops,rns_storage_t **out) {
+    return heltec_chat_journal_open_report(ops,out,NULL);
 }
