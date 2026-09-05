@@ -41,6 +41,10 @@ add_executable(hosted_live_driver interop/hosted_live_driver.c)
 target_link_libraries(hosted_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(hosted_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(hosted_live_driver)
+add_executable(discovery_live_driver interop/discovery_live_driver.c)
+target_link_libraries(discovery_live_driver PRIVATE reticulum::reticulum)
+target_compile_features(discovery_live_driver PRIVATE c_std_17)
+reticulum_set_project_warnings(discovery_live_driver)
 
 option(RETICULUM_PYTHON_INTEROP "Run opt-in pinned Python interoperability tests" OFF)
 if(RETICULUM_PYTHON_INTEROP)
@@ -54,6 +58,12 @@ if(RETICULUM_PYTHON_INTEROP)
         endif()
     endforeach()
     foreach(transport udp tcp)
+        add_test(NAME interop_discovery_${transport}
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_discovery_live.py
+                --reticulum ${RETICULUM_PYTHON_RNS}
+                --driver $<TARGET_FILE:discovery_live_driver> --transport ${transport})
+        set_tests_properties(interop_discovery_${transport} PROPERTIES
+            LABELS "interop;python;discovery;${transport}" TIMEOUT 90 RUN_SERIAL TRUE)
         add_test(NAME interop_hosted_${transport}
             COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_hosted_live.py
                 --reticulum ${RETICULUM_PYTHON_RNS}
@@ -299,6 +309,7 @@ reticulum_add_test(test_local_instance integration/test_local_instance.c)
 reticulum_add_test(test_runtime_local integration/test_runtime_local.c)
 reticulum_add_test(test_udp_lxmf integration/test_udp_lxmf.c)
 reticulum_add_test(test_runtime_receipt integration/test_runtime_receipt.c)
+reticulum_add_test(test_runtime_path_response integration/test_runtime_path_response.c)
 reticulum_add_test(test_lxmf_router_receipt integration/test_lxmf_router_receipt.c)
 reticulum_add_test(test_lxmf_router_recovery unit/test_lxmf_router_recovery.c)
 reticulum_add_test(test_lxmf_identity_discovery integration/test_lxmf_identity_discovery.c)

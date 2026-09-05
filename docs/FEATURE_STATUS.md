@@ -50,7 +50,8 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior; integration test IDs are distinct from random wire hashes |
 | Direct resource delivery | IMPLEMENTED | Persistent transfer resume |
 | Delivery proofs and durable queue state | IMPLEMENTED | Complete offline retry scheduling |
-| Missing-peer discovery retries and queue fairness | IMPLEMENTED | `test_lxmf_identity_discovery` checks 15-second retry throttling, immediate identity-arrival recovery and broadcast fanout over two UDP interfaces; `test_lxmf_router_recovery` checks round-robin polling, failed-message recovery and restart clock rebasing without transmission-attempt inflation. `test_tui_state` checks background queue events do not overwrite Network actions. Finite discovery deadlines and local C path-response handling remain WIP |
+| Missing-peer discovery retries and queue fairness | IMPLEMENTED | `test_lxmf_identity_discovery` checks 15-second retry throttling, immediate identity-arrival recovery and broadcast fanout over two UDP interfaces; `test_lxmf_router_recovery` checks round-robin polling, failed-message recovery and restart clock rebasing without transmission-attempt inflation. `test_tui_state` checks background queue events do not overwrite Network actions. Finite discovery deadlines remain WIP |
+| Local announced-service path responses | IMPLEMENTED | `test_runtime_path_response` verifies fresh signatures, app-data/ratchet retention, ingress-only replies, duplicate/cooldown limits and last-registration cleanup. Explicitly announced registered services only; cached-route transport responses remain WIP |
 | Identity resolution after Network entry expiry | IMPLEMENTED | `test_tui_state` retains a cryptographically learned runtime identity after registry eviction, validates its LXMF destination hash, and rejects unknown destinations; durable identity recovery after restart remains WIP |
 | Incoming block, size and stamp policies | IMPLEMENTED | Complete policy controls |
 | Ratchet history | WIP | Rotation and enforcement parity |
@@ -110,6 +111,7 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | --- | --- | --- |
 | Repeatable pinned Python acceptance entry point | IMPLEMENTED | Nine opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
 | Direct packet and multi-segment LXMF, UDP/TCP | VERIFIED | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp` pass bidirectionally with pinned Python; loss/restart scenarios remain outside this evidence |
+| Bidirectional local-service path discovery, UDP/TCP | VERIFIED | `interop_discovery_udp/tcp` prove stock Python requests recover the C identity/path after losing its startup announce, and C requests discover a never-announced Python destination; public keys match in both directions. Multi-hop cached-route responses and adversarial discovery remain outside this evidence |
 | Bidirectional ticket exchange and stamped resource replies, UDP/TCP | VERIFIED | Direct drivers exchange signed ticket fields, then validate ticket-backed stamps for packet and multi-segment replies against pinned Python; renewal, expiry-boundary and restart scenarios remain outside this evidence |
 | Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
 | RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |

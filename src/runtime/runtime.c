@@ -134,6 +134,16 @@ struct rns_packet_receipt {
     uint8_t link_signing_public[32];
 };
 
+typedef struct {
+    bool used;
+    uint8_t hash[16];
+    rns_identity identity;
+    uint8_t body[RNS_ANNOUNCE_MAX_BODY_SIZE];
+    size_t body_length;
+    uint8_t context_flag;
+    double next_response_at;
+} runtime_local_announce_t;
+
 struct rns_runtime {
     rns_config_t config;
     rns_node node;
@@ -147,6 +157,7 @@ struct rns_runtime {
     uint8_t *plain_destinations;
     size_t plain_destination_capacity;
     size_t plain_destination_count;
+    runtime_local_announce_t *local_announces;
     rns_packet_receipt_t *packet_receipts[RNS_RUNTIME_MAX_PACKET_RECEIPTS];
     rns_runtime_clock_callback_t reconnect_clock;
     void *reconnect_clock_context;
@@ -1159,6 +1170,57 @@ static bool link_ingress(rns_runtime_t *runtime, size_t interface_index,
                                &packet, received_hops);
 }
 
+static runtime_local_announce_t *local_announce(rns_runtime_t *runtime,
+    const uint8_t hash[16], bool create) {
+    bool registered = false;
+    for (size_t i = 0; i < runtime->node.local_destination_count; ++i)
+        if (memcmp(runtime->node.local_destinations + i * 16u, hash, 16u) == 0)
+            registered = true;
+    if (!registered) return NULL;
+    runtime_local_announce_t *empty = NULL;
+    for (size_t i = 0; i < runtime->plain_destination_capacity; ++i) {
+        runtime_local_announce_t *entry = &runtime->local_announces[i];
+        if (entry->used && memcmp(entry->hash, hash, 16u) == 0) return entry;
+        if (!entry->used && empty == NULL) empty = entry;
+    }
+    return create ? empty : NULL;
+}
+
+static void forget_local_announce(rns_runtime_t *runtime, const uint8_t hash[16]) {
+    for (size_t i = 0; i < runtime->plain_destination_capacity; ++i)
+        if (runtime->local_announces[i].used &&
+            memcmp(runtime->local_announces[i].hash, hash, 16u) == 0)
+            rns_hal_secure_zero(&runtime->local_announces[i], sizeof runtime->local_announces[i]);
+}
+
+static void respond_local_path(rns_runtime_t *runtime, size_t interface_index,
+    const rns_node_result *request) {
+    runtime_local_announce_t *entry = local_announce(runtime,
+        request->path_request.destination_hash, false);
+    double now = runtime_clock(NULL);
+    if (entry == NULL || now < entry->next_response_at) return;
+    rns_announce previous;
+    if (!rns_announce_parse(&previous, entry->body, entry->body_length, entry->context_flag)) return;
+    uint8_t prefix[5], body[RNS_ANNOUNCE_MAX_BODY_SIZE], raw[RNS_MTU];
+    uint64_t wall_ms;
+    size_t body_length, raw_length;
+    rns_packet response = {0};
+    if (rns_hal_random_bytes(prefix, sizeof prefix) != RNS_OK ||
+        rns_hal_wallclock_ms(&wall_ms) != RNS_OK ||
+        !rns_announce_build(&entry->identity, entry->hash, previous.name_hash,
+            prefix, wall_ms / 1000u, previous.ratchet, previous.app_data,
+            previous.app_data_length, body, sizeof body, &body_length, &response.context_flag)) return;
+    memcpy(response.destination_hash, entry->hash, 16u);
+    response.packet_type = 1u;
+    response.context = 0x0bu; /* Pinned Reticulum PATH_RESPONSE. */
+    response.data = body; response.data_length = body_length;
+    if (!rns_packet_encode(&response, raw, sizeof raw, &raw_length)) return;
+    /* Bounded amplification: one response per second per advertised service.
+     * Exact duplicate requests are already suppressed by node ingress. */
+    entry->next_response_at = now + 1.0;
+    (void)send_internal(runtime, interface_index, raw, raw_length);
+}
+
 static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, size_t length) {
     rns_runtime_t *runtime = context->runtime;
     runtime_interface_t *source = &runtime->interfaces[context->interface_index];
@@ -1171,6 +1233,8 @@ static rns_status_t ingress(receive_context_t *context, const uint8_t *packet, s
     if (!rns_node_ingress(&runtime->node, packet, length, source->info.id, 0,
                           output, sizeof(output), &result)) return RNS_ERROR_INVALID_STATE;
     if (result.action == RNS_NODE_DROP) source->info.packets_dropped++;
+    if (result.action == RNS_NODE_PATH_RESPONSE && result.has_path_request)
+        respond_local_path(runtime, context->interface_index, &result);
     bool handled_link = result.action == RNS_NODE_DELIVER &&
                         link_ingress(runtime, context->interface_index, packet, length,
                                      result.hops);
@@ -1450,6 +1514,14 @@ rns_status_t rns_runtime_create(rns_runtime_t **output, const rns_config_t *conf
         return RNS_ERROR_NO_MEMORY;
     }
     runtime->plain_destination_capacity = node_config.local_destination_capacity;
+    runtime->local_announces = calloc(runtime->plain_destination_capacity,
+                                       sizeof *runtime->local_announces);
+    if (runtime->local_announces == NULL) {
+        free(runtime->plain_destinations);
+        rns_node_free(&runtime->node);
+        free(runtime);
+        return RNS_ERROR_NO_MEMORY;
+    }
     bool shared_client = false;
     if (config->share_instance_configured && config->share_instance) {
         rns_status_t status = start_local_interface(runtime, config,
@@ -1511,6 +1583,9 @@ void rns_runtime_destroy(rns_runtime_t *runtime) {
     }
     free(runtime->plain_destinations);
     runtime->plain_destinations = NULL;
+    rns_hal_secure_zero(runtime->local_announces,
+        runtime->plain_destination_capacity * sizeof *runtime->local_announces);
+    free(runtime->local_announces);
     rns_node_free(&runtime->node);
     free(runtime);
 }
@@ -1979,6 +2054,15 @@ rns_status_t rns_runtime_announce_with_ratchet(
     packet.data_length = body_length;
     if (!rns_packet_encode(&packet, raw, sizeof raw, &raw_length))
         return RNS_ERROR_OVERFLOW;
+    runtime_local_announce_t *cached = local_announce(runtime, destination, true);
+    if (cached != NULL) {
+        cached->used = true;
+        memcpy(cached->hash, destination, sizeof cached->hash);
+        cached->identity = *identity;
+        memcpy(cached->body, body, body_length);
+        cached->body_length = body_length;
+        cached->context_flag = context_flag;
+    }
     rns_status_t result = RNS_ERROR_INVALID_STATE;
     for (size_t i = 0U; i < runtime->interface_count; i++) {
         if (runtime->interfaces[i].info.state != RNS_RUNTIME_INTERFACE_UP) continue;
@@ -2027,8 +2111,10 @@ rns_status_t rns_runtime_unregister_destination(rns_runtime_t *runtime, const ui
                 runtime->plain_destinations + (index + 1U) * 16U,
                 (runtime->plain_destination_count - index - 1U) * 16U);
     --runtime->plain_destination_count;
-    if (find_link_destination(runtime, hash) == NULL)
+    if (find_link_destination(runtime, hash) == NULL) {
         (void)rns_node_unregister_destination(&runtime->node, hash);
+        forget_local_announce(runtime, hash);
+    }
     return RNS_OK;
 }
 
@@ -2090,9 +2176,11 @@ void rns_runtime_destination_destroy(rns_runtime_destination_t *destination) {
                 plain = true;
                 break;
             }
-        if (!plain)
+        if (!plain) {
             (void)rns_node_unregister_destination(&runtime->node,
                                                   destination->hash);
+            forget_local_announce(runtime, destination->hash);
+        }
     }
     for (size_t i = 0U; i < RNS_RUNTIME_MAX_REQUEST_HANDLERS; ++i)
         free(destination->request_handlers[i]);
