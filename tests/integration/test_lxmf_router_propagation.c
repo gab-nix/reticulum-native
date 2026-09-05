@@ -17,6 +17,8 @@ typedef struct {
   size_t uploads;
   bool valid;
   uint64_t now_ms;
+  rns_runtime_t *client;
+  rns_identity recalled;
 } host_t;
 static uint16_t port(void) {
   rns_udp_endpoint_t *e = NULL;
@@ -42,7 +44,10 @@ static void config(rns_config_t *c, uint16_t listen, uint16_t forward) {
 }
 static const rns_identity *resolve(void *context, const uint8_t hash[16]) {
   host_t *h = context;
-  return memcmp(hash, h->recipient_hash, 16) == 0 ? h->recipient : NULL;
+  const char *aspects[] = {"delivery"}; uint8_t name_hash[10];
+  assert(rns_destination_name_hash("lxmf", aspects, 1u, name_hash));
+  return rns_runtime_recall_identity(h->client, hash, name_hash, &h->recalled) == RNS_OK
+      ? &h->recalled : NULL;
 }
 static uint64_t wall(void *context) {
   (void)context;
@@ -186,7 +191,7 @@ int main(void) {
   assert(rns_identity_generate(&recipient));
   assert(rns_identity_generate(&node));
   host_t host = {
-      .recipient = &recipient, .sender = &sender, .now_ms = 1234000u};
+      .recipient = &recipient, .sender = &sender, .now_ms = 1234000u, .client = client};
   const char *delivery[] = {"delivery"};
   assert(rns_destination_hash(&recipient, "lxmf", delivery, 1,
                               host.recipient_hash));
@@ -248,9 +253,27 @@ int main(void) {
   wrong_hash[0] ^= 1u;
   assert(lxmf_router_set_propagation_node(&router, &node, wrong_hash, 1u) ==
          LXMF_ERR_ARGUMENT);
+  /* A relay key must never stand in for an unknown recipient. The recipient
+   * may then become known via a different service, without an inbox route. */
+  assert(resolve(&host, host.recipient_hash) == NULL);
+  assert(lxmf_router_send_message(&router, id) == LXMF_ERR_PENDING);
+  lxmf_delivery_metadata_t metadata;
+  assert(lxmf_store_read_delivery(&store, id, &metadata) == LXMF_OK);
+  assert(metadata.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY && metadata.attempts == 0u);
+  assert(host.uploads == 0u);
+  const char *site[] = {"node"};
+  assert(rns_runtime_announce(server, &recipient, "nomadnetwork", site, 1u, NULL, 0u) == RNS_OK);
+  uint64_t started, current;
+  assert(rns_hal_monotonic_ms(&started) == RNS_OK);
+  do {
+    assert(rns_runtime_poll(client, 32u, &processed) == RNS_OK);
+    assert(rns_hal_monotonic_ms(&current) == RNS_OK);
+  } while (resolve(&host, host.recipient_hash) == NULL && current - started < 1000u);
+  assert(resolve(&host, host.recipient_hash) != NULL);
+  rns_path_entry inbox_path;
+  assert(rns_runtime_path_lookup(client, host.recipient_hash, &inbox_path) == RNS_ERROR_NOT_FOUND);
   pump(client, server, &router, id, LXMF_DELIVERY_SENT);
   assert(host.uploads == 1 && host.valid);
-  lxmf_delivery_metadata_t metadata;
   assert(lxmf_store_read_delivery(&store, id, &metadata) == LXMF_OK);
   assert(metadata.actual_method == LXMF_DELIVERY_METHOD_PROPAGATED &&
          metadata.progress == LXMF_DELIVERY_PROGRESS_COMPLETE);

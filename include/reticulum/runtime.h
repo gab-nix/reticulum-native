@@ -353,6 +353,14 @@ rns_status_t rns_runtime_request_path(rns_runtime_t *runtime,
 rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime,
                                      const uint8_t destination_hash[16],
                                      rns_path_entry *path);
+/* Recall a public identity learned on any unexpired service path, but only if
+ * name_hash + identity_hash derives the requested destination. This does not
+ * assert that the requested service has announced or that a route exists to it.
+ * Output is caller-owned and unchanged on failure; no allocation is performed. */
+rns_status_t rns_runtime_recall_identity(const rns_runtime_t *runtime,
+                                        const uint8_t destination_hash[16],
+                                        const uint8_t name_hash[10],
+                                        rns_identity *identity);
 size_t rns_runtime_path_snapshot(const rns_runtime_t *runtime,
                                  rns_path_entry *paths, size_t capacity);
 /* Portable path snapshots let applications provide their own durable storage.

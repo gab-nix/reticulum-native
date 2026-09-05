@@ -279,6 +279,14 @@ static void test_corruption_warning_survives_startup(void) {
 }
 
 static void delivery_event(void *context, const lxmf_router_event_t *event) {
+    /* Even a synchronous initial send callback must find its UI message;
+     * otherwise later insertion can overwrite progress with QUEUED. */
+    tui_state_t *state = context;
+    bool cached = false;
+    for (size_t i = 0u; i < state->message_count; ++i)
+        if (memcmp(state->messages[i].value.message_id, event->message_id,
+                   LXMF_MESSAGE_ID_LENGTH) == 0) cached = true;
+    assert(cached);
     tui_state_apply_router_event(context, event);
 }
 

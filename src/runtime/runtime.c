@@ -2300,6 +2300,31 @@ rns_status_t rns_runtime_path_lookup(const rns_runtime_t *runtime, const uint8_t
     return RNS_OK;
 }
 
+rns_status_t rns_runtime_recall_identity(const rns_runtime_t *runtime,
+                                        const uint8_t destination_hash[16],
+                                        const uint8_t name_hash[10],
+                                        rns_identity *identity) {
+    if (runtime == NULL || destination_hash == NULL || name_hash == NULL || identity == NULL)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    const rns_transport *transport = &runtime->node.transport;
+    double now = transport->config.clock(transport->config.clock_context);
+    uint8_t material[26], digest[32];
+    memcpy(material, name_hash, 10u);
+    for (size_t i = 0u; i < transport->config.path_capacity; ++i) {
+        const rns_path_entry *path = &transport->paths[i];
+        if (!path->occupied || !path->has_identity || !(path->expires_at > now)) continue;
+        rns_identity candidate;
+        if (!rns_identity_from_public(&candidate, path->identity_public_key)) continue;
+        memcpy(material + 10u, candidate.hash, 16u);
+        if (!rns_sha256(material, sizeof material, digest)) return RNS_ERROR_CRYPTO;
+        if (memcmp(digest, destination_hash, 16u) == 0) {
+            *identity = candidate;
+            return RNS_OK;
+        }
+    }
+    return RNS_ERROR_NOT_FOUND;
+}
+
 size_t rns_runtime_path_snapshot(const rns_runtime_t *runtime, rns_path_entry *paths,
                                  size_t capacity) {
     if (runtime == NULL || (paths == NULL && capacity != 0U)) return 0U;
