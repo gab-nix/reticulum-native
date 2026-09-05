@@ -158,6 +158,23 @@ int main(void) {
     assert(rns_heltec_oled_render(&oled));
 
     const uint8_t valid[] = {'h', 'i', ' ', 0xe2U, 0x98U, 0x83U};
+    settings.screen = RNS_HELTEC_OLED_SCREEN_MESSAGE;
+    rns_heltec_oled_set_settings(&oled, &settings);
+    uint8_t paged[80];
+    memset(paged, 'A', 40U); memset(paged + 40U, 'B', 40U);
+    assert(rns_heltec_oled_show_preview(&oled, paged, sizeof(paged), 0U));
+    assert(rns_heltec_oled_render(&oled));
+    assert_large_font_grid(oled.frame);
+    memcpy(status_frame, oled.frame, sizeof(status_frame));
+    rns_heltec_oled_poll(&oled, 3999U);
+    assert(oled.preview_page == 0U);
+    rns_heltec_oled_poll(&oled, 4000U);
+    assert(oled.preview_page == 1U && oled.dirty);
+    assert(rns_heltec_oled_render(&oled));
+    assert_large_font_grid(oled.frame);
+    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
+    rns_heltec_oled_poll(&oled, 8000U);
+    assert(oled.preview_page == 0U);
     assert(rns_heltec_oled_show_preview(&oled, valid, sizeof(valid), 100U));
     assert(strcmp(oled.model.preview, "hi \xe2\x98\x83") == 0);
     rns_heltec_oled_poll(&oled, 10099U);

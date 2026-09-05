@@ -37,7 +37,7 @@ static void incoming_message(void *context, const lxmf_message_t *message) {
             rns_heltec_oled_settings_t settings = oled->settings;
             settings.screen = RNS_HELTEC_OLED_SCREEN_MESSAGE;
             rns_heltec_oled_set_settings(oled, &settings);
-            preview_until = clock_ms(NULL) + 10000U;
+            preview_until = clock_ms(NULL) + 30000U;
         }
     }
 }
@@ -74,6 +74,12 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         return;
     }
     (void)rns_heltec_oled_esp_open(&display);
+    if (display) {
+        rns_heltec_oled_t *oled = rns_heltec_oled_esp_core(display);
+        rns_heltec_oled_settings_t settings = oled->settings;
+        settings.preview_timeout_ms = 30000U;
+        rns_heltec_oled_set_settings(oled, &settings);
+    }
     gpio_config_t input = {.pin_bit_mask = UINT64_C(1) << RNS_HELTEC_V3_1_GPIO_PRG,
         .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE, .intr_type = GPIO_INTR_DISABLE};

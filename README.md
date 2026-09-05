@@ -92,7 +92,9 @@ The airtime history is volatile and must not be bypassed by repeated rebooting.
 
 For the first message test, announce the sender first, then send a short
 **opportunistic** LXMF message to the discovered Heltec. Valid messages receive
-an explicit proof and a temporary plaintext OLED preview; packet contents are
+an explicit proof and a 30-second plaintext OLED preview in large 10x14-pixel
+letters. Longer previews cycle through 40-character pages every four seconds;
+unsupported Unicode glyphs display as `?`. Packet contents are
 never logged. Unknown senders are rejected until their verified delivery
 announce arrives. Direct links/resources, large messages, persistent inbox,
 durable replay protection, ratchet rotation and stamp enforcement are not

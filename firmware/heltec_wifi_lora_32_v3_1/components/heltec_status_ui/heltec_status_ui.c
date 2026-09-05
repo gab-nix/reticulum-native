@@ -194,6 +194,31 @@ static void draw_wrapped(uint8_t *frame, size_t first_row, size_t row_count,
     }
 }
 
+/* Preview storage is validated UTF-8. Unsupported glyphs occupy one cell,
+   not one cell per UTF-8 byte. Four large rows fit 40 visible characters. */
+static size_t preview_cells(const char *text) {
+    size_t count = 0U;
+    for (size_t i = 0U; text[i] != '\0'; ++count) {
+        size_t length = utf8_sequence_length((uint8_t)text[i]);
+        i += length ? length : 1U;
+    }
+    return count;
+}
+static void draw_large_preview(rns_heltec_oled_t *oled) {
+    size_t offset = 0U, cell = 0U;
+    char rows[4][11] = {{0}};
+    while (oled->model.preview[offset] != '\0') {
+        size_t length = utf8_sequence_length((uint8_t)oled->model.preview[offset]);
+        size_t first = oled->preview_page * 40U;
+        if (cell >= first && cell - first < 40U)
+            rows[(cell - first) / 10U][(cell - first) % 10U] =
+                length == 1U ? oled->model.preview[offset] : '?';
+        offset += length ? length : 1U;
+        ++cell;
+    }
+    for (size_t row = 0U; row < 4U; ++row) draw_large_line(oled->frame, row, rows[row]);
+}
+
 static bool send_command(rns_heltec_oled_t *oled, uint8_t command) {
     return oled->ops.write_command(oled->ops.context, &command, 1U);
 }
@@ -321,6 +346,8 @@ bool rns_heltec_oled_show_preview(rns_heltec_oled_t *oled,
     }
     bool valid = copy_utf8_preview(oled->model.preview,
                                    sizeof(oled->model.preview), utf8, length);
+    oled->preview_started_ms = now_ms;
+    oled->preview_page = 0U;
     if (oled->settings.preview_timeout_ms == 0U)
         oled->preview_deadline_ms = 0U;
     else if (UINT64_MAX - now_ms < oled->settings.preview_timeout_ms)
@@ -332,8 +359,12 @@ bool rns_heltec_oled_show_preview(rns_heltec_oled_t *oled,
 }
 
 void rns_heltec_oled_poll(rns_heltec_oled_t *oled, uint64_t now_ms) {
-    if (oled == NULL || oled->preview_deadline_ms == 0U) return;
-    if (now_ms >= oled->preview_deadline_ms) {
+    if (oled == NULL) return;
+    size_t pages = (preview_cells(oled->model.preview) + 39U) / 40U;
+    size_t page = pages && now_ms >= oled->preview_started_ms
+        ? (size_t)(((now_ms - oled->preview_started_ms) / 4000U) % pages) : 0U;
+    if (page != oled->preview_page) { oled->preview_page = page; oled->dirty = true; }
+    if (oled->preview_deadline_ms != 0U && now_ms >= oled->preview_deadline_ms) {
         oled->model.preview[0] = '\0';
         oled->preview_deadline_ms = 0U;
         oled->dirty = true;
@@ -345,11 +376,11 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
     if (oled == NULL || !oled->ready || oled->failed) return false;
     if (!oled->settings.enabled || !oled->dirty) return true;
     memset(oled->frame, 0, sizeof(oled->frame));
-    if (oled->settings.screen != RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS)
+    if (oled->settings.screen != RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS &&
+        oled->settings.screen != RNS_HELTEC_OLED_SCREEN_MESSAGE)
         draw_line(oled->frame, 0U, "RETICULUM");
     if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MESSAGE) {
-        draw_line(oled->frame, 1U, "MESSAGE PREVIEW");
-        draw_wrapped(oled->frame, 2U, 8U, oled->model.preview);
+        draw_large_preview(oled);
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS) {
         const char *state = "NO RNS";
         if (strstr(oled->model.radio, "FAULT") != NULL) state = "FAULT";
