@@ -52,6 +52,10 @@ typedef struct rns_interface_ops {
     rns_status_t (*get_stats)(void *context, rns_interface_stats_t *stats);
     void (*stop)(void *context);
     void (*destroy)(void *context);
+    /* Optional tracked enqueue. Completion is asynchronous and must not run
+     * before this returns; successful enqueue is not successful RF delivery. */
+    rns_status_t (*send_with_id)(void *context, const uint8_t *packet,
+                               size_t length, uint32_t *id);
 } rns_interface_ops_t;
 
 rns_status_t rns_interface_create(const rns_interface_ops_t *ops, void *context,
@@ -66,6 +70,8 @@ rns_status_t rns_interface_send(rns_interface_t *interface_value,
 rns_status_t rns_interface_get_stats(rns_interface_t *interface_value,
                                      rns_interface_stats_t *stats);
 void rns_interface_stop(rns_interface_t *interface_value);
+rns_status_t rns_interface_send_with_id(rns_interface_t *interface_value,
+    const uint8_t *packet, size_t length, uint32_t *id);
 
 #ifdef __cplusplus
 }

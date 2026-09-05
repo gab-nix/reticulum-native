@@ -300,8 +300,9 @@ static void test_one_and_two_frame_correlation(void) {
         split_packet[index] = (uint8_t)index;
     }
     assert(rns_interface_start(interface_value) == RNS_OK);
-    assert(rns_interface_send(interface_value, short_packet,
-                              sizeof(short_packet)) == RNS_OK);
+    uint32_t tracked_id;
+    assert(rns_interface_send_with_id(interface_value, short_packet,
+                              sizeof(short_packet),&tracked_id) == RNS_OK);
     reach_cad(interface_value, &capture);
     assert(fake.starts_cad == 1U);
     push_cad(&fake, RNS_SX1262_CAD_CLEAR, RNS_OK);
@@ -315,6 +316,7 @@ static void test_one_and_two_frame_correlation(void) {
            RNS_OK);
     assert(capture.result_count == 1U &&
            capture.outcomes[0] == RNS_SX1262_PACKET_SENT);
+    assert(capture.result_ids[0]==tracked_id);
 
     assert(rns_interface_send(interface_value, split_packet,
                               sizeof(split_packet)) == RNS_OK);

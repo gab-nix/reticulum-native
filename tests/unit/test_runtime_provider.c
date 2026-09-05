@@ -39,7 +39,7 @@ static rns_status_t poll(void *p, rns_interface_receive_fn receive,
     return f->poll_error;
 }
 static rns_interface_t *make(fake *f) {
-    static const rns_interface_ops_t ops = {start, poll, send_packet, stats, stop, destroy};
+    static const rns_interface_ops_t ops = {.start=start,.poll=poll,.send=send_packet,.get_stats=stats,.stop=stop,.destroy=destroy};
     rns_interface_t *p = NULL;
     f->stats = (rns_interface_stats_t){.online=1,.outbound=1,.broadcast=1,.effective_mtu=500};
     assert(rns_interface_create(&ops, f, &p) == RNS_OK); return p;

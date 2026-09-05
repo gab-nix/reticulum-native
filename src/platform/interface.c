@@ -84,6 +84,13 @@ rns_status_t rns_interface_get_stats(rns_interface_t *interface_value,
     memset(stats, 0, sizeof(*stats));
     return interface_value->ops->get_stats(interface_value->context, stats);
 }
+rns_status_t rns_interface_send_with_id(rns_interface_t *v,
+    const uint8_t *packet, size_t length, uint32_t *id) {
+    if(!v || !packet || !length || !id) return RNS_ERROR_INVALID_ARGUMENT;
+    if(!v->started) return RNS_ERROR_INVALID_STATE;
+    if(!v->ops->send_with_id) return RNS_ERROR_UNSUPPORTED;
+    return v->ops->send_with_id(v->context,packet,length,id);
+}
 
 void rns_interface_stop(rns_interface_t *interface_value) {
     if (interface_value == NULL || interface_value->started == 0) return;
