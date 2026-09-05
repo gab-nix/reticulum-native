@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "app_main.c" "bringup.c" "radio_discovery.c" "packet_messaging.c" "announce_button.c" "button_menu.c" "live_view.c" "home_view.c" "cpu_usage.c" "channel_view.c" "chat_store.c"
+    SRCS "app_main.c" "bringup.c" "radio_discovery.c" "packet_messaging.c" "announce_button.c" "button_menu.c" "live_view.c" "home_view.c" "cpu_usage.c" "channel_view.c" "chat_store.c" "chat_journal.c" "chat_flash_esp.c"
     INCLUDE_DIRS "."
     REQUIRES heltec_reticulum_radio heltec_v3_1_bsp heltec_status_ui heltec_sx1262 nvs_flash reticulum_idf
 )
