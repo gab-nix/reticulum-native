@@ -931,8 +931,11 @@ static void test_identity_survives_registry_expiry(unsigned service) {
         state->router.config.wall_clock = test_wall_clock;
         assert(lxmf_router_set_propagation_node(&state->router, &peer, service_hash, 9u) == LXMF_OK);
         state->router.propagation.used = true;
-        assert(!tui_state_propagation_sync_start(state));
-        assert(strstr(state->status, "upload is running") != NULL);
+        assert(tui_state_propagation_sync_start(state));
+        assert(strstr(state->status, "sync queued") != NULL);
+        assert(state->propagation_sync.waiting_for_upload);
+        assert(tui_state_propagation_sync_cancel(state));
+        assert(!state->propagation_sync.active);
         state->router.propagation.used = false;
         state->router.propagation_sync.status.active = true;
         assert(!tui_state_propagation_sync_start(state));

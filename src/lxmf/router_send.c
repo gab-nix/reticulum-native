@@ -233,6 +233,7 @@ static void propagation_sync_clear(lxmf_router_t *router, bool cancel) {
         slot->session = NULL;
     }
     slot->status.active = false;
+    slot->status.waiting_for_upload = false;
 }
 
 static void propagation_sync_reject(
@@ -545,6 +546,15 @@ static lxmf_status_t propagation_sync_result(
 
 static void propagation_sync_poll(lxmf_router_t *router) {
     lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
+    if (slot->status.active && slot->status.waiting_for_upload) {
+        if (router->propagation.used) return;
+        bool retain = slot->status.retain_on_node;
+        slot->status.active = false;
+        slot->status.waiting_for_upload = false;
+        /* Runs before the outbound queue, so a second upload cannot starve
+         * an already accepted sync. Start reports terminal allocation errors. */
+        (void)lxmf_router_propagation_sync_start(router, retain);
+    }
     if (!slot->status.active || slot->session == NULL) return;
     rns_status_t polled = lxmf_pn_session_poll(
         slot->session, (double)router_monotonic_ms(router) / 1000.0);
@@ -1940,7 +1950,7 @@ lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,
         router->config.propagation_node_identity == NULL)
         return LXMF_ERR_ARGUMENT;
     lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
-    if (slot->status.active || router->propagation.used)
+    if (slot->status.active)
         return LXMF_ERR_PENDING;
     if (slot->session != NULL) propagation_sync_clear(router, false);
     memset(slot, 0, sizeof *slot);
@@ -1950,6 +1960,11 @@ lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,
     slot->status.result = LXMF_ERR_PENDING;
     slot->status.transport_error = RNS_OK;
     slot->status.retain_on_node = retain_on_node;
+    if (router->propagation.used) {
+        slot->status.active = true;
+        slot->status.waiting_for_upload = true;
+        return LXMF_OK;
+    }
     lxmf_pn_session_options_t options = {
         .runtime = router->config.runtime,
         .local_identity = router->config.identity,
@@ -1989,7 +2004,14 @@ lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,
 lxmf_status_t lxmf_router_propagation_sync_cancel(lxmf_router_t *router) {
     if (router == NULL) return LXMF_ERR_ARGUMENT;
     lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
-    if (!slot->status.active || slot->session == NULL) return LXMF_ERR_FORMAT;
+    if (!slot->status.active) return LXMF_ERR_FORMAT;
+    if (slot->status.waiting_for_upload) {
+        slot->status.state = LXMF_PN_CANCELLED;
+        slot->status.result = LXMF_ERR_CANCELLED;
+        propagation_sync_clear(router, false);
+        return LXMF_OK;
+    }
+    if (slot->session == NULL) return LXMF_ERR_FORMAT;
     lxmf_pn_session_cancel(slot->session);
     const lxmf_pn_session_progress_t *progress =
         lxmf_pn_session_progress(slot->session);

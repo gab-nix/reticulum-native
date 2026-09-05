@@ -1050,7 +1050,8 @@ static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) 
     if (state->propagation_sync.active) {
         (void)snprintf(items[TUI_SETTING_PROPAGATION_SYNC], sizeof items[0],
             "Cancel Sync: %s, %zu/%zu messages",
-            propagation_sync_phase_name(state->propagation_sync.state),
+            state->propagation_sync.waiting_for_upload ? "waiting for upload" :
+                propagation_sync_phase_name(state->propagation_sync.state),
             state->propagation_sync.received,
             state->propagation_sync.available);
     } else if (state->propagation_sync.state == LXMF_PN_COMPLETE) {
@@ -1639,7 +1640,8 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             "Propagation sync: %s active=%s available=%zu received=%zu "
             "accepted=%zu duplicates=%zu rejected=%zu acknowledged=%zu "
             "result=%s transport=%s\n",
-            propagation_sync_phase_name(state->propagation_sync.state),
+            state->propagation_sync.waiting_for_upload ? "waiting for upload" :
+                propagation_sync_phase_name(state->propagation_sync.state),
             state->propagation_sync.active ? "yes" : "no",
             state->propagation_sync.available,
             state->propagation_sync.received,
