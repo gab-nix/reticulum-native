@@ -46,7 +46,8 @@ typedef enum {
     LXMF_QUEUE_REASON_RETRY_BACKOFF,
     /* Explicit user cancellation; automatic polling must not retry. */
     LXMF_QUEUE_REASON_CANCELLED,
-    LXMF_QUEUE_REASON_RETRY_EXHAUSTED
+    LXMF_QUEUE_REASON_RETRY_EXHAUSTED,
+    LXMF_QUEUE_REASON_IDENTITY_TIMEOUT
 } lxmf_queue_reason_t;
 
 #define LXMF_DELIVERY_PROGRESS_COMPLETE 1000000u
@@ -59,6 +60,8 @@ typedef struct {
     /* Absolute application-clock time for the next eligible retry. Zero means
      * no scheduled deadline has been assigned yet. */
     uint64_t retry_at_ms;
+    /* Unix seconds; independent of restart-rebased monotonic retry timers. */
+    uint64_t identity_deadline;
     /* Integer millionths avoid platform-dependent floating-point storage. */
     uint32_t progress;
     bool has_proof_id;

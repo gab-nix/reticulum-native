@@ -39,6 +39,12 @@ interface configuration:
 Never commit identities, private keys, message stores, local configuration,
 packet captures or logs containing private traffic.
 
+Recipient identity discovery defaults to a five-minute wall-clock deadline.
+Restarting does not renew it; expiry keeps the message and requires an explicit
+retry. Backward system-clock adjustments can extend this wait. Message journals
+written by this version use extended delivery records: back up your store before
+upgrading, and do not open an upgraded store with an older binary.
+
 Conversation text wraps to the available width. Page Up/Page Down scroll by
 display lines. While composing, Enter sends, Ctrl-N inserts a newline, and
 Up/Down move through wrapped lines. The editor grows to four rows and scrolls

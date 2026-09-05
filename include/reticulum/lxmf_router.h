@@ -129,6 +129,10 @@ typedef struct {
     rns_ratchet_store_t *ratchet_store;
     lxmf_clock_fn wall_clock;
     void *wall_clock_context;
+    /* Zero selects 300 seconds. Persisted deadlines count offline time.
+     * Without wall_clock, the platform wall clock is used for discovery.
+     * Requires a stable wall clock: backward adjustments extend the wait. */
+    uint32_t identity_discovery_timeout_seconds;
     /* Zero disables inbound stamp enforcement. Costs 1..254 accept either a
      * valid issued-ticket stamp or a proof-of-work stamp. */
     uint8_t inbound_stamp_cost;
