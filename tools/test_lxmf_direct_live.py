@@ -70,7 +70,11 @@ def main():
     parser.add_argument("--driver", type=pathlib.Path, required=True)
     parser.add_argument("--transport", choices=("udp", "tcp"), default="udp")
     parser.add_argument("--output", type=pathlib.Path)
+    parser.add_argument("--delay-inbound-ms", type=int, default=0,
+                        help="Synthetic Python delivery-worker delay (0..1000 ms)")
     args = parser.parse_args()
+    if not 0 <= args.delay_inbound_ms <= 1000:
+        parser.error("--delay-inbound-ms must be between 0 and 1000")
     check_checkout(args.reticulum, RNS_COMMIT)
     check_checkout(args.lxmf, LXMF_COMMIT)
     sys.path[:0] = [str(args.reticulum.resolve()), str(args.lxmf.resolve())]
@@ -85,6 +89,7 @@ def main():
               "c_events": [], "python_received": [],
               "python_proved": [], "errors": [], "ok": False}
     report["run_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    report["synthetic_inbound_delay_ms"] = args.delay_inbound_ms
     report["library_revision"] = subprocess.check_output(
         ["git", "-C", str(pathlib.Path(__file__).resolve().parents[1]),
          "rev-parse", "HEAD"], text=True).strip()
@@ -118,6 +123,14 @@ def main():
         router = LXMF.LXMRouter(identity=identity, storagepath=str(root),
                                  autopeer=False, enforce_stamps=True,
                                  delivery_limit=2000)
+        if args.delay_inbound_ms:
+            original_delivery = router.lxmf_delivery
+
+            def delayed_delivery(*delivery_args, **delivery_kwargs):
+                time.sleep(args.delay_inbound_ms / 1000.0)
+                return original_delivery(*delivery_args, **delivery_kwargs)
+
+            router.lxmf_delivery = delayed_delivery
         source = router.register_delivery_identity(identity, "Python live test", stamp_cost=None)
         segmented_field = make_segmented_field()
 
@@ -193,8 +206,15 @@ def main():
                     router.announce(source.hash)
                     last_announce = now
                 if (remote and peer_verified and c_delivered > len(outbound) and
+                        len(report["python_received"]) > len(outbound) and
                         len(outbound) < 3 and
                         len(report["python_proved"]) == len(outbound)):
+                    # Python proves a packet before its delivery worker validates
+                    # and remembers the ticket. Wait for that worker's callback,
+                    # not merely C's proof event, before packing a ticket reply.
+                    if router.get_outbound_ticket(destination_hash) is None:
+                        report["errors"].append("Validated inbound message did not provide an outbound ticket")
+                        break
                     destination = RNS.Destination(remote, RNS.Destination.OUT,
                         RNS.Destination.SINGLE, "lxmf", "delivery")
                     size = 17 if len(outbound) == 0 else 2048 if len(outbound) == 1 else 23

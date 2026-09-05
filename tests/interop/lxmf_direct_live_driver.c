@@ -101,6 +101,13 @@ static void received(void *context, const lxmf_store_message_t *message) {
     lxmf_ticket_field_t ticket = {0};
     if (lxmf_fields_parse_ticket(unpacked.fields_msgpack.data, unpacked.fields_msgpack.len,
         &ticket) != LXMF_OK || ticket.present != (s->received == 0)) s->metadata_failed = true;
+    printf("{\"event\":\"metadata\",\"index\":%zu,\"stamp_length\":%zu,"
+           "\"title_length\":%zu,\"fields_length\":%zu,\"ticket_present\":%s,"
+           "\"fields_match\":%s}\n", s->received, unpacked.stamp_len,
+           unpacked.title.len, plain_length, ticket.present ? "true" : "false",
+           plain_fields != NULL && (s->received < 2
+               ? plain_length == sizeof fields && memcmp(plain_fields, fields, sizeof fields) == 0
+               : segmented_fields_valid(plain_fields, plain_length)) ? "true" : "false");
     rns_hal_secure_zero(&ticket, sizeof ticket);
     free(plain_fields);
     s->received++;

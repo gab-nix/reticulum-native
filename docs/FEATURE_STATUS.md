@@ -111,10 +111,11 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 
 | Acceptance behavior | Status | Evidence and remaining work |
 | --- | --- | --- |
-| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Eleven opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
+| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Twelve opt-in CTest cases, including the explicitly delayed-worker regression; explicit checkout paths, serial execution and bounded timeouts |
 | Direct packet and multi-segment LXMF, UDP/TCP | VERIFIED | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp` pass bidirectionally with pinned Python; loss/restart scenarios remain outside this evidence |
 | Bidirectional local-service path discovery, UDP/TCP | VERIFIED | `interop_discovery_udp/tcp` prove stock Python requests recover the C identity/path after losing its startup announce, and C requests discover a never-announced Python destination; public keys match in both directions. Multi-hop cached-route responses and adversarial discovery remain outside this evidence |
 | Bidirectional ticket exchange and stamped resource replies, UDP/TCP | VERIFIED | Direct drivers exchange signed ticket fields, then validate ticket-backed stamps for packet and multi-segment replies against pinned Python; renewal, expiry-boundary and restart scenarios remain outside this evidence |
+| Ticket acceptance harness delivery-worker ordering | IMPLEMENTED | Direct Python replies wait for the validated-delivery callback and stored ticket, not the earlier packet proof. `interop_lxmf_ticket_worker_race_udp` delays the synthetic worker by 500 ms and retains strict ticket-stamp assertions; driver diagnostics expose lengths/booleans only, never ticket bytes or message contents |
 | Propagation upload/download, UDP/TCP | WIP | `interop_lxmf_propagation_udp` and `interop_lxmf_propagation_tcp`; recovery scenarios remain |
 | RRC pinned-codec fixture hub | WIP | `interop_rrc_python`; stock server acceptance remains separate |
 | C browser to pinned Nomad page handler, UDP/TCP | IMPLEMENTED | `interop_browser_udp` and `interop_browser_tcp` validate small and resource-backed rendered pages; integrated stock TUI acceptance remains |
