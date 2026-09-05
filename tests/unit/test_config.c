@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdio.h>
 
 static const char valid_config[] =
     "[reticulum]\n"
@@ -51,7 +52,35 @@ static const char kiss_config[] =
     "persistence = 128\nslottime = 40\ndatabits = 7\n"
     "parity = even\nstopbits = 2\n";
 
+static void test_enable_alias(void) {
+    const char *cases[] = {
+        "interface_enabled = Yes\n", "interface_enabled = No\n",
+        "interface_enabled = Yes\nenabled = No\n",
+        "enabled = No\ninterface_enabled = Yes\n",
+        "interface_enabled = No\nenabled = Yes\n",
+        "enabled = Yes\ninterface_enabled = No\n",
+        "enabled = No\ninterface_enabled = No\n"};
+    bool expected[] = {true, false, true, true, true, true, false};
+    for (size_t i = 0u; i < sizeof cases / sizeof cases[0]; ++i) {
+        char text[512], emitted[4096]; size_t length;
+        int written = snprintf(text, sizeof text,
+            "[interfaces]\n[[first]]\ntype = TCPClientInterface\ntarget_host = 127.0.0.1\ntarget_port = 4242\n%s[[second]]\ntype = TCPClientInterface\ninterface_enabled = No\ntarget_host = 127.0.0.1\ntarget_port = 4243\n", cases[i]);
+        assert(written > 0 && (size_t)written < sizeof text);
+        rns_config_t config, restored; rns_config_diagnostic_t diagnostic;
+        assert(rns_config_parse(text, (size_t)written, &config, &diagnostic) == RNS_OK);
+        assert(config.interfaces[0].enabled == expected[i] && !config.interfaces[1].enabled);
+        assert(rns_config_emit(&config, emitted, sizeof emitted, &length) == RNS_OK);
+        assert(rns_config_parse(emitted, length, &restored, &diagnostic) == RNS_OK);
+        assert(restored.interfaces[0].enabled == expected[i]);
+    }
+    const char invalid[] = "[interfaces]\n[[bad]]\ntype = TCPClientInterface\ninterface_enabled = maybe\n";
+    rns_config_t config; rns_config_diagnostic_t diagnostic;
+    assert(rns_config_parse(invalid, sizeof invalid - 1u, &config, &diagnostic) != RNS_OK);
+    assert(diagnostic.line == 4u);
+}
+
 int main(void) {
+    test_enable_alias();
     static const char unsupported[] =
         "[interfaces]\n[[Mystery]]\ntype = PipeInterface\nenabled = Yes\n";
     static const char invalid[] =
