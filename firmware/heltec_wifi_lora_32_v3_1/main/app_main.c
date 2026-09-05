@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nvs_flash.h"
 
 #include "reticulum/boards/heltec_wifi_lora_32_v3_1.h"
@@ -28,14 +31,36 @@ void app_main(void) {
         ESP_LOGE(TAG, "Reticulum ESP-IDF platform installation failed");
         return;
     }
+    ESP_LOGI(TAG, "Boot stage: crypto provider installation");
+    if (!heap_caps_check_integrity_all(true)) {
+        ESP_LOGE(TAG, "Heap integrity failed before crypto installation");
+        return;
+    }
     if (rns_esp_crypto_install() != RNS_OK) {
         ESP_LOGE(TAG, "Reticulum ESP-IDF crypto provider installation failed");
+        return;
+    }
+    ESP_LOGI(TAG, "Boot stage: crypto self-test");
+    if (!heap_caps_check_integrity_all(true)) {
+        ESP_LOGE(TAG, "Heap integrity failed before crypto self-test");
         return;
     }
     if (rns_esp_crypto_self_test() != RNS_OK) {
         ESP_LOGE(TAG, "Reticulum ESP-IDF crypto known-answer test failed");
         return;
     }
+    if (!heap_caps_check_integrity_all(true)) {
+        ESP_LOGE(TAG, "Heap integrity failed after crypto self-test");
+        return;
+    }
+    /* ESP-IDF reports this value in bytes, unlike upstream FreeRTOS. */
+    unsigned long headroom = (unsigned long)uxTaskGetStackHighWaterMark(NULL);
+    ESP_LOGI(TAG, "Crypto self-test passed; heap intact; stack headroom: %lu bytes", headroom);
+    if (headroom < 2048UL) {
+        ESP_LOGE(TAG, "Boot stack headroom below required 2048 bytes");
+        return;
+    }
+    ESP_LOGI(TAG, "Boot stage: storage provider opening");
     if (rns_esp_nvs_storage_open(NULL, &storage) != RNS_OK) {
         ESP_LOGE(TAG, "Reticulum NVS storage provider could not be opened");
         return;
