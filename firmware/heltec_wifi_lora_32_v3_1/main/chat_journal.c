@@ -13,8 +13,20 @@ typedef struct {
     uint8_t sectors[2][SECTOR], payload[PAYLOAD];
 } journal;
 static bool key_slot(const char *key, size_t *slot) {
-    if (!key || strncmp(key,"chat",4) || key[4] < '0' || key[4] > '7' || key[5]) return false;
-    *slot = (size_t)(key[4]-'0'); return true;
+    if (!key) return false;
+    if (!strncmp(key,"chat",4) && key[4] >= '0' && key[4] <= '7' && !key[5]) {
+        *slot=(size_t)(key[4]-'0'); return true;
+    }
+    if (!strncmp(key,"msg",3) && key[3] >= '0' && key[3] <= '6' &&
+        key[4] >= '0' && key[4] <= '9' && !key[5]) {
+        size_t index=(size_t)(key[3]-'0')*10U+(size_t)(key[4]-'0');
+        if(index<64U) { *slot=8U+index; return true; }
+    }
+    if (!strncmp(key,"out",3) && key[3]>='0' && key[3]<='3' && !key[4]) {
+        *slot=72U+(size_t)(key[3]-'0'); return true;
+    }
+    if (!strcmp(key,"prefs")) { *slot=76U; return true; }
+    return false;
 }
 static rns_status_t inspect(journal *j,const char *key,size_t slot,int valid[2],uint32_t gen[2]) {
     bool blank[2] = {true,true};
@@ -71,8 +83,12 @@ static void destroy(void *ctx) { journal *j=ctx; rns_hal_secure_zero(j,sizeof(*j
 rns_status_t heltec_chat_journal_open(const heltec_chat_flash_ops *ops,rns_storage_t **out) {
     if(!ops || !ops->read || !ops->write || !ops->erase || !out) return RNS_ERROR_INVALID_ARGUMENT;
     *out=NULL; journal *j=calloc(1,sizeof(*j)); if(!j) return RNS_ERROR_NO_MEMORY; j->ops=*ops;
-    for(unsigned i=0;i<8;++i) {
-        char key[8]; int valid[2]={0}; uint32_t gen[2]={0}; (void)snprintf(key,sizeof(key),"chat%u",i);
+    for(unsigned i=0;i<HELTEC_CHAT_JOURNAL_RECORDS;++i) {
+        char key[8]; int valid[2]={0}; uint32_t gen[2]={0};
+        if(i<8U) (void)snprintf(key,sizeof(key),"chat%u",i);
+        else if(i<72U) (void)snprintf(key,sizeof(key),"msg%02u",i-8U);
+        else if(i<76U) (void)snprintf(key,sizeof(key),"out%u",i-72U);
+        else memcpy(key,"prefs",6);
         rns_status_t st=inspect(j,key,i,valid,gen); if(st!=RNS_OK) { destroy(j); return st; }
     }
     static const rns_storage_ops_t storage_ops={.read=read_record,.write_atomic=write_record,.remove=remove_record,.destroy=destroy};

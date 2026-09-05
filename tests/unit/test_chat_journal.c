@@ -4,7 +4,7 @@
 #include <assert.h>
 #include <stdbool.h>
 #include <string.h>
-static uint8_t flash[65536]; static bool torn;
+static uint8_t flash[HELTEC_CHAT_JOURNAL_BYTES]; static bool torn;
 static rns_status_t rd(void *c,size_t o,uint8_t *p,size_t n) { (void)c; assert(o+n<=sizeof(flash)); memcpy(p,flash+o,n); return RNS_OK; }
 static rns_status_t erase(void *c,size_t o,size_t n) { (void)c; assert(o+n<=sizeof(flash)); memset(flash+o,255,n); return RNS_OK; }
 static rns_status_t wr(void *c,size_t o,const uint8_t *p,size_t n) {
@@ -17,8 +17,16 @@ int main(void) {
     assert(rns_storage_read(s,"chat0",out,sizeof(out),&n)==RNS_ERROR_NOT_FOUND);
     assert(rns_storage_write_atomic(s,"identity",(const uint8_t *)"x",1)==RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_storage_write_atomic(s,"chat0",(const uint8_t *)"old",3)==RNS_OK);
+    assert(rns_storage_write_atomic(s,"msg00",(const uint8_t *)"first",5)==RNS_OK);
+    assert(rns_storage_write_atomic(s,"msg63",(const uint8_t *)"last",4)==RNS_OK);
+    assert(rns_storage_write_atomic(s,"out3",(const uint8_t *)"queued",6)==RNS_OK);
+    assert(rns_storage_write_atomic(s,"prefs",(const uint8_t *)"off",3)==RNS_OK);
+    assert(rns_storage_write_atomic(s,"msg64",(const uint8_t *)"x",1)==RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_storage_write_atomic(s,"out4",(const uint8_t *)"x",1)==RNS_ERROR_INVALID_ARGUMENT);
     torn=true; assert(rns_storage_write_atomic(s,"chat0",(const uint8_t *)"new",3)==RNS_ERROR_IO);
     rns_storage_destroy(s); assert(heltec_chat_journal_open(&ops,&s)==RNS_OK);
+    assert(rns_storage_read(s,"msg63",out,sizeof(out),&n)==RNS_OK && n==4 && !memcmp(out,"last",4));
+    assert(rns_storage_read(s,"out3",out,sizeof(out),&n)==RNS_OK && n==6 && !memcmp(out,"queued",6));
     assert(rns_storage_read(s,"chat0",out,sizeof(out),&n)==RNS_OK && n==3 && !memcmp(out,"old",3));
     torn=false; assert(rns_storage_write_atomic(s,"chat0",(const uint8_t *)"new",3)==RNS_OK);
     assert(rns_storage_remove(s,"chat0")==RNS_OK);

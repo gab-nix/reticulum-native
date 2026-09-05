@@ -2,8 +2,11 @@
 #ifndef HELTEC_CHAT_JOURNAL_H
 #define HELTEC_CHAT_JOURNAL_H
 #include "reticulum/storage.h"
-/* Exactly 64 KiB reserved for eight two-sector records; offsets are relative
+/* Legacy chats occupy the first 64 KiB unchanged. New message/outbox/settings
+ * records extend the region; offsets are relative
  * to an exclusively owned region, never the identity/NVS partition. */
+#define HELTEC_CHAT_JOURNAL_RECORDS 77U
+#define HELTEC_CHAT_JOURNAL_BYTES (HELTEC_CHAT_JOURNAL_RECORDS*8192U)
 typedef struct {
     void *context;
     rns_status_t (*read)(void *, size_t, uint8_t *, size_t);
