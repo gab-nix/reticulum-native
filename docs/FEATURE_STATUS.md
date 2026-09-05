@@ -17,6 +17,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Transactional storage and nonblocking interface provider APIs | IMPLEMENTED | Bounded serialized dual-slot NVS has host fake-backend transaction and corruption tests, including hypothetical buffered-commit recovery; pinned ESP-IDF 5.5 direct-set/commit-no-op target validation and SX1262 validation remain |
 | Explicit platform-separated source manifests | WIP | Platform/storage component uses an explicit embedded subset; full portable protocol-core consumption remains |
 | Cryptography, identities, destinations and packets | IMPLEMENTED | Broader platform validation |
+| Identity code without OpenSSL or POSIX dependencies | IMPLEMENTED | Identity erasure uses the platform secure-zero API; `test_crypto_no_default` links the identity implementation with neither host provider and checks pre-provider failure/erasure. ESP-IDF explicitly compiles identity; persistent firmware identity and device exchange remain WIP |
 | Signed announces and path lookup | WIP | Complete persistence and routing compatibility |
 | UDP interfaces | IMPLEMENTED | Adverse-network hardening |
 | TCP client and server interfaces | IMPLEMENTED | Broader reconnect and topology coverage |
