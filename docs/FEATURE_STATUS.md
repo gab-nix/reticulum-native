@@ -90,7 +90,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Settings and self-announcement | WIP | Complete runtime apply and scheduling behavior |
 | Interfaces screen | IMPLEMENTED | More detailed runtime controls |
 | Configuration screen | IMPLEMENTED | Complete safe live reconfiguration |
-| Disabled incomplete-interface configuration round trips | WIP | A disabled TCP interface may parse without an endpoint, but emission currently writes port zero, which reparse rejects; add omission-preserving serialization and recovery tests |
+| Disabled TCP/UDP endpoint configuration round trips | IMPLEMENTED | `test_config` covers absent and partial TCP client/server and UDP endpoints through parse/emit/reparse, preserving disabled state and specified ports; explicit zero ports remain rejected and bounded emission failure is tested. Incomplete serial/radio settings are outside this row |
 | Upstream interface enable-key compatibility | IMPLEMENTED | `test_config` covers `enabled` and legacy `interface_enabled`, either-true precedence in both orders, per-interface isolation, invalid boolean rejection and emitted-config round trips; semantics checked against pinned Reticulum interface creation |
 | Guide screen | IMPLEMENTED | Expanded contextual help |
 | Event log screen | IMPLEMENTED | Filtering and persistent diagnostics |

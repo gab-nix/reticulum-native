@@ -52,6 +52,39 @@ static const char kiss_config[] =
     "persistence = 128\nslottime = 40\ndatabits = 7\n"
     "parity = even\nstopbits = 2\n";
 
+static void test_disabled_endpoints(void) {
+    const char *types[] = {"TCPClientInterface", "TCPServerInterface", "UDPInterface"};
+    const char *options[] = {"", "target_host = 127.0.0.1\n", "target_port = 4242\n",
+        "listen_port = 4243\n", "forward_ip = 127.0.0.1\nforward_port = 4244\n"};
+    for (size_t t = 0u; t < sizeof types / sizeof types[0]; ++t) {
+        for (size_t o = 0u; o < sizeof options / sizeof options[0]; ++o) {
+            char text[512], emitted[4096]; size_t length;
+            int written = snprintf(text, sizeof text,
+                "[interfaces]\n[[disabled]]\ntype = %s\nenabled = No\n%s", types[t], options[o]);
+            assert(written > 0 && (size_t)written < sizeof text);
+            rns_config_t before, after; rns_config_diagnostic_t diagnostic;
+            assert(rns_config_parse(text, (size_t)written, &before, &diagnostic) == RNS_OK);
+            assert(rns_config_emit(&before, emitted, sizeof emitted, &length) == RNS_OK);
+            assert(rns_config_parse(emitted, length, &after, &diagnostic) == RNS_OK);
+            assert(!after.interfaces[0].enabled && after.interfaces[0].type == before.interfaces[0].type);
+            if (t == 0u) {
+                assert(after.interfaces[0].target_port == before.interfaces[0].target_port);
+                assert(strcmp(after.interfaces[0].target_host, before.interfaces[0].target_host) == 0);
+            } else {
+                assert(after.interfaces[0].listen_port == before.interfaces[0].listen_port);
+                if (t == 2u) {
+                    assert(after.interfaces[0].forward_port == before.interfaces[0].forward_port);
+                    assert(strcmp(after.interfaces[0].forward_ip, before.interfaces[0].forward_ip) == 0);
+                }
+            }
+            assert(rns_config_emit(&before, emitted, 8u, &length) == RNS_ERROR_OVERFLOW);
+        }
+    }
+    const char zero[] = "[interfaces]\n[[disabled]]\ntype = TCPClientInterface\nenabled = No\ntarget_port = 0\n";
+    rns_config_t config; rns_config_diagnostic_t diagnostic;
+    assert(rns_config_parse(zero, sizeof zero - 1u, &config, &diagnostic) != RNS_OK);
+}
+
 static void test_enable_alias(void) {
     const char *cases[] = {
         "interface_enabled = Yes\n", "interface_enabled = No\n",
@@ -80,6 +113,7 @@ static void test_enable_alias(void) {
 }
 
 int main(void) {
+    test_disabled_endpoints();
     test_enable_alias();
     static const char unsupported[] =
         "[interfaces]\n[[Mystery]]\ntype = PipeInterface\nenabled = Yes\n";
