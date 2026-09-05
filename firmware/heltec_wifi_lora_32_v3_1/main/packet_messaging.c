@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "packet_messaging.h"
 #include "button_menu.h"
+#include "live_view.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -20,8 +21,8 @@ static lxmf_packet_node_t *node;
 static rns_heltec_oled_esp_t *display;
 static uint64_t tx_done, tx_failed, preview_until;
 static heltec_button_menu menu;
-static char last_preview[RNS_HELTEC_OLED_PREVIEW_MAX + 1U];
-static bool have_message;
+static heltec_live_view live;
+static heltec_menu_action active_view;
 static uint64_t clock_ms(void *context) { (void)context; return (uint64_t)esp_timer_get_time() / 1000U; }
 static rns_status_t entropy(void *context, uint8_t *out, size_t size) {
     (void)context; return rns_hal_random_bytes(out, size);
@@ -34,6 +35,7 @@ static void tx_result(void *context, uint32_t id, rns_sx1262_packet_outcome_t ou
 static void incoming_message(void *context, const lxmf_message_t *message) {
     (void)context;
     ESP_LOGI(TAG, "Verified short LXMF received; content bytes=%u", (unsigned)message->content.len);
+    heltec_live_message(&live, message->content.data, message->content.len);
     if (display) {
         rns_heltec_oled_t *oled = rns_heltec_oled_esp_core(display);
         rns_heltec_oled_settings_t settings = oled->settings;
@@ -41,8 +43,6 @@ static void incoming_message(void *context, const lxmf_message_t *message) {
         rns_heltec_oled_set_settings(oled, &settings);
         (void)rns_heltec_oled_show_preview(oled, message->content.data, message->content.len, clock_ms(NULL));
         if (oled->settings.preview_enabled) {
-            memcpy(last_preview, oled->model.preview, sizeof(last_preview));
-            have_message = true;
             settings.screen = RNS_HELTEC_OLED_SCREEN_MESSAGE;
             rns_heltec_oled_set_settings(oled, &settings);
             preview_until = clock_ms(NULL) + 30000U;
@@ -100,23 +100,16 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         heltec_radio_discovery_poll(&discovery, now);
         heltec_menu_action action = button_ready ? heltec_button_menu_poll(&menu,
             gpio_get_level(RNS_HELTEC_V3_1_GPIO_PRG) == 0, now) : HELTEC_MENU_NONE;
-        if (menu.open) preview_until = 0U;
+        if (menu.open) { preview_until = 0U; active_view = HELTEC_MENU_NONE; menu.browsing = false; }
         if (action == HELTEC_MENU_ANNOUNCE) {
             rns_status_t announced = lxmf_packet_node_announce(node, (uint64_t)HELTEC_BUILD_EPOCH + now / 1000U);
             ESP_LOGI(TAG, "PRG announce queue status=%d; airtime/CAD scheduling applies", (int)announced);
         }
-        if (action == HELTEC_MENU_MESSAGE && display) {
-            rns_heltec_oled_t *oled = rns_heltec_oled_esp_core(display);
-            rns_heltec_oled_settings_t settings = oled->settings;
-            settings.screen = RNS_HELTEC_OLED_SCREEN_MESSAGE;
-            settings.preview_timeout_ms = 0U;
-            rns_heltec_oled_set_settings(oled, &settings);
-            const char *text = have_message ? last_preview : "NO MESSAGE";
-            (void)rns_heltec_oled_show_preview(oled, (const uint8_t *)text, strlen(text), now);
-            preview_until = UINT64_MAX;
+        if (action == HELTEC_MENU_MESSAGE || action == HELTEC_MENU_NODES) {
+            active_view = action; menu.browsing = true; next_display = 0;
         }
         if (action == HELTEC_MENU_CLEAR) {
-            rns_hal_secure_zero(last_preview, sizeof(last_preview)); have_message = false;
+            rns_hal_secure_zero(&live, sizeof(live));
             preview_until = 0U;
             if (display) {
                 rns_heltec_oled_t *oled = rns_heltec_oled_esp_core(display);
@@ -126,10 +119,17 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         }
         lxmf_packet_node_stats_t messages;
         lxmf_packet_node_stats(node, &messages);
+        if (action == HELTEC_MENU_NEXT) next_display = 0;
         if (now >= next_display && display) {
             rns_heltec_oled_t *oled = rns_heltec_oled_esp_core(display);
             rns_heltec_oled_poll(oled, now);
             if (menu.open) rns_heltec_oled_set_menu(oled, heltec_button_menu_label(&menu));
+            else if (active_view == HELTEC_MENU_MESSAGE || active_view == HELTEC_MENU_NODES) {
+                char lines[8][22];
+                if (active_view == HELTEC_MENU_MESSAGE) heltec_live_messages(&live, action == HELTEC_MENU_NEXT, lines);
+                else heltec_live_nodes(&live, &discovery, now, action == HELTEC_MENU_NEXT, lines);
+                rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
+            }
             else if (now >= preview_until) {
                 rns_heltec_oled_set_discovery_count(oled, (uint16_t)discovery.identity_count);
                 rns_heltec_oled_set_diagnostics(oled, status == RNS_OK ? "RX/TX 868.100 SF11" : "RADIO ERROR",
@@ -139,7 +139,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 rns_heltec_oled_esp_close(display); display = NULL;
                 ESP_LOGE(TAG, "OLED offline; radio continues");
             }
-            next_display = now + 1000U;
+            next_display = now + 250U;
         }
         if (now >= next_log) {
             ESP_LOGI(TAG, "Ingress=%" PRIu64 " malformed=%" PRIu64 " ifac=%" PRIu64

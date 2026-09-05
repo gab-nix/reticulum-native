@@ -35,5 +35,14 @@ int main(void) {
     assert(heltec_button_menu_poll(&m, false, 74100) == HELTEC_MENU_NONE);
     assert(heltec_button_menu_poll(&m, false, 74150) == HELTEC_MENU_NONE);
     assert(!m.open); /* Release must not reopen or advance the menu. */
+    m.browsing = true;
+    assert(press(&m, 75000, 100) == HELTEC_MENU_NEXT && !m.open);
+    assert(heltec_button_menu_poll(&m, true, 76000) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, true, 76050) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, true, 76750) == HELTEC_MENU_NONE && m.open);
+    assert(heltec_button_menu_poll(&m, false, 77000) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, false, 77050) == HELTEC_MENU_NONE && m.selected == 0);
+    m.selected = 4;
+    assert(press(&m, 78000, 800) == HELTEC_MENU_NODES);
     return 0;
 }

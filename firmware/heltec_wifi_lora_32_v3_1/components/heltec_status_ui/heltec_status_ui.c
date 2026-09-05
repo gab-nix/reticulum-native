@@ -120,9 +120,19 @@ static const uint8_t *large_glyph(char character) {
     static const uint8_t dot[7] = {0,0,0,0,0,4,4};
     static const uint8_t blank[7] = {0};
     static const uint8_t unknown[7] = {14,17,1,2,4,0,4};
+    static const uint8_t star[7] = {0,21,14,31,14,21,0};
+    static const uint8_t colon[7] = {0,4,4,0,4,4,0};
+    static const uint8_t dash[7] = {0,0,0,31,0,0,0};
+    static const uint8_t slash[7] = {1,1,2,4,8,16,16};
+    static const uint8_t bang[7] = {4,4,4,4,4,0,4};
     if (character >= 'A' && character <= 'Z') return letters[character - 'A'];
     if (character >= '0' && character <= '9') return digits[character - '0'];
     if (character == '.') return dot;
+    if (character == '*') return star;
+    if (character == ':') return colon;
+    if (character == '-') return dash;
+    if (character == '/') return slash;
+    if (character == '!') return bang;
     return character == ' ' ? blank : unknown;
 }
 
@@ -283,7 +293,7 @@ void rns_heltec_oled_set_settings(rns_heltec_oled_t *oled,
         memset(oled->model.preview, 0, sizeof(oled->model.preview));
         oled->preview_deadline_ms = 0U;
     }
-    if (oled->settings.screen > RNS_HELTEC_OLED_SCREEN_MENU)
+    if (oled->settings.screen > RNS_HELTEC_OLED_SCREEN_LIVE)
         oled->settings.screen = RNS_HELTEC_OLED_SCREEN_STATUS;
     oled->dirty = true;
     if (!oled->ready || oled->failed) return;
@@ -390,6 +400,13 @@ void rns_heltec_oled_poll(rns_heltec_oled_t *oled, uint64_t now_ms) {
     }
 }
 
+void rns_heltec_oled_set_lines(rns_heltec_oled_t *oled, const char lines[8][22]) {
+    if (!oled || !lines) return;
+    memcpy(oled->model.lines, lines, sizeof(oled->model.lines));
+    for (size_t i = 0; i < 8U; ++i) oled->model.lines[i][21] = '\0';
+    oled->settings.screen = RNS_HELTEC_OLED_SCREEN_LIVE;
+    oled->dirty = true;
+}
 bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
     char line[32];
     if (oled == NULL || !oled->ready || oled->failed) return false;
@@ -397,12 +414,15 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
     memset(oled->frame, 0, sizeof(oled->frame));
     if (oled->settings.screen != RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS &&
         oled->settings.screen != RNS_HELTEC_OLED_SCREEN_MESSAGE &&
-        oled->settings.screen != RNS_HELTEC_OLED_SCREEN_MENU)
+        oled->settings.screen != RNS_HELTEC_OLED_SCREEN_MENU &&
+        oled->settings.screen != RNS_HELTEC_OLED_SCREEN_LIVE)
         draw_line(oled->frame, 0U, "RETICULUM");
-    if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MENU) {
-        static const char *items[] = {"STATUS", "LAST MSG", "ANNOUNCE", "CLEAR MSG"};
+    if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_LIVE) {
+        for (size_t i = 0; i < 8U; ++i) draw_compact_line(oled->frame, i, oled->model.lines[i]);
+    } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MENU) {
+        static const char *items[] = {"STATUS", "MESSAGES", "ANNOUNCE", "CLEAR MSG", "NODES"};
         draw_compact_line(oled->frame, 0U, "MENU");
-        for (size_t i = 0; i < 4U; ++i) {
+        for (size_t i = 0; i < 5U; ++i) {
             draw_compact_line(oled->frame, i+2U, items[i]);
             if (!strcmp(items[i], oled->model.menu_label))
                 for (size_t x = 0; x < 126U; ++x) oled->frame[(i+2U)*128U+x] ^= 0x7fU;
