@@ -874,7 +874,25 @@ tui_propagation_state_t tui_state_propagation_state(
         &state->nodes, state->settings.propagation_node);
     if (node == NULL || !node->propagation || !node->lxmf_pn_app_data_valid)
         return TUI_PROPAGATION_WAITING_ANNOUNCE;
-    if (!node->reachable) return TUI_PROPAGATION_STALE;
+    if (!node->reachable) {
+        /* Saved discovery records are not live reachability evidence. A
+         * matching, unexpired saved path is nevertheless enough to attempt an
+         * authenticated connection, without waiting for another announce. */
+        rns_path_entry path;
+        rns_identity identity;
+        uint8_t expected[LXMF_DESTINATION_LENGTH];
+        static const char *const aspects[] = {"propagation"};
+        if (state->runtime == NULL ||
+            rns_runtime_path_lookup(state->runtime, node->destination, &path) != RNS_OK ||
+            !path.has_identity || path.unresponsive ||
+            path.announce_timebase != node->announce_timebase ||
+            memcmp(path.identity_public_key, node->public_key,
+                   sizeof node->public_key) != 0 ||
+            !rns_identity_from_public(&identity, node->public_key) ||
+            !rns_destination_hash(&identity, "lxmf", aspects, 1u, expected) ||
+            memcmp(expected, node->destination, sizeof expected) != 0)
+            return TUI_PROPAGATION_STALE;
+    }
     if (!node->lxmf_pn_enabled) return TUI_PROPAGATION_DISABLED;
     if (node->lxmf_pn_stamp_cost == 0u ||
         node->lxmf_pn_stamp_cost == UINT8_MAX)
@@ -994,10 +1012,24 @@ bool tui_state_propagation_sync_start(tui_state_t *state) {
     tui_propagation_state_t route =
         tui_state_propagation_state(state, NULL, NULL);
     if (route != TUI_PROPAGATION_READY) {
+        if (route == TUI_PROPAGATION_STALE ||
+            route == TUI_PROPAGATION_WAITING_ANNOUNCE) {
+            rns_status_t refresh = rns_runtime_request_path(
+                state->runtime, state->settings.propagation_node);
+            if (refresh != RNS_OK) {
+                tui_state_set_status(state, "Could not refresh propagation path: %s",
+                                     rns_status_string(refresh));
+                return false;
+            }
+        }
         tui_state_set_status(state,
             route == TUI_PROPAGATION_NOT_SELECTED
                 ? "Select a verified propagation node before syncing"
-                : "Sync requires a fresh reachable enabled propagation announce");
+                : route == TUI_PROPAGATION_DISABLED
+                ? "Selected propagation node announced that it is disabled"
+                : route == TUI_PROPAGATION_INVALID_COST
+                ? "Selected propagation node has an invalid advertised stamp cost"
+                : "Sync needs current propagation information; path refresh requested");
         return false;
     }
     if (!tui_state_link_ready(state)) {
@@ -1009,8 +1041,16 @@ bool tui_state_propagation_sync_start(tui_state_t *state) {
     lxmf_status_t result =
         lxmf_router_propagation_sync_start(&state->router, false);
     if (result != LXMF_OK) {
-        tui_state_set_status(state, "Could not start propagation sync: %s",
-                             lxmf_status_string(result));
+        if (result == LXMF_ERR_PENDING) {
+            lxmf_router_propagation_sync_status_t active = {0};
+            (void)lxmf_router_propagation_sync_status(&state->router, &active);
+            tui_state_set_status(state, active.active
+                ? "Propagation sync is already running; cancel it or wait"
+                : "Propagation upload is running; retry sync after it finishes");
+        } else {
+            tui_state_set_status(state, "Could not start propagation sync: %s",
+                                 lxmf_status_string(result));
+        }
         return false;
     }
     lxmf_router_propagation_sync_status_t status;
@@ -1206,6 +1246,21 @@ static void start_runtime(tui_state_t *state, const char *config_path) {
             rns_identity_from_public(&state->resolved_propagation_identity,
                                      propagation_record.public_key))
             propagation_identity = &state->resolved_propagation_identity;
+        if (propagation_identity != NULL && !propagation_record.reachable) {
+            /* Registry timestamps are monotonic and cannot be reused across
+             * boots. The matching path snapshot already rebases its remaining
+             * lifetime with offline wall time deducted. Retain only this
+             * selected cached record until that deadline, without marking it
+             * reachable or changing its last-announced timestamp. */
+            rns_path_entry saved_path;
+            if (rns_runtime_path_lookup(state->runtime,
+                    propagation_record.destination, &saved_path) == RNS_OK)
+                for (size_t i = 0u; i < state->nodes.count; ++i)
+                    if (memcmp(state->nodes.records[i].destination,
+                               propagation_record.destination,
+                               sizeof propagation_record.destination) == 0)
+                        state->nodes.records[i].expires_at = saved_path.expires_at;
+        }
         lxmf_router_config_t router = {
             .identity = &state->identity,
             .store = &state->store,

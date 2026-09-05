@@ -899,6 +899,47 @@ static void test_identity_survives_registry_expiry(unsigned service) {
     rns_identity_export_public(resolved, actual);
     assert(memcmp(expected, actual, sizeof actual) == 0);
     hash[0] ^= 1u;
+    if (service == 2u) {
+        state->settings.has_propagation_node = true;
+        memcpy(state->settings.propagation_node, service_hash, 16u);
+        rns_node_record cached = {0};
+        memcpy(cached.destination, service_hash, 16u);
+        memcpy(cached.public_key, expected, sizeof cached.public_key);
+        cached.announce_timebase = path.announce_timebase;
+        cached.propagation = true;
+        cached.lxmf_pn_app_data_valid = true;
+        cached.lxmf_pn_enabled = true;
+        cached.lxmf_pn_stamp_cost = 9u;
+        assert(rns_node_registry_upsert(&state->nodes, &cached));
+        uint8_t cost = 0u;
+        assert(tui_state_propagation_state(state, NULL, &cost) == TUI_PROPAGATION_READY);
+        assert(cost == 9u && !state->nodes.records[0].reachable);
+        state->nodes.records[0].announce_timebase++;
+        assert(tui_state_propagation_state(state, NULL, NULL) == TUI_PROPAGATION_STALE);
+        state->nodes.records[0].announce_timebase--;
+        state->nodes.records[0].public_key[0] ^= 1u;
+        assert(tui_state_propagation_state(state, NULL, NULL) == TUI_PROPAGATION_STALE);
+        state->nodes.records[0].public_key[0] ^= 1u;
+        state->nodes.records[0].lxmf_pn_enabled = false;
+        assert(tui_state_propagation_state(state, NULL, NULL) == TUI_PROPAGATION_DISABLED);
+        state->nodes.records[0].lxmf_pn_enabled = true;
+        state->nodes.records[0].lxmf_pn_stamp_cost = 0u;
+        assert(tui_state_propagation_state(state, NULL, NULL) == TUI_PROPAGATION_INVALID_COST);
+        state->nodes.records[0].lxmf_pn_stamp_cost = 9u;
+        state->router_ready = true;
+        state->router.config.runtime = state->runtime;
+        state->router.config.wall_clock = test_wall_clock;
+        assert(lxmf_router_set_propagation_node(&state->router, &peer, service_hash, 9u) == LXMF_OK);
+        state->router.propagation.used = true;
+        assert(!tui_state_propagation_sync_start(state));
+        assert(strstr(state->status, "upload is running") != NULL);
+        state->router.propagation.used = false;
+        state->router.propagation_sync.status.active = true;
+        assert(!tui_state_propagation_sync_start(state));
+        assert(strstr(state->status, "already running") != NULL);
+        state->router.propagation_sync.status.active = false;
+        state->router_ready = false;
+    }
     assert(tui_state_resolve_peer(state, hash) == NULL);
     uint8_t name_hash[10]; rns_identity untouched, copy;
     memset(&untouched, 0x5au, sizeof untouched); copy = untouched;
@@ -910,6 +951,8 @@ static void test_identity_survives_registry_expiry(unsigned service) {
                                    snapshot_length, &path_count) == RNS_OK && path_count == 0u);
     hash[0] ^= 1u;
     assert(tui_state_resolve_peer(state, hash) == NULL);
+    if (service == 2u)
+        assert(tui_state_propagation_state(state, NULL, NULL) == TUI_PROPAGATION_STALE);
     rns_runtime_destroy(state->runtime);
     destroy_state(state);
 }
