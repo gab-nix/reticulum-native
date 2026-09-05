@@ -14,7 +14,7 @@ static const char *TAG = "bringup";
 static const char *radio_state(rns_status_t status, rns_sx1262_state_t state) {
     if (status != RNS_OK) return "RADIO ERROR";
     switch (state) {
-    case RNS_SX1262_RECEIVING: return "RX ONLY 868.2 SF8";
+    case RNS_SX1262_RECEIVING: return "RX ONLY 868.100 SF11";
     case RNS_SX1262_STOPPED: return "RADIO STOPPED";
     case RNS_SX1262_FAULT: return "RADIO FAULT";
     case RNS_SX1262_SCANNING: return "UNEXPECTED CAD";
@@ -32,6 +32,10 @@ void heltec_bringup_run(void) {
     bool display_ready = rns_heltec_oled_esp_open(&display);
     ESP_LOGI(TAG, "OLED: %s", display_ready ? "ready" : "unavailable");
     rns_sx1262_default_config(&config);
+    config.frequency_hz = 868100000U;
+    config.bandwidth_hz = 250000U;
+    config.spreading_factor = 11U;
+    config.coding_rate_denominator = 5U;
     rns_status_t radio_status = rns_heltec_sx1262_open_with_config(&config, &radio);
     ESP_LOGI(TAG, "Radio RX initialization: %d; %lu Hz BW%lu SF%u CR4/%u preamble%u; TX disabled",
         (int)radio_status, (unsigned long)config.frequency_hz,

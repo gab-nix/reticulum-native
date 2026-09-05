@@ -63,9 +63,9 @@ void rns_sx1262_default_config(rns_sx1262_config_t *config) {
 }
 rns_status_t rns_heltec_sx1262_open_with_config(
     const rns_sx1262_config_t *config, rns_heltec_sx1262_t **out) {
-    assert(config->frequency_hz == 868200000U);
-    assert(config->bandwidth_hz == 125000U);
-    assert(config->spreading_factor == 8U);
+    assert(config->frequency_hz == 868100000U);
+    assert(config->bandwidth_hz == 250000U);
+    assert(config->spreading_factor == 11U);
     assert(config->coding_rate_denominator == 5U);
     assert(config->preamble_symbols == 18U);
     ++fake.radio_opens;
@@ -137,11 +137,11 @@ static void run_case(bool display_ok, bool radio_ok, bool render_ok,
     if (display_ok) assert(strcmp(fake.state, expected_state) == 0);
 }
 int main(void) {
-    run_case(true, true, true, false, RNS_OK, RNS_SX1262_RECEIVING, "RX ONLY 868.2 SF8");
-    run_case(false, true, true, true, RNS_OK, RNS_SX1262_RECEIVING, "RX ONLY 868.2 SF8");
+    run_case(true, true, true, false, RNS_OK, RNS_SX1262_RECEIVING, "RX ONLY 868.100 SF11");
+    run_case(false, true, true, true, RNS_OK, RNS_SX1262_RECEIVING, "RX ONLY 868.100 SF11");
     run_case(true, false, true, false, RNS_OK, RNS_SX1262_RECEIVING, "RADIO ERROR");
-    run_case(true, true, false, true, RNS_OK, RNS_SX1262_RECEIVING, "RX ONLY 868.2 SF8");
-    run_case(true, true, true, true, RNS_OK, RNS_SX1262_RECEIVING, "RX ONLY 868.2 SF8");
+    run_case(true, true, false, true, RNS_OK, RNS_SX1262_RECEIVING, "RX ONLY 868.100 SF11");
+    run_case(true, true, true, true, RNS_OK, RNS_SX1262_RECEIVING, "RX ONLY 868.100 SF11");
     run_case(true, true, true, false, RNS_ERROR_IO, RNS_SX1262_RECEIVING, "RADIO ERROR");
     run_case(true, true, true, false, RNS_OK, RNS_SX1262_FAULT, "RADIO FAULT");
     run_case(true, true, true, false, RNS_OK, RNS_SX1262_STOPPED, "RADIO STOPPED");

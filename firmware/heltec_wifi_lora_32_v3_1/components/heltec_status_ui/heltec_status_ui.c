@@ -350,7 +350,7 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
         else if (strstr(oled->model.radio, "RX") != NULL) state = "RX ONLY";
         draw_large_line(oled->frame, 0U, state);
         draw_large_line(oled->frame, 1U,
-                         strstr(oled->model.radio, "868.2") != NULL ? "868.2 SF8" : "NO RNS");
+                         strstr(oled->model.radio, "868.100") != NULL ? "868.100" : "NO RNS");
         uint64_t count = oled->model.rx_packets;
         if (count > UINT64_C(99999999)) count = UINT64_C(99999999);
         (void)snprintf(line, sizeof(line), "RX%" PRIu64, count);

@@ -74,7 +74,7 @@ large-text diagnostic display shows radio state, free heap and RX count.
 Display failures do not stop radio receive. The USB console
 reports health counters without packet contents; received payloads are
 discarded until protocol dispatch is integrated. No RF transmission is queued.
-The profile uses 868.2 MHz, 125 kHz bandwidth, SF8, CR4/5 and an 18-symbol
+The receive-only profile uses 868.100 MHz, 250 kHz bandwidth, SF11, CR4/5 and an 18-symbol
 preamble. Actual over-air reception still requires a matching external peer.
 
 The UART command shell, persistent identity, Reticulum runtime and LXMF
