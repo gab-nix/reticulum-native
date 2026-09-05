@@ -10,7 +10,7 @@ typedef struct {
     uint8_t id[32];
     uint64_t timestamp;
     uint16_t length;
-    uint8_t state; /* 0 verified inbound; 1 queued; 2 sent; 3 delivered; 4 failed. */
+    uint8_t state; /* 0 verified inbound; 1 queued; 2 awaiting proof; 3 delivered; 4 failed; 5 cancelled. */
     uint8_t text[HELTEC_CHAT_TEXT];
 } heltec_chat_message;
 typedef struct {

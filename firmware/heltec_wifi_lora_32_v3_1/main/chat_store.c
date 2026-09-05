@@ -37,7 +37,7 @@ static bool decode(heltec_chat_store *s, heltec_chat *c) {
         for (unsigned b = 0; b < 8; ++b) m->timestamp = (m->timestamp << 8)|s->record[p++];
         m->state = s->record[p++];
         m->length = (uint16_t)((unsigned)s->record[p]*256U+s->record[p+1]); p += 2;
-        if (m->length > HELTEC_CHAT_TEXT || m->state > 4) return false;
+        if (m->length > HELTEC_CHAT_TEXT || m->state > 5) return false;
         memcpy(m->text, s->record+p, m->length); p += HELTEC_CHAT_TEXT;
     }
     return true;
@@ -72,7 +72,7 @@ static bool pending(const heltec_chat *c) {
     return false;
 }
 rns_status_t heltec_chat_store_add(heltec_chat_store *s, const uint8_t sender[16], const heltec_chat_message *m) {
-    if (!s || !sender || !m || m->length > HELTEC_CHAT_TEXT || m->state > 4) return RNS_ERROR_INVALID_ARGUMENT;
+    if (!s || !sender || !m || m->length > HELTEC_CHAT_TEXT || m->state > 5) return RNS_ERROR_INVALID_ARGUMENT;
     size_t slot = HELTEC_CHAT_COUNT;
     for (size_t i = 0; i < HELTEC_CHAT_COUNT; ++i) if (s->chats[i].used && !memcmp(s->chats[i].sender, sender, 16)) { slot = i; break; }
     if (slot == HELTEC_CHAT_COUNT) {
@@ -102,7 +102,7 @@ rns_status_t heltec_chat_store_add(heltec_chat_store *s, const uint8_t sender[16
     return result;
 }
 rns_status_t heltec_chat_store_set_state(heltec_chat_store *s, const uint8_t sender[16], const uint8_t id[32], uint8_t state) {
-    if (!s || !sender || !id || state < 1 || state > 4) return RNS_ERROR_INVALID_ARGUMENT;
+    if (!s || !sender || !id || state < 1 || state > 5) return RNS_ERROR_INVALID_ARGUMENT;
     for (size_t slot = 0; slot < HELTEC_CHAT_COUNT; ++slot) {
         const heltec_chat *c = &s->chats[slot];
         if (!c->used || memcmp(c->sender, sender, 16)) continue;
