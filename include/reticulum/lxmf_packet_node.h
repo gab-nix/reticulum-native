@@ -74,6 +74,9 @@ rns_status_t lxmf_packet_node_open_outbox(lxmf_packet_node_t *node, rns_storage_
 rns_status_t lxmf_packet_node_send(lxmf_packet_node_t *node, const uint8_t destination[16],
     const uint8_t *text, size_t length, uint64_t timestamp, uint8_t id[32]);
 void lxmf_packet_node_poll(lxmf_packet_node_t *node, uint64_t now_ms);
+/* Only bits 0..3 permit a slot to transmit. Persistence and deadlines always
+ * advance, including for held slots. Use when application history is pending. */
+void lxmf_packet_node_poll_ready(lxmf_packet_node_t *node, uint64_t now_ms, uint8_t ready_mask);
 void lxmf_packet_node_tx_complete(lxmf_packet_node_t *node, uint32_t transmission_id,
     rns_status_t status, uint64_t now_ms);
 bool lxmf_packet_node_outgoing(const lxmf_packet_node_t *node, size_t slot, lxmf_packet_outgoing *out);

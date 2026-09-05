@@ -420,9 +420,12 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
     if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_LIVE) {
         for (size_t i = 0; i < 8U; ++i) draw_compact_line(oled->frame, i, oled->model.lines[i]);
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MENU) {
-        static const char *items[] = {"HOME", "CHATS", "ANNOUNCE", "CLEAR VIEW", "NODES", "CHANNEL"};
+        static const char *items[] = {"HOME", "CHATS", "ANNOUNCE", "CLEAR VIEW", "NODES", "CHANNEL", "UNVERIFIED"};
         draw_compact_line(oled->frame, 0U, "MENU");
-        size_t first = !strcmp(oled->model.menu_label, "CHANNEL") ? 1U : 0U;
+        size_t selected = 0U;
+        for (size_t i = 0U; i < sizeof(items)/sizeof(items[0]); ++i)
+            if (!strcmp(oled->model.menu_label, items[i])) selected = i;
+        size_t first = selected >= 5U ? selected-4U : 0U;
         for (size_t i = 0; i < 5U; ++i) {
             draw_compact_line(oled->frame, i+2U, items[first+i]);
             if (!strcmp(items[first+i], oled->model.menu_label))

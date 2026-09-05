@@ -59,6 +59,11 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
                               size_t form_msgpack_length);
 rns_status_t rns_browser_poll(rns_browser_t *browser);
 void rns_browser_cancel(rns_browser_t *browser);
+/* Bounded, instance-local page cache (8 entries, 1 MiB total). Anonymous and
+ * identified instances never share entries. Clear before open to force reload.
+ * Forms bypass reads and writes. Pages default to 12 hours; #!c= overrides. */
+void rns_browser_cache_clear(rns_browser_t *browser);
+bool rns_browser_loaded_from_cache(const rns_browser_t *browser);
 
 rns_browser_state_t rns_browser_state(const rns_browser_t *browser);
 double rns_browser_progress(const rns_browser_t *browser);

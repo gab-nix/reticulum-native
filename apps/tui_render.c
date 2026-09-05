@@ -282,12 +282,16 @@ static void draw_chrome(const tui_state_t *state, const tui_layout_t *layout) {
         if (info->state == RNS_RUNTIME_INTERFACE_UP) ++up;
         rx += info->bytes_received; tx += info->bytes_sent;
     }
+    const char *mode = state->command_active ? "COMMAND"
+        : state->field != TUI_FIELD_NONE ? "INSERT"
+        : state->screen == TUI_SCREEN_CONVERSATIONS
+            ? state->history_focused ? "HISTORY" : "CHATS" : "NORMAL";
     if (layout->columns < 72)
-        (void)snprintf(header, sizeof header, " Nomad | %s | N:%zu U:%zu", link, state->nodes.count, unread);
+        (void)snprintf(header, sizeof header, " %s | %s | N:%zu U:%zu", mode, link, state->nodes.count, unread);
     else
         (void)snprintf(header, sizeof header,
-            " Nomad | %s %zu/%zu | Nodes:%zu Unread:%zu | RX:%lluK TX:%lluK | %.8s",
-            link, up, state->interfaces.count, state->nodes.count, unread,
+            " Nomad %s | %s %zu/%zu | Nodes:%zu Unread:%zu | RX:%lluK TX:%lluK | %.8s",
+            mode, link, up, state->interfaces.count, state->nodes.count, unread,
             (unsigned long long)(rx / 1024u), (unsigned long long)(tx / 1024u), address + 24u);
     (void)attron(A_REVERSE | A_BOLD);
     clipped(stdscr, 0, 0, layout->columns, header);
@@ -546,12 +550,17 @@ static void draw_config(const tui_state_t *state,
 static void draw_sidebar(const tui_state_t *state, const tui_layout_t *layout) {
     char tabline[48];
     (void)attron(A_BOLD);
-    (void)snprintf(tabline, sizeof tabline, "%s (%zu)", trust_name(state->tab),
+    (void)snprintf(tabline, sizeof tabline, "%c %s (%zu)", state->history_focused ? ' ' : '>', trust_name(state->tab),
                    state->visible_count);
     clipped(stdscr, 2, 1, layout->sidebar - 2, tabline);
     (void)attroff(A_BOLD);
-    for (size_t position = 0u;
-         position < state->visible_count && (int)position < layout->content_rows;
+    size_t first = 0u;
+    size_t rows = layout->content_rows > 0 ? (size_t)layout->content_rows : 0u;
+    for (size_t i = 0u; i < state->visible_count; ++i)
+        if (state->visible[i] == state->selected && rows != 0u && i >= rows)
+            first = i - rows + 1u;
+    for (size_t position = first;
+         position < state->visible_count && position - first < rows;
          ++position) {
         size_t index = state->visible[position];
         const tui_contact_t *contact = &state->contacts[index];
@@ -564,7 +573,7 @@ static void draw_sidebar(const tui_state_t *state, const tui_layout_t *layout) {
                        contact->unread ? '!' : ' ',
                        contact->unread ? contact->unread : contact->messages);
         if (selected) (void)attron(A_REVERSE);
-        clipped(stdscr, layout->content_top + (int)position, 0, layout->sidebar - 1, line);
+        clipped(stdscr, layout->content_top + (int)(position - first), 0, layout->sidebar - 1, line);
         if (selected) (void)attroff(A_REVERSE);
     }
     (void)mvvline(1, layout->sidebar - 1, ACS_VLINE, layout->rows - 4);
@@ -596,7 +605,8 @@ static void draw_thread(tui_state_t *state, const tui_layout_t *layout) {
     if (contact != NULL) {
         char peer[TUI_ADDRESS_DIGITS + 1u];
         tui_hex_format(contact->peer, LXMF_DESTINATION_LENGTH, peer);
-        (void)snprintf(peer_line, sizeof peer_line, "%s%s",
+        (void)snprintf(peer_line, sizeof peer_line, "%c %s%s",
+                       state->history_focused ? '>' : ' ',
                        layout->narrow ? "Chat: " : "Conversation: ", peer);
     }
     (void)attron(A_BOLD);
@@ -668,10 +678,30 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
         case TUI_FIELD_NONE: break;
     }
     (void)mvhline(layout->divider_row, 0, ACS_HLINE, layout->columns);
+    bool composing = state->field == TUI_FIELD_COMPOSE;
+    int text_x = composing ? 2 : TUI_PROMPT_WIDTH;
+    if (composing) {
+        (void)mvaddch(layout->divider_row, 0, ACS_ULCORNER);
+        (void)mvaddch(layout->divider_row, layout->columns - 1, ACS_URCORNER);
+        char label[80];
+        (void)snprintf(label, sizeof label, " INSERT | %s %zu/%zu bytes ",
+            prompt, editor->length, editor->capacity);
+        (void)attron(A_BOLD);
+        clipped(stdscr, layout->divider_row, 2, layout->columns - 4, label);
+        (void)attroff(A_BOLD);
+        for (int row = layout->input_row; row < layout->hint_row; ++row) {
+            (void)mvaddch(row, 0, ACS_VLINE);
+            (void)mvaddch(row, layout->columns - 1, ACS_VLINE);
+        }
+        (void)mvhline(layout->hint_row, 0, ACS_HLINE, layout->columns);
+        (void)mvaddch(layout->hint_row, 0, ACS_LLCORNER);
+        (void)mvaddch(layout->hint_row, layout->columns - 1, ACS_LRCORNER);
+    }
     clipped(stdscr, layout->input_row, 0, layout->columns,
-            editor != NULL ? prompt : state->status);
+            composing ? "" : editor != NULL ? prompt : state->status);
     if (editor != NULL) {
-        size_t width = (size_t)(layout->columns - TUI_PROMPT_WIDTH - 1);
+        size_t width = composing ? (size_t)(layout->columns - 4)
+                                 : (size_t)(layout->columns - TUI_PROMPT_WIDTH - 1);
         if (state->field == TUI_FIELD_COMPOSE) {
             size_t row, column, offset = 0u, start, bytes, line = 0u;
             tui_editor_position(editor, width, &row, &column);
@@ -681,12 +711,12 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
                 if (line >= first && line < first + (size_t)layout->input_rows) {
                     memcpy(text, editor->text + start, bytes); text[bytes] = '\0';
                     clipped(stdscr, layout->input_row + (int)(line - first),
-                            TUI_PROMPT_WIDTH, (int)width, text);
+                            text_x, (int)width, text);
                 }
                 ++line;
             }
             cursor_y = layout->input_row + (int)(row - first);
-            cursor_x = TUI_PROMPT_WIDTH + (int)column;
+            cursor_x = text_x + (int)column;
         } else {
             size_t offset = 0u, column = 0u;
             (void)tui_editor_view(editor, width, &offset, &column);
@@ -707,16 +737,21 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
                                      sizeof reference_hint);
         hint = reference_hint;
     }
-    clipped(stdscr, layout->hint_row, 0, layout->columns, hint);
+    clipped(stdscr, layout->hint_row, composing ? 2 : 0,
+            composing ? layout->columns - 4 : layout->columns, hint);
     clipped(stdscr, layout->legend_row, 0, layout->columns,
-            "[.] queued  [>] sending  [+] sent  [x] delivered  [!] failed");
+            editor != NULL ? state->status
+                : state->history_focused
+                ? " HISTORY | j/k scroll  h chats  Home/End  Enter compose"
+                : " CHATS | j/k select  l history  Tab switch  Enter compose");
     if (editor != NULL) (void)move(cursor_y, cursor_x);
 }
 
 static void draw_conversation_overlay(const tui_state_t *state) {
     if (state->overlay == TUI_OVERLAY_HELP) {
         static const char *const help[] = {
-            "j/k or arrows: conversation    PgUp/PgDn: history",
+            "h/l or Left/Right: focus chats/history; Tab switches",
+            "j/k or Up/Down: move in focused pane; Home/End: history",
             "1/2/3: trusted/unknown/untrusted    /: search",
             "Enter: compose    i: peer info    p: pin    x: block",
             "PgUp/PgDn then e: reply to newest visible message",
@@ -1026,7 +1061,8 @@ static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) 
     if (state->propagation_sync.active) {
         (void)snprintf(items[TUI_SETTING_PROPAGATION_SYNC], sizeof items[0],
             "Cancel Sync: %s, %zu/%zu messages",
-            propagation_sync_phase_name(state->propagation_sync.state),
+            state->propagation_sync.waiting_for_upload ? "waiting for upload" :
+                propagation_sync_phase_name(state->propagation_sync.state),
             state->propagation_sync.received,
             state->propagation_sync.available);
     } else if (state->propagation_sync.state == LXMF_PN_COMPLETE) {
@@ -1395,7 +1431,8 @@ static void draw_guide(const tui_layout_t *layout) {
         "F validated Reticulum configuration",
         "j/k or arrows select; Enter activates; Esc returns to Conversations",
         "",
-        "Conversations: 1/2/3 trust tabs, / search, a address, Enter compose",
+        "Conversations: h/l focus chats/history, j/k move, Tab switches",
+        "1/2/3 trust tabs, / search, a address, Enter compose; L Logs",
         "Contact actions: i details, p pin, x block, t trust, u untrust",
         "Delivery: d selects direct or propagation-node upload for queued messages",
         "Network: / search, Enter details; b browse, m message, p relay, s sync/cancel",
@@ -1442,7 +1479,7 @@ static void draw_logs(const tui_state_t *state, const tui_layout_t *layout) {
             "j/k select  x clear  C or Esc conversations  q quit");
 }
 
-void tui_render_draw(tui_state_t *state) {
+static void render_base(tui_state_t *state) {
     int rows, columns;
     if (state == NULL) return;
     getmaxyx(stdscr, rows, columns);
@@ -1450,12 +1487,11 @@ void tui_render_draw(tui_state_t *state) {
     tui_layout_t layout = layout_of(rows, columns);
     if (rows < TUI_MIN_ROWS || columns < TUI_MIN_COLUMNS) {
         draw_too_small(&layout);
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_CONVERSATIONS && state->field == TUI_FIELD_COMPOSE) {
         size_t row, column;
-        state->composer_columns = (size_t)(columns - TUI_PROMPT_WIDTH - 1);
+        state->composer_columns = (size_t)(columns - 4);
         tui_editor_position(&state->composer, state->composer_columns, &row, &column);
         size_t offset = 0u, start, bytes, count = 0u;
         while (tui_text_wrap_next(state->composer.text, state->composer.length,
@@ -1470,19 +1506,16 @@ void tui_render_draw(tui_state_t *state) {
     draw_chrome(state, &layout);
     if (state->screen == TUI_SCREEN_NODE) {
         draw_host(state, &layout);
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_NETWORK) {
         draw_network(state, &layout);
         if (state->overlay == TUI_OVERLAY_NODE_ACTIONS) draw_node_popup(state);
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_SETTINGS) {
         draw_settings(state, &layout);
         if (state->overlay == TUI_OVERLAY_LOCAL_QR) draw_local_qr(state);
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_BROWSER) {
@@ -1497,38 +1530,65 @@ void tui_render_draw(tui_state_t *state) {
                 "Enter confirm   Esc cancel"};
             centered_box("Browser identity", lines, sizeof lines / sizeof lines[0]);
         }
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_GUIDE) {
         draw_guide(&layout);
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_INTERFACES) {
         draw_interfaces(state, &layout);
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_CONFIG) {
         draw_config(state, &layout);
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_RRC) {
         draw_rrc(state, &layout);
-        (void)refresh();
         return;
     }
     if (state->screen == TUI_SCREEN_LOGS) {
         draw_logs(state, &layout);
-        (void)refresh();
         return;
     }
     if (!layout.narrow) draw_sidebar(state, &layout);
     draw_thread(state, &layout);
     draw_input(state, &layout);
     draw_conversation_overlay(state);
+}
+
+void tui_render_draw(tui_state_t *state) {
+    if (state == NULL) return;
+    render_base(state);
+    if (state->command_active) {
+        int rows, columns; getmaxyx(stdscr, rows, columns);
+        if (rows >= TUI_MIN_ROWS && columns >= TUI_MIN_COLUMNS) {
+            int top = rows - 7;
+            (void)attron(A_REVERSE);
+            for (int y = top; y < rows; ++y)
+                (void)mvhline(y, 0, ' ', columns);
+            (void)attron(A_BOLD);
+            clipped(stdscr, top, 1, columns - 2, " COMMAND | Enter execute  Esc close");
+            (void)attroff(A_BOLD);
+            clipped(stdscr, top + 1, 1, columns - 2, ":");
+            size_t offset, column;
+            (void)tui_editor_view(&state->command, (size_t)(columns - 4), &offset, &column);
+            clipped(stdscr, top + 1, 2, columns - 4, state->command.text + offset);
+            size_t at = 0u, start, bytes;
+            for (int row = 2; row <= 3 && tui_text_wrap_next(state->status,
+                    strlen(state->status), (size_t)(columns - 2), &at, &start, &bytes); ++row) {
+                char line[TUI_STATUS_MAX];
+                memcpy(line, state->status + start, bytes); line[bytes] = '\0';
+                clipped(stdscr, top + row, 1, columns - 2, line);
+            }
+            clipped(stdscr, top + 4, 1, columns - 2, "chats network browser settings");
+            clipped(stdscr, top + 5, 1, columns - 2, "interfaces config logs guide node");
+            clipped(stdscr, top + 6, 1, columns - 2, "rrc announce sync help q(uit)");
+            (void)attroff(A_REVERSE);
+            (void)move(top + 1, 2 + (int)column);
+        }
+    }
     (void)refresh();
 }
 
@@ -1592,7 +1652,8 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
             "Propagation sync: %s active=%s available=%zu received=%zu "
             "accepted=%zu duplicates=%zu rejected=%zu acknowledged=%zu "
             "result=%s transport=%s\n",
-            propagation_sync_phase_name(state->propagation_sync.state),
+            state->propagation_sync.waiting_for_upload ? "waiting for upload" :
+                propagation_sync_phase_name(state->propagation_sync.state),
             state->propagation_sync.active ? "yes" : "no",
             state->propagation_sync.available,
             state->propagation_sync.received,
@@ -1800,6 +1861,7 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
     (void)fprintf(output, "Compose delivery: %s\n",
                   lxmf_delivery_method_string(state->compose_delivery_method));
     (void)fprintf(output, "Conversations: %zu\n", state->contact_count);
+    (void)fprintf(output, "Chat focus: %s\n", state->history_focused ? "history" : "list");
     for (size_t i = 0u; i < state->contact_count; ++i) {
         char peer[TUI_ADDRESS_DIGITS + 1u];
         tui_hex_format(state->contacts[i].peer, LXMF_DESTINATION_LENGTH, peer);

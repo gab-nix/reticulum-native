@@ -7,6 +7,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define CACHE_ENTRIES 8U
+#define CACHE_BYTES (1024U * 1024U)
+typedef struct {
+    uint8_t *data;
+    size_t length;
+    double stored, expires;
+    uint8_t destination[16], public_key[64];
+    char path[RNS_BROWSER_PATH_MAX + 1U];
+} cache_entry;
+
 struct rns_browser {
     rns_runtime_t *runtime;
     rns_runtime_link_t *link;
@@ -25,7 +35,27 @@ struct rns_browser {
     double discovery_started;
     rns_micron_page *page;
     char page_url[RNS_BROWSER_URL_MAX + 1U];
+    cache_entry cache[CACHE_ENTRIES];
+    size_t cache_bytes;
+    bool cached;
 };
+
+static void cache_remove(rns_browser_t *b, cache_entry *entry) {
+    b->cache_bytes -= entry->length;
+    free(entry->data);
+    memset(entry, 0, sizeof *entry);
+}
+void rns_browser_cache_clear(rns_browser_t *b) {
+    if (b) for (size_t i = 0; i < CACHE_ENTRIES; ++i) cache_remove(b, &b->cache[i]);
+}
+bool rns_browser_loaded_from_cache(const rns_browser_t *b) { return b && b->cached; }
+
+static bool cache_matches(const rns_browser_t *b, const cache_entry *e) {
+    return e->data && !memcmp(e->destination, b->destination, 16) &&
+        !memcmp(e->public_key, b->identity.encryption_public, 32) &&
+        !memcmp(e->public_key + 32, b->identity.signing_public, 32) &&
+        !strcmp(e->path, b->path);
+}
 
 static rns_status_t browser_now(rns_browser_t *browser, double *now) {
     if (browser->options.clock != NULL) {
@@ -44,6 +74,48 @@ static int hex_value(char value) {
     if (value >= 'a' && value <= 'f') return value - 'a' + 10;
     if (value >= 'A' && value <= 'F') return value - 'A' + 10;
     return -1;
+}
+
+static void cache_store(rns_browser_t *b, const uint8_t *data, size_t length) {
+    if (b->form_length || b->cached) return;
+    double now;
+    if (browser_now(b, &now) != RNS_OK) return;
+    /* Invalidate the old response even if the replacement prohibits caching. */
+    for (size_t i = 0; i < CACHE_ENTRIES; ++i)
+        if (cache_matches(b, &b->cache[i])) cache_remove(b, &b->cache[i]);
+    uint64_t seconds = 43200;
+    if (length >= 4 && !memcmp(data, "#!c=", 4)) {
+        seconds = 0;
+        size_t i = 4;
+        if (i == length || data[i] < '0' || data[i] > '9') return;
+        for (; i < length && data[i] != '\n'; ++i) {
+            if (data[i] < '0' || data[i] > '9' || seconds > (UINT64_MAX - 9U)/10U) return;
+            seconds = seconds * 10U + (uint64_t)(data[i] - '0');
+        }
+    }
+    if (!seconds || !length || length > CACHE_BYTES) return;
+    uint8_t *copy = malloc(length);
+    if (!copy) return; /* Cache failure must not fail an otherwise valid page. */
+    memcpy(copy, data, length);
+    size_t slot;
+    for (;;) {
+        slot = CACHE_ENTRIES;
+        size_t oldest = 0;
+        for (size_t i = 0; i < CACHE_ENTRIES; ++i) {
+            if (!b->cache[i].data) slot = i;
+            else if (!b->cache[oldest].data || b->cache[i].stored < b->cache[oldest].stored) oldest = i;
+        }
+        if (slot != CACHE_ENTRIES && b->cache_bytes <= CACHE_BYTES - length) break;
+        cache_remove(b, &b->cache[oldest]);
+    }
+    cache_entry *e = &b->cache[slot];
+    e->data = copy; e->length = length; e->stored = now;
+    e->expires = now + (double)seconds;
+    memcpy(e->destination, b->destination, 16);
+    memcpy(e->public_key, b->identity.encryption_public, 32);
+    memcpy(e->public_key + 32, b->identity.signing_public, 32);
+    memcpy(e->path, b->path, strlen(b->path) + 1);
+    b->cache_bytes += length;
 }
 
 static bool valid_utf8(const uint8_t *data, size_t length) {
@@ -144,6 +216,7 @@ static void response_received(rns_request_receipt_t *receipt,
     memcpy(browser->page_url, browser->url, strlen(browser->url) + 1U);
     browser->error = RNS_OK;
     browser->state = RNS_BROWSER_COMPLETE;
+    cache_store(browser, response, response_length);
 }
 
 /* The runtime consumes supported response resources before application packet
@@ -223,6 +296,7 @@ void rns_browser_destroy(rns_browser_t *browser) {
     rns_runtime_link_destroy(browser->link);
     rns_hal_secure_zero(&browser->request_identity, sizeof browser->request_identity);
     free(browser->page);
+    rns_browser_cache_clear(browser);
     free(browser);
 }
 
@@ -260,8 +334,19 @@ rns_status_t rns_browser_open(rns_browser_t *browser, const char *url,
         memcpy(browser->form, form_msgpack, form_msgpack_length);
     browser->form_length = form_msgpack_length;
     browser->error = RNS_OK;
+    browser->cached = false;
     browser->state = RNS_BROWSER_PATH_DISCOVERY;
     browser->discovery_started = now;
+    if (!form_msgpack_length) {
+        for (size_t i = 0; i < CACHE_ENTRIES; ++i) {
+            cache_entry *e = &browser->cache[i];
+            if (e->data && (now < e->stored || now >= e->expires)) cache_remove(browser, e);
+            if (!cache_matches(browser, e)) continue;
+            browser->cached = true;
+            response_received(NULL, RNS_REQUEST_COMPLETE, RNS_OK, e->data, e->length, browser);
+            return browser->error;
+        }
+    }
     if (reuse) {
         link_changed(browser->link, RNS_LINK_ACTIVE, RNS_OK, browser);
         return browser->state == RNS_BROWSER_FAILED ? browser->error : RNS_OK;

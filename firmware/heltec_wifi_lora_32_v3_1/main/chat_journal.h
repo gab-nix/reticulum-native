@@ -15,7 +15,12 @@ typedef struct {
 } heltec_chat_flash_ops;
 /* Ops/context borrowed for the storage lifetime. Single caller only. */
 rns_status_t heltec_chat_journal_open(const heltec_chat_flash_ops *ops, rns_storage_t **out);
+/* Invalid pairs are preserved and reserved when healthy local records establish
+ * journal ownership. With no valid record, ambiguous nonblank flash fails closed. */
+rns_status_t heltec_chat_journal_open_report(const heltec_chat_flash_ops *ops,
+    rns_storage_t **out, size_t *quarantined);
 #ifdef ESP_PLATFORM
 rns_status_t heltec_chat_flash_open(rns_storage_t **out);
+size_t heltec_chat_flash_quarantined(void);
 #endif
 #endif
