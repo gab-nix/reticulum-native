@@ -10,6 +10,13 @@ Reticulum, LXMF, Nomad Network or OpenAI maintainers.
 
 ## Feature status
 
+Nomad pages are cached in memory for the browser session (up to eight pages and
+1 MiB total). The default lifetime is 12 hours; a leading `#!c=<seconds>` page
+directive overrides it, and `#!c=0` disables caching. Form submissions bypass
+the cache. In Browser, `r` clears the session cache and requests a fresh page.
+Cached pages are not saved to disk or shared between anonymous and identified
+browsing instances.
+
 The concise list of implemented, work-in-progress and planned functionality is
 maintained in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md).
 
