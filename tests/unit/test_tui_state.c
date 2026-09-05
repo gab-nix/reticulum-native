@@ -868,6 +868,21 @@ static void test_identity_survives_registry_expiry(void) {
     rns_identity_export_public(&peer, expected);
     rns_identity_export_public(resolved, actual);
     assert(memcmp(expected, actual, sizeof actual) == 0);
+    uint8_t snapshot[2048]; size_t snapshot_length, path_count;
+    assert(rns_runtime_paths_export(state->runtime, 1000000u, snapshot, sizeof snapshot,
+                                   &snapshot_length, &path_count) == RNS_OK);
+    assert(path_count == 1u);
+    rns_runtime_destroy(state->runtime);
+    state->runtime = NULL;
+    assert(rns_runtime_create(&state->runtime, &config, NULL) == RNS_OK);
+    assert(tui_state_resolve_peer(state, hash) == NULL);
+    assert(rns_runtime_paths_import(state->runtime, 1001000u, snapshot,
+                                   snapshot_length, &path_count) == RNS_OK);
+    assert(path_count == 1u);
+    resolved = tui_state_resolve_peer(state, hash);
+    assert(resolved != NULL);
+    rns_identity_export_public(resolved, actual);
+    assert(memcmp(expected, actual, sizeof actual) == 0);
     hash[0] ^= 1u;
     assert(tui_state_resolve_peer(state, hash) == NULL);
     rns_runtime_destroy(state->runtime);
