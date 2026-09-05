@@ -679,7 +679,7 @@ void tui_state_apply_router_event(tui_state_t *state,
          * the user's current Network/Browser/Settings action. */
         if (state->screen != TUI_SCREEN_CONVERSATIONS) return;
         const tui_contact_t *selected = tui_state_selected_contact(state);
-        if (message != NULL && selected != NULL &&
+        if (message == NULL || selected == NULL ||
             memcmp(selected->peer, message_peer(state, &message->value),
                    LXMF_DESTINATION_LENGTH) != 0) return;
         lxmf_stamp_job_progress_t progress;
@@ -696,7 +696,11 @@ void tui_state_apply_router_event(tui_state_t *state,
                 tui_state_set_status(
                     state, "Searching for delivery stamp; %llu attempts",
                     (unsigned long long)progress.attempts);
-        } else
+        } else if (event->method == LXMF_DELIVERY_METHOD_PROPAGATED &&
+                   event->queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY)
+            tui_state_set_status(state,
+                "Queued via propagated; need recipient identity (requesting announce)");
+        else
             tui_state_set_status(state, "Queued via %s; waiting for %s",
                                  lxmf_delivery_method_string(event->method),
                                  lxmf_queue_reason_string(event->queue_reason));
@@ -797,6 +801,7 @@ static void on_announce(rns_runtime_t *runtime, const rns_node_result *announce,
 const rns_identity *tui_state_resolve_peer(void *context,
                                         const uint8_t destination[LXMF_DESTINATION_LENGTH]) {
     tui_state_t *state = context;
+    if (state == NULL || destination == NULL) return NULL;
     for (size_t i = 0u; i < state->nodes.count; ++i) {
         const rns_node_record *node = &state->nodes.records[i];
         if (node->has_message_destination &&
@@ -813,6 +818,12 @@ const rns_identity *tui_state_resolve_peer(void *context,
         rns_identity_from_public(&state->resolved_identity, path.identity_public_key) &&
         rns_destination_hash(&state->resolved_identity, "lxmf", aspects, 1u, expected) &&
         memcmp(expected, destination, sizeof expected) == 0)
+        return &state->resolved_identity;
+    uint8_t name_hash[10];
+    if (state->runtime != NULL &&
+        rns_destination_name_hash("lxmf", aspects, 1u, name_hash) &&
+        rns_runtime_recall_identity(state->runtime, destination, name_hash,
+                                    &state->resolved_identity) == RNS_OK)
         return &state->resolved_identity;
     return NULL;
 }
@@ -1791,6 +1802,7 @@ static lxmf_status_t queue_outbound(tui_state_t *state, lxmf_slice_t content,
     }
     state->last_compose_timestamp_ms = now_ms;
 
+    (void)ingest_message(state, &stored);
     if (state->router_ready) {
         bool propagation_waiting =
             stored.delivery.desired_method == LXMF_DELIVERY_METHOD_PROPAGATED &&
@@ -1806,7 +1818,6 @@ static lxmf_status_t queue_outbound(tui_state_t *state, lxmf_slice_t content,
                                                       decoded.message_id) == LXMF_OK;
         }
     }
-    (void)ingest_message(state, &stored);
 done:
     if (ticket_fields != NULL) {
         rns_hal_secure_zero(ticket_fields, ticket_capacity);

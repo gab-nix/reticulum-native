@@ -677,6 +677,15 @@ static void test_router_events_update_visible_state(void) {
     assert(strcmp(state->status, "Selected node details") == 0);
     assert(state->messages[0].value.status == LXMF_DELIVERY_QUEUED);
     state->screen = TUI_SCREEN_CONVERSATIONS;
+    strcpy(state->status, "Current conversation action");
+    event.method = LXMF_DELIVERY_METHOD_PROPAGATED;
+    event.message_id[0] = 0x99u; /* Old queued record outside the visible cache. */
+    tui_state_apply_router_event(state, &event);
+    assert(strcmp(state->status, "Current conversation action") == 0);
+    event.message_id[0] = 0x42u;
+    tui_state_apply_router_event(state, &event);
+    assert(strstr(state->status, "recipient identity") != NULL);
+    event.method = LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
     event.state = LXMF_DELIVERY_SENT;
     event.queue_reason = LXMF_QUEUE_REASON_NONE;
     tui_state_apply_router_event(state, &event);
@@ -823,7 +832,7 @@ static void test_drafts_follow_contacts_and_persist(void) {
     destroy_state(state);
 }
 
-static void test_identity_survives_registry_expiry(void) {
+static void test_identity_survives_registry_expiry(unsigned service) {
     tui_state_t *state = make_state();
     rns_config_t config; rns_config_init(&config);
     rns_udp_endpoint_t *reservation = NULL;
@@ -847,7 +856,11 @@ static void test_identity_survives_registry_expiry(void) {
     const char *aspects[] = {"delivery"};
     uint8_t hash[16];
     assert(rns_destination_hash(&peer, "lxmf", aspects, 1u, hash));
-    assert(rns_runtime_announce(state->runtime, &peer, "lxmf", aspects, 1u, NULL, 0u) == RNS_OK);
+    const char *service_aspects[] = {service == 1u ? "node" : service == 2u ? "propagation" : "delivery"};
+    const char *app = service == 1u ? "nomadnetwork" : "lxmf";
+    uint8_t service_hash[16];
+    assert(rns_destination_hash(&peer, app, service_aspects, 1u, service_hash));
+    assert(rns_runtime_announce(state->runtime, &peer, app, service_aspects, 1u, NULL, 0u) == RNS_OK);
     rns_path_entry path = {0};
     uint64_t start, now;
     assert(rns_hal_monotonic_ms(&start) == RNS_OK);
@@ -855,8 +868,9 @@ static void test_identity_survives_registry_expiry(void) {
         size_t processed;
         assert(rns_runtime_poll(state->runtime, 8u, &processed) == RNS_OK);
         assert(rns_hal_monotonic_ms(&now) == RNS_OK);
-    } while (rns_runtime_path_lookup(state->runtime, hash, &path) != RNS_OK && now - start < 1000u);
+    } while (rns_runtime_path_lookup(state->runtime, service_hash, &path) != RNS_OK && now - start < 1000u);
     assert(path.has_identity);
+    if (service != 0u) assert(rns_runtime_path_lookup(state->runtime, hash, &path) == RNS_ERROR_NOT_FOUND);
     rns_node_registry_init(&state->nodes, 1.0);
     rns_node_record record = {0};
     memcpy(record.destination, hash, 16u); record.expires_at = 1.0;
@@ -868,6 +882,7 @@ static void test_identity_survives_registry_expiry(void) {
     rns_identity_export_public(&peer, expected);
     rns_identity_export_public(resolved, actual);
     assert(memcmp(expected, actual, sizeof actual) == 0);
+    assert(!resolved->has_private);
     uint8_t snapshot[2048]; size_t snapshot_length, path_count;
     assert(rns_runtime_paths_export(state->runtime, 1000000u, snapshot, sizeof snapshot,
                                    &snapshot_length, &path_count) == RNS_OK);
@@ -885,12 +900,24 @@ static void test_identity_survives_registry_expiry(void) {
     assert(memcmp(expected, actual, sizeof actual) == 0);
     hash[0] ^= 1u;
     assert(tui_state_resolve_peer(state, hash) == NULL);
+    uint8_t name_hash[10]; rns_identity untouched, copy;
+    memset(&untouched, 0x5au, sizeof untouched); copy = untouched;
+    assert(rns_destination_name_hash("lxmf", aspects, 1u, name_hash));
+    assert(rns_runtime_recall_identity(state->runtime, hash, name_hash, &untouched) == RNS_ERROR_NOT_FOUND);
+    assert(memcmp(&untouched, &copy, sizeof copy) == 0);
+    assert(rns_runtime_recall_identity(NULL, hash, name_hash, &untouched) == RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_runtime_paths_import(state->runtime, UINT64_C(99999999999), snapshot,
+                                   snapshot_length, &path_count) == RNS_OK && path_count == 0u);
+    hash[0] ^= 1u;
+    assert(tui_state_resolve_peer(state, hash) == NULL);
     rns_runtime_destroy(state->runtime);
     destroy_state(state);
 }
 
 int main(void) {
-    test_identity_survives_registry_expiry();
+    test_identity_survives_registry_expiry(0u);
+    test_identity_survives_registry_expiry(1u);
+    test_identity_survives_registry_expiry(2u);
     test_node_filter_hides_and_reselects();
     test_drafts_follow_contacts_and_persist();
     test_saved_block_policy_and_deferred_rejection();
