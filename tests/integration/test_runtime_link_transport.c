@@ -14,13 +14,11 @@ typedef struct observation {
     size_t payload_length;
 } observation_t;
 
-static uint16_t reserve_udp_port(void) {
-    rns_udp_endpoint_t *endpoint = NULL;
+static uint16_t reserve_udp_port(rns_udp_endpoint_t **endpoint) {
     rns_udp_address_t address;
-    assert(rns_udp_endpoint_create(&endpoint, RNS_UDP_IPV4) == RNS_OK);
-    assert(rns_udp_bind(endpoint, "127.0.0.1", 0) == RNS_OK);
-    assert(rns_udp_local_address(endpoint, &address) == RNS_OK);
-    rns_udp_endpoint_destroy(endpoint);
+    assert(rns_udp_endpoint_create(endpoint, RNS_UDP_IPV4) == RNS_OK);
+    assert(rns_udp_bind(*endpoint, "127.0.0.1", 0) == RNS_OK);
+    assert(rns_udp_local_address(*endpoint, &address) == RNS_OK);
     return address.port;
 }
 
@@ -73,10 +71,13 @@ static void poll_three(rns_runtime_t *first, rns_runtime_t *transport,
 }
 
 int main(void) {
-    uint16_t alice_port = reserve_udp_port();
-    uint16_t bob_port = reserve_udp_port();
-    uint16_t transport_alice_port = reserve_udp_port();
-    uint16_t transport_bob_port = reserve_udp_port();
+    /* Keep reservations alive together: releasing each before asking for the
+     * next lets the OS return the same ephemeral port again. */
+    rns_udp_endpoint_t *reservations[4] = {0};
+    uint16_t alice_port = reserve_udp_port(&reservations[0]);
+    uint16_t bob_port = reserve_udp_port(&reservations[1]);
+    uint16_t transport_alice_port = reserve_udp_port(&reservations[2]);
+    uint16_t transport_bob_port = reserve_udp_port(&reservations[3]);
     assert(alice_port != bob_port && alice_port != transport_alice_port &&
            alice_port != transport_bob_port && bob_port != transport_alice_port &&
            bob_port != transport_bob_port &&
@@ -94,8 +95,12 @@ int main(void) {
     transport_config.enable_transport = true;
 
     rns_runtime_t *alice = NULL, *bob = NULL, *transport = NULL;
+    rns_udp_endpoint_destroy(reservations[0]);
     assert(rns_runtime_create(&alice, &alice_config, NULL) == RNS_OK);
+    rns_udp_endpoint_destroy(reservations[2]);
+    rns_udp_endpoint_destroy(reservations[3]);
     assert(rns_runtime_create(&transport, &transport_config, NULL) == RNS_OK);
+    rns_udp_endpoint_destroy(reservations[1]);
     assert(rns_runtime_create(&bob, &bob_config, NULL) == RNS_OK);
 
     rns_identity bob_identity;

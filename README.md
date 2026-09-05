@@ -10,6 +10,13 @@ Reticulum, LXMF, Nomad Network or OpenAI maintainers.
 
 ## Feature status
 
+Nomad pages are cached in memory for the browser session (up to eight pages and
+1 MiB total). The default lifetime is 12 hours; a leading `#!c=<seconds>` page
+directive overrides it, and `#!c=0` disables caching. Form submissions bypass
+the cache. In Browser, `r` clears the session cache and requests a fresh page.
+Cached pages are not saved to disk or shared between anonymous and identified
+browsing instances.
+
 The concise list of implemented, work-in-progress and planned functionality is
 maintained in [docs/FEATURE_STATUS.md](docs/FEATURE_STATUS.md).
 
@@ -39,12 +46,32 @@ interface configuration:
 Never commit identities, private keys, message stores, local configuration,
 packet captures or logs containing private traffic.
 
+Recipient identity discovery defaults to a five-minute wall-clock deadline.
+Restarting does not renew it; expiry keeps the message and requires an explicit
+retry. Backward system-clock adjustments can extend this wait. Message journals
+written by this version use extended delivery records: back up your store before
+upgrading, and do not open an upgraded store with an older binary.
+
 Conversation text wraps to the available width. Page Up/Page Down scroll by
-display lines. While composing, Enter sends, Ctrl-N inserts a newline, and
+display lines. In Normal mode, `h`/Left focuses the chat list and `l`/Right
+focuses history; Tab switches between them. `j`/`k` or Down/Up move in the
+focused pane. Home/End jump to the oldest/latest visible history. The top bar
+shows CHATS or HISTORY, including on narrow terminals. Escape leaves the editor,
+then history focus, before exiting from the chat list. Uppercase `L` opens Logs.
+While composing, navigation letters are ordinary text. Enter sends, Ctrl-N inserts a newline, and
 Up/Down move through wrapped lines. The editor grows to four rows and scrolls
 with the cursor; Escape leaves the editor without discarding the draft.
 The top bar shows connection state, known nodes, unread messages and (on wider
 terminals) cumulative interface RX/TX totals in KiB.
+
+Press Escape to leave an editor, then `:` to open the command popup. Commands
+include `chats`, `network`, `browser`, `settings`, `interfaces`, `config`, `logs`,
+`guide`, `node`, `rrc`, `announce`, `sync`, `help` and `q`/`quit`. Enter executes,
+Escape closes, and Up recalls the previous command. Commands are an explicit
+application allowlist, not a shell. Normal-mode Ctrl-U/Ctrl-D page history;
+inside editors the existing editing shortcuts remain unchanged. The composer
+has a visible frame, delivery mode and byte counter. This is a Vim-inspired
+interface, not a complete Vim emulation.
 
 In Browser, press `i` to request identification for a restricted page, then
 Enter to confirm or Escape to cancel. Your public identity is disclosed only
