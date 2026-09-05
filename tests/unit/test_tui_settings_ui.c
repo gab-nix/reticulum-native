@@ -745,6 +745,20 @@ static void test_wrapped_chat_render(void) {
     getyx(stdscr, y, x); assert(y >= 6 && y <= 7 && x >= 2 && x < 36);
     assert((mvinch(y, 0) & A_CHARTEXT) == (ACS_VLINE & A_CHARTEXT));
     state->field = TUI_FIELD_NONE;
+    assert(tui_dispatch_key(state, 'l'));
+    tui_render_draw(state);
+    assert(mvinnstr(0, 0, line, 38) != ERR && strstr(line, "HISTORY") != NULL);
+    assert(tui_dispatch_key(state, KEY_END));
+    assert(tui_dispatch_key(state, 'k'));
+    assert(state->scroll == 1u && state->selected == 0u);
+    assert(resizeterm(16, 50) == OK); tui_render_draw(state);
+    assert(state->history_focused);
+    assert(tui_dispatch_key(state, 'h'));
+    tui_render_draw(state);
+    assert(mvinnstr(0, 0, line, 50) != ERR && strstr(line, "CHATS") != NULL);
+    assert(strcmp(tui_editor_text(&state->composer), draft) != 0); /* inserted LF kept */
+    assert(strchr(tui_editor_text(&state->composer), '\n') != NULL);
+    assert(resizeterm(10, 38) == OK); tui_render_draw(state);
     assert(tui_dispatch_key(state, ':'));
     assert(tui_dispatch_key(state, 'h'));
     tui_render_draw(state); getyx(stdscr, y, x);
@@ -752,6 +766,21 @@ static void test_wrapped_chat_render(void) {
     assert(mvinnstr(3, 0, line, 38) != ERR && strstr(line, "COMMAND") != NULL);
     assert(tui_dispatch_key(state, 27));
     assert(!state->command_active);
+    assert(resizeterm(16, 90) == OK);
+    state->contact_count = state->visible_count = 20u;
+    for (size_t i = 0u; i < 20u; ++i) {
+        state->visible[i] = i;
+        state->contacts[i].peer[0] = (uint8_t)i;
+    }
+    state->selected = 19u;
+    state->contacts[19].peer[0] = 0xabu;
+    tui_render_draw(state);
+    bool selected_visible = false;
+    for (int row = 3; row < 12; ++row) {
+        assert(mvinnstr(row, 0, line, 20) != ERR);
+        if (strstr(line, "ab000000") != NULL) selected_visible = true;
+    }
+    assert(selected_visible);
     destroy_state(state); (void)endwin(); delscreen(screen);
     assert(fclose(input) == 0 && fclose(output) == 0);
 }

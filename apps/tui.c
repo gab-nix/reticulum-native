@@ -302,6 +302,29 @@ static void reload(tui_state_t *state) {
 
 /* Returns false when the client should exit. */
 static bool handle_command_key(tui_state_t *state, int key) {
+    if (state->screen == TUI_SCREEN_CONVERSATIONS) {
+        if (key == 'h' || key == KEY_LEFT) {
+            state->history_focused = false;
+            return true;
+        }
+        if (key == 'l' || key == KEY_RIGHT || key == '\t') {
+            state->history_focused = key == '\t' ? !state->history_focused : true;
+            return true;
+        }
+        if (state->history_focused) {
+            if (key == 27) { state->history_focused = false; return true; }
+            if (key == 'k' || key == KEY_UP || key == 'j' || key == KEY_DOWN) {
+                if (conversation_selected(state))
+                    tui_state_scroll_by(state, key == 'k' || key == KEY_UP ? 1 : -1);
+                return true;
+            }
+            if (key == KEY_HOME || key == KEY_END) {
+                state->scroll = key == KEY_END ? 0u : state->thread_layout_valid
+                    ? state->thread_scroll_limit : state->thread_count;
+                return true;
+            }
+        }
+    }
     switch (key) {
         case 'q': case 'Q':
             return false;

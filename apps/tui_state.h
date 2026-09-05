@@ -204,6 +204,7 @@ typedef struct tui_state {
     size_t message_count;
 
     size_t selected;
+    bool history_focused; /* Normal-mode chat pane; editors retain key ownership. */
     size_t scroll;
     size_t thread_scroll_limit; /* Wrapped-row limit supplied by the renderer. */
     size_t thread_visible_last;
