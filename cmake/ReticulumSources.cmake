@@ -9,6 +9,7 @@ set(RETICULUM_PORTABLE_SOURCES
     src/interfaces/auto.c
     src/interfaces/framing.c
     src/interfaces/radio_framing.c
+    src/interfaces/sx1262_interface.c
     src/link/channel.c
     src/link/link.c
     src/link/request.c

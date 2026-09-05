@@ -32,6 +32,7 @@
 #include "reticulum/request.h"
 #include "reticulum/resource.h"
 #include "reticulum/status.h"
+#include "reticulum/sx1262_interface.h"
 #include "reticulum/storage.h"
 #include "reticulum/tcp.h"
 #include "reticulum/transport.h"
