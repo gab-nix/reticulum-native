@@ -227,15 +227,32 @@ rns_status_t rns_heltec_sx1262_open(rns_heltec_sx1262_t **out) {
 }
 rns_status_t rns_heltec_sx1262_send(rns_heltec_sx1262_t *d, const uint8_t *p,
                                     size_t n) {
+  uint32_t ignored_id;
+  return rns_heltec_sx1262_send_with_id(d, p, n, &ignored_id);
+}
+rns_status_t rns_heltec_sx1262_send_with_id(rns_heltec_sx1262_t *d,
+                                            const uint8_t *p, size_t n,
+                                            uint32_t *out_id) {
   rns_status_t s;
-  if (!valid(d))
+  if (!valid(d) || !out_id)
     return RNS_ERROR_INVALID_ARGUMENT;
   if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
     return RNS_ERROR_IO;
-  s = rns_sx1262_radio_send(d->radio, p, n);
+  s = rns_sx1262_radio_send_with_id(d->radio, p, n, out_id);
   xSemaphoreGive(d->mutex);
   if (s == RNS_OK)
     xTaskNotifyGive(d->owner);
+  return s;
+}
+rns_status_t rns_heltec_sx1262_receive_tx_result(
+    rns_heltec_sx1262_t *d, rns_sx1262_tx_result_t *result) {
+  rns_status_t s;
+  if (!valid(d) || !result)
+    return RNS_ERROR_INVALID_ARGUMENT;
+  if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
+    return RNS_ERROR_IO;
+  s = rns_sx1262_radio_receive_tx_result(d->radio, result);
+  xSemaphoreGive(d->mutex);
   return s;
 }
 rns_status_t rns_heltec_sx1262_receive(rns_heltec_sx1262_t *d,
@@ -246,6 +263,29 @@ rns_status_t rns_heltec_sx1262_receive(rns_heltec_sx1262_t *d,
   if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
     return RNS_ERROR_IO;
   s = rns_sx1262_radio_receive(d->radio, p);
+  xSemaphoreGive(d->mutex);
+  return s;
+}
+rns_status_t rns_heltec_sx1262_start_cad(rns_heltec_sx1262_t *d) {
+  rns_status_t s;
+  if (!valid(d))
+    return RNS_ERROR_INVALID_ARGUMENT;
+  if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
+    return RNS_ERROR_IO;
+  s = rns_sx1262_radio_start_cad(d->radio);
+  xSemaphoreGive(d->mutex);
+  if (s == RNS_OK)
+    xTaskNotifyGive(d->owner);
+  return s;
+}
+rns_status_t rns_heltec_sx1262_receive_cad_result(
+    rns_heltec_sx1262_t *d, rns_sx1262_cad_result_t *result) {
+  rns_status_t s;
+  if (!valid(d) || !result)
+    return RNS_ERROR_INVALID_ARGUMENT;
+  if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
+    return RNS_ERROR_IO;
+  s = rns_sx1262_radio_receive_cad_result(d->radio, result);
   xSemaphoreGive(d->mutex);
   return s;
 }

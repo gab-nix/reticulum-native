@@ -77,6 +77,35 @@ int main(void) {
   const rns_sx1262_chip_ops_t *o = rns_sx1262_semtech_chip_ops();
   int f = 0;
   rns_sx1262_default_config(&c);
+  {
+    sx126x_pkt_params_lora_t packet = {
+        18U, SX126X_LORA_PKT_EXPLICIT, 255U, true, false};
+    sx126x_mod_params_lora_t modem = {
+        SX126X_LORA_SF5, SX126X_LORA_BW_125, SX126X_LORA_CR_4_5, 0U};
+    uint32_t portable_ms = 0;
+    c.spreading_factor = 5U;
+    f += ck(rns_sx1262_lora_airtime_ms(&c, 255U, &portable_ms) == RNS_OK &&
+                portable_ms ==
+                    sx126x_get_lora_time_on_air_in_ms(&packet, &modem),
+            "SF5 airtime matches pinned Semtech calculation");
+    c.spreading_factor = 6U;
+    modem.sf = SX126X_LORA_SF6;
+    f += ck(rns_sx1262_lora_airtime_ms(&c, 255U, &portable_ms) == RNS_OK &&
+                portable_ms ==
+                    sx126x_get_lora_time_on_air_in_ms(&packet, &modem),
+            "SF6 airtime matches pinned Semtech calculation");
+    c.spreading_factor = 12U;
+    c.crc_enabled = false;
+    modem.sf = SX126X_LORA_SF12;
+    modem.ldro = 1U;
+    packet.pld_len_in_bytes = 1U;
+    packet.crc_is_on = false;
+    f += ck(rns_sx1262_lora_airtime_ms(&c, 1U, &portable_ms) == RNS_OK &&
+                portable_ms ==
+                    sx126x_get_lora_time_on_air_in_ms(&packet, &modem),
+            "short SF12 airtime matches pinned signed calculation");
+    rns_sx1262_default_config(&c);
+  }
   f += ck(o->reset(&l) == RNS_OK && l.resets == 1, "reset");
   f += ck(o->configure(&l, &c) == RNS_OK, "configure");
   f += ck(has(&l, 0x97, (const uint8_t[]){2, 0, 1, 0x40}, 4), "DIO3 1.8V 5ms");
@@ -90,6 +119,9 @@ int main(void) {
           "RNode sync word");
   f += ck(has(&l, 0x0d, (const uint8_t[]){8, 0xe7, 0x28}, 3), "100 mA OCP");
   f += ck(has(&l, 0x8e, (const uint8_t[]){14, 2}, 2), "power/ramp");
+  f += ck(has(&l, 0x08,
+              (const uint8_t[]){0x03, 0xe3, 0x03, 0xe3, 0, 0, 0, 0}, 8),
+          "TX RX CAD and error IRQ routing");
   f += ck(has(&l, 0x0d, (const uint8_t[]){8, 0xac, 0x96}, 3),
           "boosted receive gain");
   f += ck(o->start_tx(&l, &c, (const uint8_t[]){0xaa, 0xbb}, 2, 5000) ==
@@ -97,6 +129,10 @@ int main(void) {
               has(&l, 0x0e, (const uint8_t[]){0, 0xaa, 0xbb}, 3),
           "TX buffer");
   f += ck(o->start_rx(&l, &c) == RNS_OK, "continuous RX");
+  f += ck(o->start_cad(&l, &c) == RNS_OK &&
+              has(&l, 0x88, (const uint8_t[]){2, 21, 10, 0, 0, 0, 0}, 7) &&
+              has(&l, 0xc5, (const uint8_t[]){0}, 0),
+          "asynchronous four-symbol CAD");
   l.count = 0;
   c.frequency_hz = 915000000U;
   c.bandwidth_hz = 62500U;

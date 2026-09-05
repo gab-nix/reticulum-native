@@ -11,18 +11,22 @@ extern "C" {
 enum {
   RNS_SX1262_MAX_PAYLOAD = 255,
   RNS_SX1262_RX_QUEUE_CAPACITY = 8,
-  RNS_SX1262_TX_QUEUE_CAPACITY = 4
+  RNS_SX1262_TX_QUEUE_CAPACITY = 4,
+  RNS_SX1262_TX_RESULT_CAPACITY = RNS_SX1262_TX_QUEUE_CAPACITY
 };
 enum {
   RNS_SX1262_IRQ_TX_DONE = 1U << 0,
   RNS_SX1262_IRQ_RX_DONE = 1U << 1,
   RNS_SX1262_IRQ_HEADER_ERROR = 1U << 5,
   RNS_SX1262_IRQ_CRC_ERROR = 1U << 6,
+  RNS_SX1262_IRQ_CAD_DONE = 1U << 7,
+  RNS_SX1262_IRQ_CAD_DETECTED = 1U << 8,
   RNS_SX1262_IRQ_TIMEOUT = 1U << 9
 };
 typedef enum {
   RNS_SX1262_STOPPED = 0,
   RNS_SX1262_RECEIVING,
+  RNS_SX1262_SCANNING,
   RNS_SX1262_TRANSMITTING,
   RNS_SX1262_FAULT
 } rns_sx1262_state_t;
@@ -36,7 +40,8 @@ typedef struct {
   bool invert_iq;
   int8_t tx_power_dbm;
   uint32_t busy_timeout_us;
-  uint32_t tx_timeout_ms;
+  uint32_t tx_timeout_margin_ms;
+  uint8_t recovery_backoff_polls;
 } rns_sx1262_config_t;
 typedef struct {
   uint8_t data[RNS_SX1262_MAX_PAYLOAD];
@@ -44,6 +49,31 @@ typedef struct {
   int16_t rssi_dbm;
   int8_t snr_db;
 } rns_sx1262_packet_t;
+typedef enum {
+  RNS_SX1262_TX_SENT = 0,
+  RNS_SX1262_TX_START_FAILED,
+  RNS_SX1262_TX_TIMED_OUT,
+  RNS_SX1262_TX_RADIO_FAILED,
+  RNS_SX1262_TX_STOPPED
+} rns_sx1262_tx_outcome_t;
+typedef struct {
+  /* Non-zero FIFO token assigned when the frame is accepted. */
+  uint32_t id;
+  /* Exactly one terminal outcome is retained while the radio handle lives. */
+  rns_sx1262_tx_outcome_t outcome;
+  /* RNS_OK only for RNS_SX1262_TX_SENT; otherwise the terminal cause. */
+  rns_status_t status;
+  size_t length;
+} rns_sx1262_tx_result_t;
+typedef enum {
+  RNS_SX1262_CAD_CLEAR = 0,
+  RNS_SX1262_CAD_BUSY,
+  RNS_SX1262_CAD_FAILED
+} rns_sx1262_cad_outcome_t;
+typedef struct {
+  rns_sx1262_cad_outcome_t outcome;
+  rns_status_t status;
+} rns_sx1262_cad_result_t;
 typedef struct {
   rns_sx1262_state_t state;
   uint64_t rx_packets;
@@ -57,9 +87,12 @@ typedef struct {
   uint64_t command_errors;
   uint64_t rx_overflows;
   uint64_t tx_overflows;
+  uint64_t tx_failures;
+  uint64_t tx_result_backpressure;
   rns_status_t last_error;
   size_t pending_rx;
   size_t pending_tx;
+  size_t pending_tx_results;
   int16_t last_rssi_dbm;
   int8_t last_snr_db;
 } rns_sx1262_stats_t;
@@ -67,6 +100,7 @@ typedef struct {
   rns_status_t (*reset)(void *);
   rns_status_t (*configure)(void *, const rns_sx1262_config_t *);
   rns_status_t (*start_rx)(void *, const rns_sx1262_config_t *);
+  rns_status_t (*start_cad)(void *, const rns_sx1262_config_t *);
   rns_status_t (*start_tx)(void *, const rns_sx1262_config_t *,
                           const uint8_t *, size_t, uint32_t);
   rns_status_t (*get_and_clear_irq)(void *, uint16_t *);
@@ -77,12 +111,28 @@ typedef struct rns_sx1262_radio rns_sx1262_radio_t;
 void rns_sx1262_default_config(rns_sx1262_config_t *);
 rns_status_t rns_sx1262_radio_create(const rns_sx1262_chip_ops_t *, void *,
                                      rns_sx1262_radio_t **);
+/* Destroy terminalizes accepted operations, then discards unread results with
+   the handle. Call stop() and drain results first when outcomes are needed. */
 rns_status_t rns_sx1262_radio_destroy(rns_sx1262_radio_t *);
 rns_status_t rns_sx1262_radio_start(rns_sx1262_radio_t *,
                                     const rns_sx1262_config_t *);
 rns_status_t rns_sx1262_radio_poll(rns_sx1262_radio_t *, size_t);
+rns_status_t rns_sx1262_radio_start_cad(rns_sx1262_radio_t *);
+rns_status_t rns_sx1262_radio_receive_cad_result(rns_sx1262_radio_t *,
+                                                 rns_sx1262_cad_result_t *);
+rns_status_t rns_sx1262_lora_airtime_ms(const rns_sx1262_config_t *, size_t,
+                                        uint32_t *);
 rns_status_t rns_sx1262_radio_send(rns_sx1262_radio_t *, const uint8_t *,
                                    size_t);
+/* Both send APIs require the caller to drain terminal results. The legacy
+   form omits correlation output but does not discard its eventual result. */
+rns_status_t rns_sx1262_radio_send_with_id(rns_sx1262_radio_t *,
+                                           const uint8_t *, size_t,
+                                           uint32_t *);
+/* Results are bounded and retained until consumed. Unconsumed results apply
+   backpressure to send_with_id() instead of being overwritten. */
+rns_status_t rns_sx1262_radio_receive_tx_result(rns_sx1262_radio_t *,
+                                                rns_sx1262_tx_result_t *);
 rns_status_t rns_sx1262_radio_receive(rns_sx1262_radio_t *,
                                       rns_sx1262_packet_t *);
 rns_status_t rns_sx1262_radio_get_stats(const rns_sx1262_radio_t *,
@@ -96,10 +146,20 @@ rns_status_t rns_heltec_sx1262_open_with_config(
     const rns_sx1262_config_t *, rns_heltec_sx1262_t **);
 rns_status_t rns_heltec_sx1262_send(rns_heltec_sx1262_t *, const uint8_t *,
                                     size_t);
+rns_status_t rns_heltec_sx1262_send_with_id(rns_heltec_sx1262_t *,
+                                            const uint8_t *, size_t,
+                                            uint32_t *);
+rns_status_t rns_heltec_sx1262_receive_tx_result(
+    rns_heltec_sx1262_t *, rns_sx1262_tx_result_t *);
 rns_status_t rns_heltec_sx1262_receive(rns_heltec_sx1262_t *,
                                        rns_sx1262_packet_t *);
+rns_status_t rns_heltec_sx1262_start_cad(rns_heltec_sx1262_t *);
+rns_status_t rns_heltec_sx1262_receive_cad_result(
+    rns_heltec_sx1262_t *, rns_sx1262_cad_result_t *);
 rns_status_t rns_heltec_sx1262_get_stats(rns_heltec_sx1262_t *,
                                          rns_sx1262_stats_t *);
+/* The owner must prevent concurrent public calls while close destroys the
+   ESP handle and its mutex. */
 rns_status_t rns_heltec_sx1262_close(rns_heltec_sx1262_t *);
 #endif
 #ifdef __cplusplus
