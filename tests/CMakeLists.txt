@@ -37,6 +37,10 @@ add_executable(browser_live_driver interop/browser_live_driver.c)
 target_link_libraries(browser_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(browser_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(browser_live_driver)
+add_executable(hosted_live_driver interop/hosted_live_driver.c)
+target_link_libraries(hosted_live_driver PRIVATE reticulum::reticulum)
+target_compile_features(hosted_live_driver PRIVATE c_std_17)
+reticulum_set_project_warnings(hosted_live_driver)
 
 option(RETICULUM_PYTHON_INTEROP "Run opt-in pinned Python interoperability tests" OFF)
 if(RETICULUM_PYTHON_INTEROP)
@@ -50,6 +54,12 @@ if(RETICULUM_PYTHON_INTEROP)
         endif()
     endforeach()
     foreach(transport udp tcp)
+        add_test(NAME interop_hosted_${transport}
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_hosted_live.py
+                --reticulum ${RETICULUM_PYTHON_RNS}
+                --driver $<TARGET_FILE:hosted_live_driver> --transport ${transport})
+        set_tests_properties(interop_hosted_${transport} PROPERTIES
+            LABELS "interop;python;hosting;${transport}" TIMEOUT 150 RUN_SERIAL TRUE)
         add_test(NAME interop_browser_${transport}
             COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_browser_live.py
                 --reticulum ${RETICULUM_PYTHON_RNS}
