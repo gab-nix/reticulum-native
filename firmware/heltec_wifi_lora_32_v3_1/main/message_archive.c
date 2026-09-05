@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #define ARCHIVE_RECORD 946U
-struct heltec_message_archive { rns_storage_t *storage; heltec_archived_message entries[64]; uint8_t wire[ARCHIVE_RECORD]; };
+struct heltec_message_archive { rns_storage_t *storage; heltec_archived_message entries[64]; uint8_t wire[ARCHIVE_RECORD]; bool quarantined[64]; };
 static void key_for(size_t i,char key[8]) { (void)snprintf(key,8,"msg%02u",(unsigned)i); }
 static bool valid(const heltec_archived_message *m) {
     return m->signature <= LXMF_SIGNATURE_FAILED && m->signature >= LXMF_SIGNATURE_VERIFIED &&
@@ -63,6 +63,7 @@ rns_status_t heltec_message_archive_open(rns_storage_t *storage,heltec_message_a
         char key[8]; size_t n=0; key_for(i,key);
         rns_status_t status=rns_storage_read(storage,key,s->wire,sizeof(s->wire),&n);
         if(status==RNS_ERROR_NOT_FOUND) continue;
+        if(status==RNS_ERROR_QUARANTINED) { s->quarantined[i]=true; continue; }
         if(status!=RNS_OK || n!=ARCHIVE_RECORD || !decode(s,&s->entries[i])) {
             heltec_message_archive_close(s); return status==RNS_OK?RNS_ERROR_PROTOCOL:status;
         }
@@ -89,7 +90,7 @@ rns_status_t heltec_message_archive_put(heltec_message_archive *s,const heltec_a
     bool sender_known=false, unknown_sender_known=false, replacement=false;
     for(size_t i=0;i<64;++i) {
         const heltec_archived_message *e=&s->entries[i];
-        if(!e->used) { if(slot==64) slot=i; continue; }
+        if(!e->used) { if(slot==64 && !s->quarantined[i]) slot=i; continue; }
         if(!memcmp(e->id,m->id,32)) {
             if(memcmp(e->source,m->source,16)) return RNS_ERROR_PROTOCOL;
             if(e->signature==m->signature) return RNS_OK;

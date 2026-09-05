@@ -13,6 +13,7 @@ const char *rns_status_string(rns_status_t status) {
         case RNS_ERROR_INVALID_STATE: return "invalid state";
         case RNS_ERROR_UNSUPPORTED: return "unsupported";
         case RNS_ERROR_OVERFLOW: return "overflow";
+        case RNS_ERROR_QUARANTINED: return "quarantined record";
         default: return "unknown error";
     }
 }

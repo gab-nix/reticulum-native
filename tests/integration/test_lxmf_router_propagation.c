@@ -5,6 +5,7 @@
 #include "reticulum/lxmf_router.h"
 #include "reticulum/udp.h"
 #include <assert.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -19,7 +20,17 @@ typedef struct {
   uint64_t now_ms;
   rns_runtime_t *client;
   rns_identity recalled;
+  size_t sent_events, storage_events;
 } host_t;
+static void delivery_event(void *context, const lxmf_router_event_t *event) {
+  host_t *host = context;
+  if (event->state == LXMF_DELIVERY_SENT) host->sent_events++;
+  if (event->queue_reason == LXMF_QUEUE_REASON_STORAGE) {
+    assert(event->state == LXMF_DELIVERY_SENDING);
+    assert(event->result == LXMF_ERR_BOUNDS);
+    host->storage_events++;
+  }
+}
 static uint16_t port(void) {
   rns_udp_endpoint_t *e = NULL;
   rns_udp_address_t a;
@@ -231,6 +242,8 @@ int main(void) {
                                   .propagation_stamp_cost = 1,
                                   .propagation_retry_base_ms = 1,
                                   .propagation_retry_limit = 2};
+  options.event_callback = delivery_event;
+  options.event_context = &host;
   memcpy(options.propagation_node_destination, node_hash, 16);
   lxmf_router_t router;
   options.propagation_node_destination[0] ^= 1u;
@@ -281,6 +294,78 @@ int main(void) {
   lxmf_router_destroy(&router);
   lxmf_store_close(&store);
   unlink(path);
+
+  /* Fail each completion write independently: a full synthetic journal, then
+   * just enough room for metadata but not the following status record. */
+  for (size_t failure = 0u; failure < 2u; ++failure) {
+    fresh_store(path, &store);
+    queue(&store, &sender, host.recipient_hash, id);
+    options.store = &store;
+    host.storage_events = 0u;
+    size_t uploaded_before = host.uploads, sent_before = host.sent_events;
+    assert(lxmf_router_init(&router, &options) == LXMF_OK);
+    bool complete = false;
+    for (size_t step = 0u; step < 15000u && !complete; ++step) {
+      lxmf_router_poll_result_t progress;
+      assert(rns_runtime_poll(client, 32u, &processed) == RNS_OK);
+      assert(rns_runtime_poll(server, 32u, &processed) == RNS_OK);
+      if (router.propagation.session == NULL) {
+        assert(lxmf_router_poll(&router, 4u, &progress) == LXMF_OK);
+      } else {
+        /* Drive the real transport to completion without letting the router
+         * commit yet, so each injected failure targets exactly one write. */
+        assert(lxmf_pn_session_poll(router.propagation.session,
+            (double)host.now_ms / 1000.0) == RNS_OK);
+        complete = lxmf_pn_session_progress(router.propagation.session)->state == LXMF_PN_COMPLETE;
+      }
+    }
+    assert(complete);
+    assert(lxmf_store_read_delivery(&store, id, &metadata) == LXMF_OK);
+    metadata.attempts = 1u;
+    metadata.progress = LXMF_DELIVERY_PROGRESS_COMPLETE - 1u;
+    metadata.queue_reason = LXMF_QUEUE_REASON_RESOURCE;
+    assert(lxmf_store_update_delivery(&store, id, &metadata) == LXMF_OK);
+    assert(lxmf_store_update_status(&store, id, LXMF_DELIVERY_SENDING) == LXMF_OK);
+    int full = open(path, O_WRONLY);
+    assert(full >= 0);
+    assert(ftruncate(full, (off_t)(LXMF_STORE_MAX_FILE_SIZE -
+        (failure == 0u ? 0u : 108u))) == 0);
+    assert(close(full) == 0);
+    lxmf_router_poll_result_t failed_save;
+    assert(lxmf_router_poll(&router, 4u, &failed_save) == LXMF_OK);
+    assert(host.storage_events != 0u && router.propagation.used);
+    assert(host.uploads == uploaded_before + 1u);
+    assert(host.sent_events == sent_before);
+    assert(lxmf_store_read_delivery(&store, id, &metadata) == LXMF_OK);
+    assert(metadata.attempts == 1u);
+    if (failure == 1u) {
+      assert(metadata.progress == LXMF_DELIVERY_PROGRESS_COMPLETE);
+      assert(metadata.queue_reason == LXMF_QUEUE_REASON_NONE);
+    }
+    lxmf_store_message_t pending;
+    uint8_t body[2048];
+    assert(lxmf_store_read(&store, id, &pending, body, sizeof body) == LXMF_OK);
+    assert(pending.status == LXMF_DELIVERY_SENDING);
+    size_t failure_events = host.storage_events;
+    for (size_t spin = 0u; spin < 20u; ++spin) {
+      lxmf_router_poll_result_t progress;
+      assert(lxmf_router_poll(&router, 4u, &progress) == LXMF_OK);
+    }
+    assert(host.storage_events == failure_events);
+    host.now_ms += 1000u;
+    lxmf_router_poll_result_t retry;
+    assert(lxmf_router_poll(&router, 4u, &retry) == LXMF_OK);
+    assert(host.storage_events == failure_events); /* unchanged failure dedup */
+    assert(lxmf_store_compact(&store) == LXMF_OK);
+    host.now_ms += 1000u;
+    pump(client, server, &router, id, LXMF_DELIVERY_SENT);
+    assert(host.sent_events == sent_before + 1u);
+    assert(host.uploads == uploaded_before + 1u);
+    assert(!router.propagation.used);
+    lxmf_router_destroy(&router);
+    lxmf_store_close(&store);
+    assert(unlink(path) == 0);
+  }
 
   /* Explicit cancellation stops a propagation stamp worker durably. */
   fresh_store(path, &store);

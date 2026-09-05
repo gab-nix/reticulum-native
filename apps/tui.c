@@ -284,8 +284,10 @@ static void activate(tui_state_t *state) {
 
 static void reload(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_NETWORK) tui_state_request_path(state);
-    else if (state->screen == TUI_SCREEN_BROWSER)
+    else if (state->screen == TUI_SCREEN_BROWSER) {
+        rns_browser_cache_clear(state->browser);
         (void)tui_state_browse(state, state->url, false);
+    }
     else if (state->screen == TUI_SCREEN_SETTINGS)
         tui_state_set_status(state, "Select Announce Now to send an LXMF announce");
     else if (state->screen == TUI_SCREEN_RRC)
@@ -302,6 +304,29 @@ static void reload(tui_state_t *state) {
 
 /* Returns false when the client should exit. */
 static bool handle_command_key(tui_state_t *state, int key) {
+    if (state->screen == TUI_SCREEN_CONVERSATIONS) {
+        if (key == 'h' || key == KEY_LEFT) {
+            state->history_focused = false;
+            return true;
+        }
+        if (key == 'l' || key == KEY_RIGHT || key == '\t') {
+            state->history_focused = key == '\t' ? !state->history_focused : true;
+            return true;
+        }
+        if (state->history_focused) {
+            if (key == 27) { state->history_focused = false; return true; }
+            if (key == 'k' || key == KEY_UP || key == 'j' || key == KEY_DOWN) {
+                if (conversation_selected(state))
+                    tui_state_scroll_by(state, key == 'k' || key == KEY_UP ? 1 : -1);
+                return true;
+            }
+            if (key == KEY_HOME || key == KEY_END) {
+                state->scroll = key == KEY_END ? 0u : state->thread_layout_valid
+                    ? state->thread_scroll_limit : state->thread_count;
+                return true;
+            }
+        }
+    }
     switch (key) {
         case 'q': case 'Q':
             return false;
@@ -452,9 +477,57 @@ static bool handle_command_key(tui_state_t *state, int key) {
     return true;
 }
 
+/* An application command palette, deliberately not a shell or script parser. */
+static bool submit_command(tui_state_t *state) {
+    const char *text = tui_editor_text(&state->command);
+    static const struct { const char *name; tui_screen_t screen; } screens[] = {
+        {"chats", TUI_SCREEN_CONVERSATIONS}, {"network", TUI_SCREEN_NETWORK},
+        {"browser", TUI_SCREEN_BROWSER}, {"settings", TUI_SCREEN_SETTINGS},
+        {"interfaces", TUI_SCREEN_INTERFACES}, {"config", TUI_SCREEN_CONFIG},
+        {"logs", TUI_SCREEN_LOGS}, {"guide", TUI_SCREEN_GUIDE},
+        {"node", TUI_SCREEN_NODE}, {"rrc", TUI_SCREEN_RRC}
+    };
+    (void)snprintf(state->last_command, sizeof state->last_command, "%s", text);
+    state->command_active = false;
+    if (strcmp(text, "q") == 0 || strcmp(text, "quit") == 0) return false;
+    if (text[0] == '\0') return true;
+    for (size_t i = 0u; i < sizeof screens / sizeof screens[0]; ++i)
+        if (strcmp(text, screens[i].name) == 0) {
+            state->screen = screens[i].screen;
+            state->field = TUI_FIELD_NONE;
+            tui_state_set_status(state, "Normal mode — %s", text);
+            return true;
+        }
+    if (strcmp(text, "announce") == 0) (void)tui_state_announce(state);
+    else if (strcmp(text, "sync") == 0) (void)tui_state_propagation_sync_start(state);
+    else if (strcmp(text, "help") == 0)
+    {
+        state->command_active = true;
+        tui_state_set_status(state, "Choose a command below; Esc returns.");
+    }
+    else {
+        state->command_active = true;
+        tui_state_set_status(state, "Unknown command. Use :help; shell commands are not supported.");
+    }
+    return true;
+}
+
 bool tui_dispatch_key(tui_state_t *state, int key) {
     if (state == NULL) return false;
     if (key == ERR || key == KEY_RESIZE) return true;
+    if (state->command_active) {
+        if (key == 27) { state->command_active = false; return true; }
+        if (key == '\n' || key == KEY_ENTER) return submit_command(state);
+        if (key == KEY_UP) {
+            tui_editor_clear(&state->command);
+            (void)tui_editor_insert(&state->command, state->last_command, strlen(state->last_command));
+            return true;
+        }
+        tui_edit_command_t command;
+        if (editor_command(key, &command)) (void)tui_editor_apply(&state->command, command);
+        else if (key >= 0 && key <= 255) (void)tui_editor_insert_byte(&state->command, (unsigned char)key);
+        return true;
+    }
     /* Asynchronous screen/state changes can leave stale editors or modals.
      * Discard their focus, never their text, and consume this key so a hidden
      * Enter cannot become a send or activate an unrelated screen action. */
@@ -491,6 +564,14 @@ bool tui_dispatch_key(tui_state_t *state, int key) {
         handle_field_key(state, key);
         return true;
     }
+    if (key == ':') {
+        tui_editor_init(&state->command, sizeof state->last_command - 1u);
+        state->command_active = true;
+        tui_state_set_status(state, "Enter execute  Esc close  Up previous command  :help lists commands");
+        return true;
+    }
+    if (key == 21) key = KEY_PPAGE; /* Normal-mode Ctrl-U/D. */
+    if (key == 4) key = KEY_NPAGE;
     return handle_command_key(state, key);
 }
 
@@ -512,7 +593,7 @@ static int run_loop(tui_state_t *state) {
         tui_state_poll(state);
         tui_state_refresh(state);
         tui_render_draw(state);
-        (void)curs_set(state->field != TUI_FIELD_NONE ? 1 : 0);
+        (void)curs_set(state->command_active || state->field != TUI_FIELD_NONE ? 1 : 0);
         int key = getch();
         if (key == ERR || key == KEY_RESIZE) continue;
         running = tui_dispatch_key(state, key);
