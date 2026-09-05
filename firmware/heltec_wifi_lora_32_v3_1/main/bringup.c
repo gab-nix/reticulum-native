@@ -65,7 +65,7 @@ void heltec_bringup_run(void) {
         if (now_ms >= next_display_ms) {
             if (display_ready) {
                 rns_heltec_oled_t *core = rns_heltec_oled_esp_core(display);
-                rns_heltec_oled_set_discovery_count(core, (uint16_t)discovery.peer_count);
+                rns_heltec_oled_set_discovery_count(core, (uint16_t)discovery.identity_count);
                 rns_heltec_oled_set_diagnostics(core, state,
                     (uint32_t)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                     stats.rx_packets, stats.last_rssi_dbm, stats.last_snr_db,
@@ -80,8 +80,9 @@ void heltec_bringup_run(void) {
         }
         if (now_ms >= next_log_ms) {
             ESP_LOGI(TAG, "Discovery packets=%" PRIu64 " verified=%" PRIu64
-                " peers=%u invalid=%" PRIu64 " duplicate=%" PRIu64 " stale=%" PRIu64,
+                " destinations=%u identities=%u invalid=%" PRIu64 " duplicate=%" PRIu64 " stale=%" PRIu64,
                 discovery.packets, discovery.verified, (unsigned)discovery.peer_count,
+                (unsigned)discovery.identity_count,
                 discovery.invalid, discovery.duplicates, discovery.stale);
             ESP_LOGI(TAG, "%s rx=%" PRIu64 " tx=%" PRIu64 " crc=%" PRIu64
                 " overflow=%" PRIu64 " recovery=%" PRIu64 " error=%d api=%d heap=%lu stack=%lu oled=%s",

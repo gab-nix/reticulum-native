@@ -1,15 +1,29 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "radio_discovery.h"
 #include "reticulum/announce.h"
+#include "reticulum/crypto.h"
 #include "reticulum/packet.h"
 #include <string.h>
 #define PEER_LIFETIME_MS UINT64_C(3600000)
+
+static void count_identities(heltec_radio_discovery *s) {
+    s->identity_count = 0U;
+    for (size_t i = 0U; i < HELTEC_DISCOVERY_PEERS; ++i) {
+        if (!s->peers[i].used) continue;
+        bool seen = false;
+        for (size_t j = 0U; j < i; ++j)
+            if (s->peers[j].used && memcmp(s->peers[i].identity_hash,
+                s->peers[j].identity_hash, 16U) == 0) { seen = true; break; }
+        if (!seen) ++s->identity_count;
+    }
+}
 
 static rns_status_t packet_received(const uint8_t *raw, size_t length, void *context) {
     heltec_radio_discovery *s = context;
     rns_packet packet;
     rns_announce announce;
     uint8_t hash[32];
+    uint8_t identity_hash[32];
     ++s->packets;
     /* IFAC requires network credentials; never parse its bytes as plaintext. */
     if (length == 0U || (raw[0] & 0x80U) != 0U ||
@@ -21,7 +35,8 @@ static rns_status_t packet_received(const uint8_t *raw, size_t length, void *con
     if (packet.destination_type != 0U ||
         !rns_announce_parse(&announce, packet.data, packet.data_length, packet.context_flag) ||
         !rns_announce_verify(packet.destination_hash, packet.data, packet.data_length, packet.context_flag) ||
-        !rns_packet_hash(raw, length, hash)) {
+        !rns_packet_hash(raw, length, hash) ||
+        !rns_sha256(announce.public_key, 64U, identity_hash)) {
         ++s->invalid;
         return RNS_OK;
     }
@@ -49,10 +64,12 @@ static rns_status_t packet_received(const uint8_t *raw, size_t length, void *con
     if (!p->used) ++s->peer_count;
     p->used = true;
     memcpy(p->destination, packet.destination_hash, 16U);
+    memcpy(p->identity_hash, identity_hash, 16U);
     memcpy(p->packet_hash, hash, sizeof(hash));
     p->timestamp = announce.timestamp;
     p->last_seen_ms = s->now_ms;
     ++s->verified;
+    count_identities(s);
     return RNS_OK;
 }
 
@@ -73,6 +90,7 @@ void heltec_radio_discovery_poll(heltec_radio_discovery *s, uint64_t now_ms) {
             --s->peer_count;
         }
     }
+    count_identities(s);
 }
 void heltec_radio_discovery_receive(heltec_radio_discovery *s,
     const uint8_t *frame, size_t length, uint64_t now_ms) {

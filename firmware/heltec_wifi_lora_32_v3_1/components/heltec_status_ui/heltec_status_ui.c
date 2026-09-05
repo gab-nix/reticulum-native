@@ -366,7 +366,7 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
         if (kib > 99999U) kib = 99999U;
         (void)snprintf(line, sizeof(line), "HEAP%" PRIu32 "K", kib);
         if (oled->model.discovery_active)
-            (void)snprintf(line, sizeof(line), "PEERS%u", (unsigned)oled->model.peer_count);
+            (void)snprintf(line, sizeof(line), "IDS%u", (unsigned)oled->model.peer_count);
         draw_large_line(oled->frame, 3U, line);
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_ROUTES) {
         draw_line(oled->frame, 1U, "NETWORK");

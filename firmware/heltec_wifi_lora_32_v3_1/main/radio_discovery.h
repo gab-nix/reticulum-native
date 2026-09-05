@@ -5,6 +5,7 @@
 #define HELTEC_DISCOVERY_PEERS 32U
 typedef struct {
     uint8_t destination[16];
+    uint8_t identity_hash[16];
     uint8_t packet_hash[32];
     uint64_t timestamp, last_seen_ms;
     bool used;
@@ -16,6 +17,7 @@ typedef struct {
     heltec_discovered_peer peers[HELTEC_DISCOVERY_PEERS];
     uint64_t now_ms, packets, verified, invalid, duplicates, stale;
     size_t peer_count;
+    size_t identity_count;
 } heltec_radio_discovery;
 void heltec_radio_discovery_init(heltec_radio_discovery *state);
 void heltec_radio_discovery_poll(heltec_radio_discovery *state, uint64_t now_ms);

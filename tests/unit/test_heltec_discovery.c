@@ -6,11 +6,11 @@
 #include <assert.h>
 #include <string.h>
 
-static rns_radio_encoded_packet_t make_peer_announce(uint64_t timestamp, bool large, bool corrupt, uint8_t seed) {
+static rns_radio_encoded_packet_t make_service_announce(uint64_t timestamp, bool large, bool corrupt, uint8_t seed, const char *aspect) {
     uint8_t key[64], body[465], raw[500], name[10], random[5] = {1,2,3,4,5};
     uint8_t app[200] = {0};
     rns_identity identity;
-    const char *aspects[] = {"delivery"};
+    const char *aspects[] = {aspect};
     rns_packet packet = {.packet_type = 1};
     size_t length;
     rns_radio_encoded_packet_t result;
@@ -26,6 +26,9 @@ static rns_radio_encoded_packet_t make_peer_announce(uint64_t timestamp, bool la
     assert(rns_packet_encode(&packet, raw, sizeof(raw), &length));
     assert(rns_radio_frame_encode(raw, length, 3U, &result) == RNS_OK);
     return result;
+}
+static rns_radio_encoded_packet_t make_peer_announce(uint64_t timestamp, bool large, bool corrupt, uint8_t seed) {
+    return make_service_announce(timestamp, large, corrupt, seed, "delivery");
 }
 static rns_radio_encoded_packet_t make_announce(uint64_t timestamp, bool large, bool corrupt) {
     return make_peer_announce(timestamp, large, corrupt, 42U);
@@ -78,5 +81,16 @@ int main(void) {
     p.lengths[0] = 2U;
     feed(&s, &p, 11000);
     assert(s.invalid == 2U && s.peer_count == 0U);
+    heltec_radio_discovery_init(&s);
+    p = make_service_announce(100, false, false, 42U, "delivery");
+    feed(&s, &p, 0);
+    p = make_service_announce(100, false, false, 42U, "propagation");
+    feed(&s, &p, 11000);
+    assert(s.peer_count == 2U && s.identity_count == 1U);
+    p = make_peer_announce(100, false, false, 43U);
+    feed(&s, &p, 22000);
+    assert(s.peer_count == 3U && s.identity_count == 2U);
+    heltec_radio_discovery_poll(&s, 3611000);
+    assert(s.peer_count == 1U && s.identity_count == 1U);
     return 0;
 }
