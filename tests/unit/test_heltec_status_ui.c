@@ -85,6 +85,25 @@ static rns_heltec_oled_ops_t make_ops(fake_display_t *fake) {
     return ops;
 }
 
+static void assert_large_font_grid(const uint8_t *frame) {
+    size_t lit = 0U;
+    for (size_t y = 0U; y < 64U; y += 2U) {
+        for (size_t x = 0U; x < 128U; x += 2U) {
+            unsigned pixel = (frame[x + (y / 8U) * 128U] >> (y % 8U)) & 1U;
+            lit += pixel;
+            for (size_t dy = 0U; dy < 2U; dy++) {
+                for (size_t dx = 0U; dx < 2U; dx++) {
+                    assert(((frame[x + dx + ((y + dy) / 8U) * 128U] >>
+                             ((y + dy) % 8U)) & 1U) == pixel);
+                }
+            }
+            if (x >= 118U || x % 12U >= 10U || y % 16U >= 14U)
+                assert(pixel == 0U);
+        }
+    }
+    assert(lit > 100U);
+}
+
 int main(void) {
     fake_display_t fake = {.network_state = 0x55aaU};
     rns_heltec_oled_ops_t ops = make_ops(&fake);
@@ -106,6 +125,34 @@ int main(void) {
     assert(rns_heltec_oled_render(&oled));
     assert(fake.data_bytes == RNS_HELTEC_OLED_FRAME_BYTES);
     assert(!oled.dirty);
+
+    uint8_t status_frame[RNS_HELTEC_OLED_FRAME_BYTES];
+    memcpy(status_frame, oled.frame, sizeof(status_frame));
+    rns_heltec_oled_set_diagnostics(&oled, "RX ONLY", 123456U, 0U, 0, 0, false);
+    assert(oled.settings.screen == RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS);
+    assert(oled.model.heap_free_bytes == 123456U && !oled.model.signal_valid);
+    assert(rns_heltec_oled_render(&oled));
+    assert_large_font_grid(oled.frame);
+    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
+    memcpy(status_frame, oled.frame, sizeof(status_frame));
+    rns_heltec_oled_set_diagnostics(&oled, "RX ONLY", UINT32_MAX, UINT64_MAX,
+                                   -120, -8, true);
+    assert(oled.model.signal_valid && oled.model.rssi_dbm == -120);
+    assert(rns_heltec_oled_render(&oled));
+    assert_large_font_grid(oled.frame);
+    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
+    memcpy(status_frame, oled.frame, sizeof(status_frame));
+    rns_heltec_oled_set_diagnostics(&oled, "RX ONLY", 99999U * 1024U,
+                                   99999999U, -120, -8, true);
+    assert(rns_heltec_oled_render(&oled));
+    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) == 0);
+    rns_heltec_oled_set_diagnostics(&oled, "FAULT", 4096U, 1U, 0, 0, false);
+    assert(rns_heltec_oled_render(&oled));
+    assert_large_font_grid(oled.frame);
+    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
+    settings.screen = RNS_HELTEC_OLED_SCREEN_STATUS;
+    rns_heltec_oled_set_settings(&oled, &settings);
+    assert(rns_heltec_oled_render(&oled));
 
     const uint8_t valid[] = {'h', 'i', ' ', 0xe2U, 0x98U, 0x83U};
     assert(rns_heltec_oled_show_preview(&oled, valid, sizeof(valid), 100U));
