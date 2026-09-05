@@ -23,5 +23,7 @@ void heltec_home_lines(const heltec_home_snapshot *s, char lines[8][22]) {
     (void)snprintf(lines[5], 22, "RAM %uK MIN %uK",
         (unsigned)(s->heap_free/1024U > 9999U ? 9999U : s->heap_free/1024U),
         (unsigned)(s->heap_minimum/1024U > 9999U ? 9999U : s->heap_minimum/1024U));
-    memcpy(lines[6], "CPU UNAVAILABLE", 16U);
+    if (s->cpu_valid && s->cpu_percent <= 100U)
+        (void)snprintf(lines[6], 22, "CPU %u PCT 5S", s->cpu_percent);
+    else memcpy(lines[6], "CPU UNAVAILABLE", 16U);
 }

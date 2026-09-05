@@ -3,6 +3,7 @@
 #include "button_menu.h"
 #include "live_view.h"
 #include "home_view.h"
+#include "cpu_usage.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -24,6 +25,24 @@ static uint64_t tx_done, tx_failed, preview_until;
 static heltec_button_menu menu;
 static heltec_live_view live;
 static heltec_menu_action active_view;
+static heltec_cpu_usage cpu;
+static void sample_cpu(void) {
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS && CONFIG_FREERTOS_USE_TRACE_FACILITY && CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER
+    static TaskStatus_t tasks[24];
+    configRUN_TIME_COUNTER_TYPE total = 0;
+    uint32_t idle[2] = {0}; bool found[2] = {false, false};
+    UBaseType_t count = uxTaskGetSystemState(tasks, 24U, &total);
+    for (unsigned core = 0; core < 2U; ++core) {
+        TaskHandle_t handle = xTaskGetIdleTaskHandleForCore((BaseType_t)core);
+        for (UBaseType_t i = 0; i < count; ++i) if (tasks[i].xHandle == handle) {
+            idle[core] = (uint32_t)tasks[i].ulRunTimeCounter; found[core] = true;
+        }
+    }
+    heltec_cpu_sample(&cpu, (uint32_t)total, idle, count && found[0] && found[1]);
+#else
+    uint32_t idle[2] = {0}; heltec_cpu_sample(&cpu, 0, idle, false);
+#endif
+}
 static uint64_t clock_ms(void *context) { (void)context; return (uint64_t)esp_timer_get_time() / 1000U; }
 static rns_status_t entropy(void *context, uint8_t *out, size_t size) {
     (void)context; return rns_hal_random_bytes(out, size);
@@ -94,13 +113,18 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
     bool button_ready = gpio_config(&input) == ESP_OK;
     ESP_LOGI(TAG, "868.100 MHz SF11 BW250 CR4/5; packet LXMF; PRG=%s; no automatic announce",
         button_ready ? "ready" : "unavailable");
-    uint64_t next_display = 0, next_log = 0;
+    uint64_t next_display = 0, next_log = 0, next_cpu = 0;
     for (;;) {
         uint64_t now = clock_ms(NULL);
+        if (now >= next_cpu) { sample_cpu(); next_cpu = now+1000U; }
         status = rns_interface_poll(radio, received, NULL, 4U);
         heltec_radio_discovery_poll(&discovery, now);
+        bool was_open = menu.open;
+        uint8_t was_selected = menu.selected;
         heltec_menu_action action = button_ready ? heltec_button_menu_poll(&menu,
             gpio_get_level(RNS_HELTEC_V3_1_GPIO_PRG) == 0, now) : HELTEC_MENU_NONE;
+        if (menu.open != was_open || menu.selected != was_selected || action != HELTEC_MENU_NONE)
+            next_display = 0;
         if (menu.open) { preview_until = 0U; active_view = HELTEC_MENU_NONE; menu.browsing = false; }
         if (action == HELTEC_MENU_ANNOUNCE) {
             rns_status_t announced = lxmf_packet_node_announce(node, (uint64_t)HELTEC_BUILD_EPOCH + now / 1000U);
@@ -134,7 +158,8 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
             else if (now >= preview_until) {
                 heltec_home_snapshot snapshot = {.rx_packets = discovery.packets, .tx_packets = tx_done,
                     .heap_free = heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                    .heap_minimum = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)};
+                    .heap_minimum = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+                    .cpu_valid = cpu.valid, .cpu_percent = cpu.percent};
                 snapshot.radio_valid = rns_interface_get_stats(radio, &snapshot.radio) == RNS_OK;
                 char lines[8][22];
                 heltec_home_lines(&snapshot, lines);
