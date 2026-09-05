@@ -27,6 +27,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | RNode serial | IMPLEMENTED | Hardware interoperability coverage; chunked handshake and asynchronous old-firmware rejection tests exist |
 | IFAC processing | IMPLEMENTED | Broader interface integration |
 | Transport forwarding and reverse paths | WIP | Complete multi-hop transport behavior |
+| Transport test endpoint reservation | IMPLEMENTED | `test_runtime_link_transport` holds all four UDP reservations until runtime handoff to prevent self-reuse of ephemeral ports. This fixes the observed uniqueness assertion; external-process bind races during handoff remain outside this guarantee |
 | Persistent node and path registries | IMPLEMENTED | Migration and long-running deployment coverage |
 
 ## Links, requests and resources
@@ -43,6 +44,18 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 
 ## LXMF messaging
 
+Reliability work is owned by the desktop task; firmware and physical-radio gates
+remain with the Heltec task. An implemented mechanism does not complete its
+remaining acceptance requirements below.
+
+| Reliability acceptance item | Status | Evidence / remaining gate |
+| --- | --- | --- |
+| Persisted recipient discovery deadline and explicit retry | IMPLEMENTED | `test_lxmf_identity_discovery` covers deadline expiry, offline restart, identity-arrival bypass, no attempt inflation and manual retry. `test_lxmf_store_delivery` covers old records, delivery updates and compaction. Five-minute default uses wall time; backward clock adjustment handling remains WIP. Local policy tests are not upstream verification |
+| Clock changes during discovery | WIP | Persisted wall deadline survives restart, but rollback can extend the wait; add a bounded monotonic session guard and deterministic clock-change tests |
+| Public identity lifetime independent of routes | WIP | Current recall depends on unexpired path snapshots; add a separately bounded durable verified-key store and eviction/restart tests without implying service availability |
+| Fair deferred propagation sync | WIP | Process-local pending sync scheduling and cancellation are implemented below; durable intent/restart and adverse-network scheduling against pinned peers remain |
+| Failed durable writes during queue transitions | WIP | Retain existing records and drafts; inject failures at each metadata/status transition and verify no false delivery or automatic revival of terminal messages |
+
 | Feature | Status | Remaining work |
 | --- | --- | --- |
 | Message codec, signatures and unknown fields | IMPLEMENTED | Broader compatibility coverage |
@@ -51,13 +64,13 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Direct link packet delivery | IMPLEMENTED | Complete reconnect and relay behavior; integration test IDs are distinct from random wire hashes |
 | Direct resource delivery | IMPLEMENTED | Persistent transfer resume |
 | Delivery proofs and durable queue state | IMPLEMENTED | Complete offline retry scheduling |
-| Missing-peer discovery retries and queue fairness | IMPLEMENTED | `test_lxmf_identity_discovery` checks 15-second retry throttling, immediate identity-arrival recovery and broadcast fanout over two UDP interfaces; `test_lxmf_router_recovery` checks round-robin polling, failed-message recovery and restart clock rebasing without transmission-attempt inflation. `test_tui_state` checks background queue events do not overwrite Network actions. Finite discovery deadlines remain WIP |
+| Missing-peer discovery retries and queue fairness | IMPLEMENTED | `test_lxmf_identity_discovery` checks 15-second retry throttling, immediate identity-arrival recovery and broadcast fanout over two UDP interfaces; `test_lxmf_router_recovery` checks round-robin polling, failed-message recovery and restart clock rebasing without transmission-attempt inflation. `test_tui_state` checks background queue events do not overwrite Network actions. Deadline and clock-change gates are tracked separately above |
 | Local announced-service path responses | IMPLEMENTED | `test_runtime_path_response` verifies fresh signatures, app-data/ratchet retention, ingress-only replies, duplicate/cooldown limits and last-registration cleanup. Explicitly announced registered services only; cached-route transport responses remain WIP |
 | Identity resolution after Network entry expiry and restart | IMPLEMENTED | `test_tui_state` retains a cryptographically learned runtime identity after registry eviction and runtime export/destroy/recreate/import, validates its LXMF destination hash, and rejects unknown destinations; stock-peer restart messaging remains outside this evidence |
 | Recipient identity recall across service announces | IMPLEMENTED | Runtime bounded public-key recall derives and checks the requested service hash across unexpired paths. `test_tui_state` covers delivery/site/propagation announces, registry expiry, restart, unknown and expired identities. `test_lxmf_router_propagation` uploads a recipient-encrypted message learned only via its site announce, without an inbox route; unrelated relay keys cannot substitute for the recipient |
 | Propagated queue status ownership | IMPLEMENTED | `test_tui_state` ignores uncached background queue events and distinguishes missing recipient identity from relay availability; newly queued messages enter the UI cache before synchronous send callbacks so progress is not replaced with stale queued state |
 | Selected propagation node restart recovery | IMPLEMENTED | `test_tui_settings_ui` learns a signed synthetic propagation announce, saves/closes/reopens the app and starts sync without another announce. Cached metadata requires a matching unexpired, responsive path, public key and announce timebase; its startup lifetime follows the rebased path, not old monotonic registry timestamps. Reachability remains unconfirmed. `test_tui_state` rejects changed keys/timebases, disabled nodes, invalid costs and expired paths. Stock-peer restart exchanges remain unverified |
-| Propagation busy and queue failure diagnostics | IMPLEMENTED | `test_tui_state` distinguishes an active upload from an already-running sync; `test_tui_settings_ui` checks readable queue errors retain the composer and do not insert a message. Missing selected-node information triggers an explicit path refresh on sync. Automatic deferred sync and the reported user's separate queue failure remain unresolved |
+| Propagation busy and queue failure diagnostics | IMPLEMENTED | `test_tui_state` distinguishes queued sync from an already-running sync; `test_tui_settings_ui` checks readable queue errors retain the composer and do not insert a message. Missing selected-node information triggers an explicit path refresh on sync. The reported user's separate queue failure remains unresolved |
 | Public peer identities in path snapshots | IMPLEMENTED | Version 2 stores only already-attached public keys; `test_path_store` covers mixed identity/route-only records, bounds, corruption, malformed identity flags, transactional rejection, offline expiry and version-1 route-only migration. Checksummed snapshots are trusted local storage, not independently authenticated announces |
 | Full-capacity TUI path persistence | IMPLEMENTED | `test_tui_paths` saves and reloads 4096 synthetic paths with public identities and maximum blob history, exceeding the former 64 KiB cap; saves allocate queried size within a 2 MiB ceiling and retain atomic replacement/symlink rejection |
 | Incoming block, size and stamp policies | IMPLEMENTED | Complete policy controls |
@@ -69,15 +82,20 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Python fractional ticket expiry | IMPLEMENTED | `test_lxmf_tickets` accepts float32/64 fractions and rejects NaN/infinity/negative/overflow; integer-second storage rounds expiry down by less than one second, never extending validity |
 | Ticket fields composition | IMPLEMENTED | `test_lxmf_fields` covers add/replace/remove, opaque preservation, 64-bit expiry, output object-budget roundtrips, bounds and malformed input; issuance/delivery scheduling remains |
 | Propagation upload | WIP | Automatic scheduling and durable resume |
+| Propagation completion persistence recovery | IMPLEMENTED | `test_lxmf_router_propagation` exhausts synthetic journal capacity before metadata and status completion writes; no SENT event occurs until recovery, only one upload occurs, attempts remain unchanged, save retries are limited to once per second and unchanged errors are suppressed. `test_tui_state` checks actionable storage feedback. Completed session is process-local; crash/restart recovery may safely reupload and upstream duplicate acceptance remains a separate gate |
 | Propagation download and acknowledgement | WIP | Automatic synchronisation and recovery |
+| Deferred propagation sync behind uploads | IMPLEMENTED | `test_lxmf_router_propagation_sync` covers one accepted pending intent, repeated starts, cancellation without cancelling upload, node-change exclusion and automatic start after slot release; `test_tui_state` checks queued/cancel feedback. Polling services accepted sync before new uploads. Deferred intent is process-local; restart persistence and adverse-network upstream scheduling verification remain WIP |
 | Paper messages and `lxm://` URIs | IMPLEMENTED | QR rendering and scanning |
 | Peer and message persistence | IMPLEMENTED | Store migrations and maintenance controls |
+| Refuse unknown message journal formats without modification | IMPLEMENTED | `test_lxmf_store` appends synthetic unknown versions, record types and reserved flags; repeated opens fail with every byte preserved and prior messages remain usable after fixture removal. Incomplete known-header tails still recover. This protects this reader, not older released binaries; generalized unknown-field migration remains separate |
 
 ## Nomad client
 
 | Feature | Status | Remaining work |
 | --- | --- | --- |
 | Terminal application shell and screen dispatcher | IMPLEMENTED | Additional accessibility controls |
+| Contextual chat-pane keyboard navigation | IMPLEMENTED | `test_tui_dispatch` covers h/l and arrows/Tab focus, visual-row j/k bounds, Home/End, Escape layering, literal editor input and modal isolation. Top bar and pane headers show focus; contact-list viewport follows selection. `test_tui_settings_ui` checks narrow rendering and wrapped history. Full-message reader beyond the existing preview cap remains separate |
+| Command popup and framed editor | IMPLEMENTED | Bounded app-only `:` commands, previous-command recall, Normal/Insert/Command labels, wider framed composer with byte count, wrapped popup feedback and single-frame modal rendering. `test_tui_dispatch` checks command isolation, unknown commands, quit, offline announce, draft preservation and Ctrl-U/D; `test_tui_settings_ui` checks 38x10 popup cursor and textbox bounds. Full Vim motions, completion, safe bracketed paste and redesign of remaining dialogs are WIP |
 | Conversation list and message composer | WIP | Notifications and complete attachment workflows |
 | Wrapped conversation text and composing | IMPLEMENTED | Word-wrapped cached bodies/metadata, preserved LF, visual-row scrolling, a cursor-following multirow composer (Ctrl-N newline, Enter send, Up/Down movement), terminal-cell-aware clipping and connection/node/unread/traffic bar. `test_tui_text`, `test_tui_editor`, `test_tui_settings_ui` cover long lines, wide/combining text, vertical motion, narrow cursor position and scrolling. Existing 4096-byte preview limit and rich browser/RRC/dialog wrapping remain WIP |
 | Per-conversation drafts | IMPLEMENTED | Draft management controls |
@@ -92,6 +110,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Retained browser page after load failure | IMPLEMENTED | `test_browser_retained` covers loading, malformed UTF-8, cancellation, timeout and subsequent success; page URL remains tied to its successful document |
 | TUI retained-page link origin | IMPLEMENTED | `test_tui_state` resolves relative and root links against the displayed page rather than a failed destination; error screen and headless output expose retained URL |
 | Browser same-node link reuse | IMPLEMENTED | Python UDP/TCP page tests require two pages over one authenticated link; destination or public identity change opens a fresh link |
+| Native browser session caching | IMPLEMENTED | Eight entries and 1 MiB aggregate raw-response budget; destination/path/public-key scoped, anonymous and identified instances isolated. Default 12-hour lifetime and bounded `#!c=` parsing; zero/malformed directives disable caching. Forms bypass cache, Reload clears it, failures retain the displayed page. `test_browser_retained` covers hits, expiry, zero/overflow TTL, reload, forms, clock reversal and eviction. Pinned `interop_browser_udp/tcp` check packet/resource-page cache revisits without extra host requests. Disk persistence and full upstream cache-directive acceptance remain WIP |
 | Bounded browser route discovery | IMPLEMENTED | `test_browser_discovery` covers timeout, retry, cancellation and clock failure; upstream adaptive first-hop allowance remains |
 | Static hosted Nomad pages | IMPLEMENTED | Application controls and authentication UI |
 | Executable hosted pages and forms | WIP | Complete execution policy and compatibility |
