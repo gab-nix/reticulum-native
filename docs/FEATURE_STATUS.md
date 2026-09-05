@@ -85,6 +85,7 @@ remaining acceptance requirements below.
 | Deferred propagation sync behind uploads | IMPLEMENTED | `test_lxmf_router_propagation_sync` covers one accepted pending intent, repeated starts, cancellation without cancelling upload, node-change exclusion and automatic start after slot release; `test_tui_state` checks queued/cancel feedback. Polling services accepted sync before new uploads. Deferred intent is process-local; restart persistence and adverse-network upstream scheduling verification remain WIP |
 | Paper messages and `lxm://` URIs | IMPLEMENTED | QR rendering and scanning |
 | Peer and message persistence | IMPLEMENTED | Store migrations and maintenance controls |
+| Refuse unknown message journal formats without modification | IMPLEMENTED | `test_lxmf_store` appends synthetic unknown versions, record types and reserved flags; repeated opens fail with every byte preserved and prior messages remain usable after fixture removal. Incomplete known-header tails still recover. This protects this reader, not older released binaries; generalized unknown-field migration remains separate |
 
 ## Nomad client
 
