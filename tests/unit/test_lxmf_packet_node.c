@@ -11,6 +11,15 @@
 static uint8_t record[105], sent[500];
 static size_t record_length, sent_length;
 static unsigned messages;
+static unsigned unverified_events, verified_events;
+static bool reject_save;
+static rns_status_t accept_message(void *context, const lxmf_message_t *m,
+    lxmf_signature_state_t signature, const uint8_t *raw, size_t length) {
+    (void)context; assert(raw && length && m->content.len == 5);
+    if (signature == LXMF_SIGNATURE_UNVERIFIED) ++unverified_events;
+    else { assert(signature == LXMF_SIGNATURE_VERIFIED); ++verified_events; }
+    return reject_save ? RNS_ERROR_IO : RNS_OK;
+}
 static uint64_t now_ms;
 static rns_status_t test_clock(void *context, uint64_t *now) { (void)context; *now = now_ms; return RNS_OK; }
 static rns_status_t write_status = RNS_OK;
@@ -150,6 +159,24 @@ int main(void) {
     assert(lxmf_packet_node_receive(n, NULL, 0) == RNS_ERROR_PROTOCOL);
     lxmf_packet_node_stats(n, &info);
     assert(info.pending_senders == 0 && info.expired_pending == 4);
+    lxmf_packet_node_destroy(n);
+    assert(lxmf_packet_node_create(storage, radio, NULL, NULL, &n) == RNS_OK);
+    lxmf_packet_node_set_accept(n, accept_message, NULL);
+    assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK);
+    assert(unverified_events == 1 && verified_events == 0);
+    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 0);
+    p.packet_type = 1; p.context = 0;
+    assert(rns_destination_hash(&sender, "nomadnetwork", node_aspects, 1, p.destination_hash));
+    assert(rns_announce_build(&sender, p.destination_hash, name, prefix, 3000, NULL, NULL, 0,
+        body, sizeof(body), &p.data_length, &p.context_flag));
+    assert(rns_packet_encode(&p, ann, sizeof(ann), &ann_length));
+    reject_save = true;
+    assert(lxmf_packet_node_receive(n, ann, ann_length) == RNS_OK);
+    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 0 && info.messages == 0);
+    reject_save = false;
+    assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK);
+    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 1 && info.messages == 1);
+    assert(verified_events == 2);
     lxmf_packet_node_destroy(n);
     record[0] = 2;
     assert(lxmf_packet_node_create(storage, radio, message, NULL, &n) == RNS_ERROR_PROTOCOL && n == NULL);

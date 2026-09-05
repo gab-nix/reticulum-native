@@ -8,6 +8,15 @@ typedef struct lxmf_packet_node lxmf_packet_node_t;
 /* Message slices are borrowed only for the callback. No plaintext is logged.
  * Single caller ownership; callbacks must not re-enter or destroy the node. */
 typedef void (*lxmf_packet_message_fn)(void *context, const lxmf_message_t *message);
+/* Optional durable receive gate, called before replay acceptance/proofs.
+ * All spans are borrowed. Unknown-signature messages are never acknowledged.
+ * Return non-OK on persistence failure to permit retransmission recovery.
+ * Like message callbacks, this hook must not reenter/destroy the endpoint. */
+typedef rns_status_t (*lxmf_packet_accept_fn)(void *context,
+    const lxmf_message_t *message, lxmf_signature_state_t signature,
+    const uint8_t *packet, size_t packet_length);
+void lxmf_packet_node_set_accept(lxmf_packet_node_t *node,
+    lxmf_packet_accept_fn accept, void *context);
 typedef struct {
     uint64_t messages, duplicates, rejected, unknown_senders, proofs_queued;
     uint64_t unsupported_packets;
@@ -29,7 +38,8 @@ const uint8_t *lxmf_packet_node_address(const lxmf_packet_node_t *node);
 rns_status_t lxmf_packet_node_announce(lxmf_packet_node_t *node, uint64_t unix_seconds);
 /* Caller dispatches complete, IFAC-free Reticulum packets, not PHY frames.
  * Up to four unknown-signer packets are retained without proof for five
- * minutes, then revalidated after a verified announce. No unverified preview.
+ * minutes, then revalidated after a verified announce. Legacy message callbacks
+ * remain verified-only; the optional acceptance hook sees unverified events.
  * Duplicate cache is bounded and volatile; this is not a durable inbox. */
 rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *node,
     const uint8_t *packet, size_t length);

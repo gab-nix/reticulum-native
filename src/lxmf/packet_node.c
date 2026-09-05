@@ -26,6 +26,8 @@ struct lxmf_packet_node {
     struct { bool used; uint8_t raw[RNS_MTU], source[16], id[32]; size_t length; uint64_t received_ms; } pending[PENDING];
     uint8_t plain[RNS_MTU], raw[RNS_MTU], body[RNS_MTU];
     lxmf_packet_message_fn callback;
+    lxmf_packet_accept_fn accept;
+    void *accept_context;
     void *context;
     lxmf_packet_node_stats_t stats;
 };
@@ -77,6 +79,9 @@ void lxmf_packet_node_destroy(lxmf_packet_node_t *n) {
     if (n) { rns_hal_secure_zero(n, sizeof(*n)); free(n); }
 }
 const uint8_t *lxmf_packet_node_address(const lxmf_packet_node_t *n) { return n ? n->address : NULL; }
+void lxmf_packet_node_set_accept(lxmf_packet_node_t *n, lxmf_packet_accept_fn accept, void *context) {
+    if (n) { n->accept = accept; n->accept_context = context; }
+}
 rns_status_t lxmf_packet_node_announce(lxmf_packet_node_t *n, uint64_t timestamp) {
     if (!n || timestamp > RNS_ANNOUNCE_MAX_TIMESTAMP) return RNS_ERROR_INVALID_ARGUMENT;
     if (n->last_announce == RNS_ANNOUNCE_MAX_TIMESTAMP) return RNS_ERROR_OVERFLOW;
@@ -170,7 +175,10 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
                 if (n->pending[i].used && !memcmp(n->pending[i].id, message.message_id, 32)) duplicate_pending = true;
                 if (!n->pending[i].used && slot == PENDING) slot = i;
             }
-            if (clock_ok && !duplicate_pending && slot != PENDING && length <= RNS_MTU) {
+            rns_status_t accepted = RNS_OK;
+            if (!duplicate_pending && n->accept)
+                accepted = n->accept(n->accept_context, &message, LXMF_SIGNATURE_UNVERIFIED, raw, length);
+            if (clock_ok && accepted == RNS_OK && !duplicate_pending && slot != PENDING && length <= RNS_MTU) {
                 memcpy(n->pending[slot].raw, raw, length);
                 memcpy(n->pending[slot].source, message.source, 16);
                 memcpy(n->pending[slot].id, message.message_id, 32);
@@ -186,6 +194,13 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
         if (n->replay_used[i] && !memcmp(n->replay[i], message.message_id, 32)) duplicate = true;
     if (duplicate) ++n->stats.duplicates;
     else {
+        if (n->accept) {
+            rns_status_t accepted = n->accept(n->accept_context, &message, LXMF_SIGNATURE_VERIFIED, raw, length);
+            if (accepted != RNS_OK) {
+                rns_hal_secure_zero(n->plain, sizeof(n->plain));
+                return accepted;
+            }
+        }
         memcpy(n->replay[n->next_replay], message.message_id, 32);
         n->replay_used[n->next_replay] = true; n->next_replay = (n->next_replay + 1) % REPLAYS;
         ++n->stats.messages;
