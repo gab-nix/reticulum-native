@@ -11,6 +11,10 @@ typedef void (*lxmf_packet_message_fn)(void *context, const lxmf_message_t *mess
 typedef struct {
     uint64_t messages, duplicates, rejected, unknown_senders, proofs_queued;
     uint64_t unsupported_packets;
+    /* Aggregate ingress diagnostics only: never addresses, keys or payloads. */
+    uint64_t ingress, malformed, ifac_rejected, announces, learned_announces;
+    uint64_t packet_types[4], other_destinations, local_data, local_other;
+    uint64_t unsupported_data_layout;
     lxmf_status_t last_message_status;
     rns_status_t last_send_status;
 } lxmf_packet_node_stats_t;

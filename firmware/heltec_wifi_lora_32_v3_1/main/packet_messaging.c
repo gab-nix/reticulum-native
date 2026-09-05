@@ -107,6 +107,14 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
             next_display = now + 1000U;
         }
         if (now >= next_log) {
+            ESP_LOGI(TAG, "Ingress=%" PRIu64 " malformed=%" PRIu64 " ifac=%" PRIu64
+                " types(data,announce,link,proof)=%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
+                " learned=%" PRIu64 " other_dest=%" PRIu64 " local_data=%" PRIu64
+                " local_other=%" PRIu64 " unsupported_layout=%" PRIu64,
+                messages.ingress, messages.malformed, messages.ifac_rejected,
+                messages.packet_types[0], messages.packet_types[1], messages.packet_types[2], messages.packet_types[3],
+                messages.learned_announces, messages.other_destinations, messages.local_data,
+                messages.local_other, messages.unsupported_data_layout);
             ESP_LOGI(TAG, "RX=%" PRIu64 " TX=%" PRIu64 " TXfail=%" PRIu64
                 " messages=%" PRIu64 " rejected=%" PRIu64 " unknown=%" PRIu64
                 " unsupported_links=%" PRIu64

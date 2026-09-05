@@ -117,15 +117,23 @@ static void learn(lxmf_packet_node_t *n, const rns_packet *p) {
     if (!rns_identity_from_public(&n->peers[slot].identity, a.public_key)) return;
     memcpy(n->peers[slot].address, p->destination_hash, 16);
     n->peers[slot].timestamp = a.timestamp; n->peers[slot].used = true;
+    ++n->stats.learned_announces;
 }
 rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw, size_t length) {
     rns_packet p;
-    if (!n || !raw || !length || (raw[0] & 0x80U) || !rns_packet_decode(&p, raw, length))
-        return RNS_ERROR_PROTOCOL;
-    if (p.packet_type == 1) { learn(n, &p); return RNS_OK; }
-    if (memcmp(p.destination_hash, n->address, 16)) return RNS_OK;
+    if (!n) return RNS_ERROR_INVALID_ARGUMENT;
+    ++n->stats.ingress;
+    if (!raw || !length) { ++n->stats.malformed; return RNS_ERROR_PROTOCOL; }
+    if (raw[0] & 0x80U) { ++n->stats.ifac_rejected; return RNS_ERROR_PROTOCOL; }
+    if (!rns_packet_decode(&p, raw, length)) { ++n->stats.malformed; return RNS_ERROR_PROTOCOL; }
+    ++n->stats.packet_types[p.packet_type];
+    if (p.packet_type == 1) { ++n->stats.announces; learn(n, &p); return RNS_OK; }
+    if (memcmp(p.destination_hash, n->address, 16)) { ++n->stats.other_destinations; return RNS_OK; }
     if (p.packet_type == 2) { ++n->stats.unsupported_packets; return RNS_ERROR_UNSUPPORTED; }
-    if (p.packet_type != 0) return RNS_OK;
+    if (p.packet_type != 0) { ++n->stats.local_other; return RNS_OK; }
+    ++n->stats.local_data;
+    if (p.header_type != 0 || p.destination_type != 0 || p.context != 0)
+        ++n->stats.unsupported_data_layout;
     lxmf_identity_verifier_context_t verifier = {resolve, n};
     lxmf_message_t message; size_t plain_length = 0;
     lxmf_status_t status = lxmf_opportunistic_packet_unpack_ratchets(raw, length, &n->identity,
