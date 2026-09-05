@@ -9,14 +9,22 @@ heltec_menu_action heltec_button_menu_poll(heltec_button_menu *m, bool pressed, 
     if (m->raw != pressed) { m->raw = pressed; m->changed = now; }
     if (now < m->changed || now - m->changed < 50U) return HELTEC_MENU_NONE;
     if (!pressed && !m->stable) { m->armed = true; return HELTEC_MENU_NONE; }
-    if (m->stable == pressed) return HELTEC_MENU_NONE;
+    if (m->stable == pressed) {
+        if (!pressed || !m->armed || m->consumed || now < m->pressed_at ||
+            now - m->pressed_at < 700U) return HELTEC_MENU_NONE;
+        m->consumed = true;
+        if (!m->open) { m->open = true; m->selected = 0; return HELTEC_MENU_NONE; }
+        goto select_item;
+    }
     m->stable = pressed;
-    if (pressed) { m->pressed_at = now; return HELTEC_MENU_NONE; }
+    if (pressed) { m->pressed_at = now; m->consumed = false; return HELTEC_MENU_NONE; }
     if (!m->armed) { m->armed = true; return HELTEC_MENU_NONE; }
+    if (m->consumed) return HELTEC_MENU_NONE;
     if (!m->open) { m->open = true; m->selected = 0; return HELTEC_MENU_NONE; }
     if (now < m->pressed_at || now - m->pressed_at < 700U) {
         m->selected = (uint8_t)((m->selected + 1U) % 4U); return HELTEC_MENU_NONE;
     }
+select_item:
     m->open = false;
     if (m->selected == 1) return HELTEC_MENU_MESSAGE;
     if (m->selected == 3) return HELTEC_MENU_CLEAR;

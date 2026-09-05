@@ -25,5 +25,15 @@ int main(void) {
     assert(press(&m, 12000, 800) == HELTEC_MENU_CLEAR);
     m.open = true; m.selected = 2;
     assert(press(&m, 70000, 800) == HELTEC_MENU_ANNOUNCE);
+    m.open = true; m.selected = 1;
+    assert(heltec_button_menu_poll(&m, true, 72000) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, true, 72050) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, true, 72749) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, true, 72750) == HELTEC_MENU_MESSAGE);
+    assert(!m.open);
+    assert(heltec_button_menu_poll(&m, true, 74000) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, false, 74100) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, false, 74150) == HELTEC_MENU_NONE);
+    assert(!m.open); /* Release must not reopen or advance the menu. */
     return 0;
 }

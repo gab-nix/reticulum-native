@@ -93,6 +93,7 @@ static uint16_t glyph_bits(char character) {
 }
 
 static const uint8_t *large_glyph(char character) {
+    if (character >= 'a' && character <= 'z') character = (char)(character - 'a' + 'A');
     /* Seven rows of five pixels, most significant used bit at the left. */
     static const uint8_t letters[26][7] = {
         {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30},
@@ -118,9 +119,11 @@ static const uint8_t *large_glyph(char character) {
     };
     static const uint8_t dot[7] = {0,0,0,0,0,4,4};
     static const uint8_t blank[7] = {0};
+    static const uint8_t unknown[7] = {14,17,1,2,4,0,4};
     if (character >= 'A' && character <= 'Z') return letters[character - 'A'];
     if (character >= '0' && character <= '9') return digits[character - '0'];
-    return character == '.' ? dot : blank;
+    if (character == '.') return dot;
+    return character == ' ' ? blank : unknown;
 }
 
 static void draw_large_line(uint8_t *frame, size_t row, const char *text) {
@@ -195,7 +198,7 @@ static void draw_wrapped(uint8_t *frame, size_t first_row, size_t row_count,
 }
 
 /* Preview storage is validated UTF-8. Unsupported glyphs occupy one cell,
-   not one cell per UTF-8 byte. Four large rows fit 40 visible characters. */
+   not one cell per UTF-8 byte. Compact 5x7 glyphs fit 21 columns by 8 rows. */
 static size_t preview_cells(const char *text) {
     size_t count = 0U;
     for (size_t i = 0U; text[i] != '\0'; ++count) {
@@ -204,19 +207,29 @@ static size_t preview_cells(const char *text) {
     }
     return count;
 }
+static void draw_compact_line(uint8_t *frame, size_t row, const char *text) {
+    if (row >= 8U) return;
+    for (size_t col = 0; col < 21U && text[col]; ++col) {
+        const uint8_t *glyph = large_glyph(text[col]);
+        for (size_t y = 0; y < 7U; ++y)
+            for (size_t x = 0; x < 5U; ++x)
+                if (glyph[y] & (1U << (4U-x)))
+                    frame[col*6U+x+row*128U] |= (uint8_t)(1U << y);
+    }
+}
 static void draw_large_preview(rns_heltec_oled_t *oled) {
     size_t offset = 0U, cell = 0U;
-    char rows[4][11] = {{0}};
+    char rows[8][22] = {{0}};
     while (oled->model.preview[offset] != '\0') {
         size_t length = utf8_sequence_length((uint8_t)oled->model.preview[offset]);
-        size_t first = oled->preview_page * 40U;
-        if (cell >= first && cell - first < 40U)
-            rows[(cell - first) / 10U][(cell - first) % 10U] =
+        size_t first = oled->preview_page * 168U;
+        if (cell >= first && cell - first < 168U)
+            rows[(cell - first) / 21U][(cell - first) % 21U] =
                 length == 1U ? oled->model.preview[offset] : '?';
         offset += length ? length : 1U;
         ++cell;
     }
-    for (size_t row = 0U; row < 4U; ++row) draw_large_line(oled->frame, row, rows[row]);
+    for (size_t row = 0U; row < 8U; ++row) draw_compact_line(oled->frame, row, rows[row]);
 }
 
 static bool send_command(rns_heltec_oled_t *oled, uint8_t command) {
@@ -366,7 +379,7 @@ bool rns_heltec_oled_show_preview(rns_heltec_oled_t *oled,
 
 void rns_heltec_oled_poll(rns_heltec_oled_t *oled, uint64_t now_ms) {
     if (oled == NULL) return;
-    size_t pages = (preview_cells(oled->model.preview) + 39U) / 40U;
+    size_t pages = (preview_cells(oled->model.preview) + 167U) / 168U;
     size_t page = pages && now_ms >= oled->preview_started_ms
         ? (size_t)(((now_ms - oled->preview_started_ms) / 4000U) % pages) : 0U;
     if (page != oled->preview_page) { oled->preview_page = page; oled->dirty = true; }
@@ -387,10 +400,14 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
         oled->settings.screen != RNS_HELTEC_OLED_SCREEN_MENU)
         draw_line(oled->frame, 0U, "RETICULUM");
     if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MENU) {
-        draw_large_line(oled->frame, 0U, "MENU");
-        draw_large_line(oled->frame, 1U, oled->model.menu_label);
-        draw_large_line(oled->frame, 2U, "TAP NEXT");
-        draw_large_line(oled->frame, 3U, "HOLD OPEN");
+        static const char *items[] = {"STATUS", "LAST MSG", "ANNOUNCE", "CLEAR MSG"};
+        draw_compact_line(oled->frame, 0U, "MENU");
+        for (size_t i = 0; i < 4U; ++i) {
+            draw_compact_line(oled->frame, i+2U, items[i]);
+            if (!strcmp(items[i], oled->model.menu_label))
+                for (size_t x = 0; x < 126U; ++x) oled->frame[(i+2U)*128U+x] ^= 0x7fU;
+        }
+        draw_compact_line(oled->frame, 7U, "TAP NEXT  HOLD OPEN");
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MESSAGE) {
         draw_large_preview(oled);
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS) {
