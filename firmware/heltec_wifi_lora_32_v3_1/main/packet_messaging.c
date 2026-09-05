@@ -7,6 +7,7 @@
 #include "cpu_usage.h"
 #include "channel_view.h"
 #include "chat_store.h"
+#include "chat_admission.h"
 #include "chat_journal.h"
 #include "chat_view.h"
 #include "archive_view.h"
@@ -49,6 +50,7 @@ static bool archive_rescan;
 static bool outbox_ready;
 static rns_status_t quick_reply(void *context,const uint8_t sender[16],const char *text) {
     (void)context;
+    if(!heltec_chat_reply_available(saved_chats,archive,sender)) return RNS_ERROR_OVERFLOW;
     uint8_t id[32]; uint64_t now=(uint64_t)esp_timer_get_time()/1000000U;
     uint64_t timestamp=(uint64_t)HELTEC_BUILD_EPOCH+now;
     /* Avoid identical reply IDs when uptime restarts without a wall clock.
@@ -96,8 +98,9 @@ static bool reply_delivery_line(void *context,const uint8_t id[32],char line[22]
     }
     return false;
 }
-static bool save_outgoing_history(void) {
-    if(!saved_chats || !outbox_ready) return false;
+static uint8_t save_outgoing_history(void) {
+    uint8_t ready=0;
+    if(!saved_chats || !outbox_ready) return ready;
     for(size_t i=0;i<4;++i) {
         lxmf_packet_outgoing out;
         if(!lxmf_packet_node_outgoing(node,i,&out)) continue;
@@ -108,13 +111,16 @@ static bool save_outgoing_history(void) {
             out.state==LXMF_PACKET_AWAITING_PROOF?2:1;
         heltec_chat_message m={.timestamp=out.timestamp,.length=(uint16_t)out.text_length,.state=state};
         memcpy(m.id,out.id,32); memcpy(m.text,out.text,out.text_length);
-        rns_status_t status=heltec_chat_store_add(saved_chats,out.destination,&m);
+        lxmf_message_t admission={0}; memcpy(admission.source,out.destination,16); memcpy(admission.message_id,out.id,32);
+        rns_status_t status=heltec_chat_admission_available(saved_chats,archive,&admission,true)?
+            heltec_chat_store_add(saved_chats,out.destination,&m):RNS_ERROR_OVERFLOW;
         if(status==RNS_OK) status=heltec_chat_store_set_state(saved_chats,out.destination,out.id,state);
         if(status==RNS_OK && out.state>=LXMF_PACKET_DELIVERED) status=lxmf_packet_node_release(node,i);
         rns_hal_secure_zero(&m,sizeof(m)); rns_hal_secure_zero(&out,sizeof(out));
-        if(status!=RNS_OK) { chat_status=status; return false; }
+        if(status!=RNS_OK) { chat_status=status; continue; }
+        ready|=(uint8_t)(1U<<i);
     }
-    return true;
+    return ready;
 }
 static bool archive_has_id(const uint8_t id[32]) {
     for(size_t i=0;i<64;++i) {
@@ -122,29 +128,6 @@ static bool archive_has_id(const uint8_t id[32]) {
         if(m && !memcmp(m->id,id,32)) return true;
     }
     return false;
-}
-static bool admission_available(const lxmf_message_t *message, bool verified) {
-    uint8_t senders[8][16]; size_t count=0, same=0;
-    const heltec_chat *existing = NULL;
-    bool known=false;
-    for(size_t i=0;i<8;++i) {
-        const heltec_chat *c=heltec_chat_store_get(saved_chats,i);
-        if(!c) continue;
-        memcpy(senders[count++],c->sender,16);
-        if(!memcmp(c->sender,message->source,16)) { known=true; same=c->count; existing=c; }
-        for(size_t j=0;j<c->count;++j)
-            if(!memcmp(c->messages[j].id,message->message_id,32)) return true;
-    }
-    for(size_t i=0;i<64;++i) {
-        const heltec_archived_message *m=heltec_message_archive_get(archive,i);
-        if(!m || m->signature==LXMF_SIGNATURE_VERIFIED) continue;
-        if(!memcmp(m->id,message->message_id,32)) return true;
-        bool found=false;
-        for(size_t j=0;j<count;++j) if(!memcmp(senders[j],m->source,16)) found=true;
-        if(!found) { if(count==8) return false; memcpy(senders[count++],m->source,16); }
-        if(!memcmp(m->source,message->source,16)) { known=true; ++same; }
-    }
-    return (same<8 || heltec_chat_can_rotate(existing,same,verified)) && (known || count<8);
 }
 static rns_status_t persist_message(void *context, const lxmf_message_t *message,
     lxmf_signature_state_t signature, const uint8_t *packet, size_t packet_length) {
@@ -155,7 +138,7 @@ static rns_status_t persist_message(void *context, const lxmf_message_t *message
     if (message->content.len > HELTEC_CHAT_TEXT || !isfinite(message->timestamp) ||
         message->timestamp < 0 || message->timestamp >= 18446744073709551616.0)
         return chat_status = RNS_ERROR_OVERFLOW;
-    if(!admission_available(message,signature==LXMF_SIGNATURE_VERIFIED) || !packet || !packet_length || packet_length>500)
+    if(!heltec_chat_admission_available(saved_chats,archive,message,signature==LXMF_SIGNATURE_VERIFIED) || !packet || !packet_length || packet_length>500)
         return chat_status = RNS_ERROR_OVERFLOW;
     if(signature==LXMF_SIGNATURE_UNVERIFIED || archive_has_id(message->message_id)) {
         memset(&archive_item,0,sizeof(archive_item));
@@ -292,6 +275,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         }
         lxmf_packet_node_set_accept(node, persist_message, NULL);
         ESP_LOGI(TAG, "Chat storage opening: %d; identity storage unchanged", (int)chat_status);
+        if(heltec_chat_flash_quarantined()) ESP_LOGW(TAG,"Storage degraded: quarantined records preserved");
     }
     if (status == RNS_OK) status = rns_interface_start(radio);
     if (status != RNS_OK) {
@@ -329,7 +313,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         uint64_t now = clock_ms(NULL);
         if (now >= next_cpu) { sample_cpu(); next_cpu = now+1000U; }
         status = rns_interface_poll(radio, received, NULL, 4U);
-        if(save_outgoing_history()) lxmf_packet_node_poll(node,now);
+        lxmf_packet_node_poll_ready(node,now,save_outgoing_history());
         lxmf_packet_node_stats_t archive_stats;
         lxmf_packet_node_stats(node,&archive_stats);
         if(archive_generation!=archive_stats.learned_announces) {
@@ -440,6 +424,9 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 heltec_home_lines(&snapshot, lines);
                 if (chat_status != RNS_OK) (void)snprintf(lines[7], 22, "STORAGE ERROR %d", (int)chat_status);
                 rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
+            }
+            if(heltec_chat_flash_quarantined() && oled->settings.screen==RNS_HELTEC_OLED_SCREEN_LIVE) {
+                (void)snprintf(oled->model.lines[7],22,"STORAGE DEGRADED"); oled->dirty=true;
             }
             if (!rns_heltec_oled_render(oled)) {
                 rns_heltec_oled_esp_close(display); display = NULL;

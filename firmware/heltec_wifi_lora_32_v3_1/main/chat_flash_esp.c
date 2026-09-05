@@ -3,6 +3,8 @@
 #include "esp_partition.h"
 #include "esp_log.h"
 #include <stdlib.h>
+static size_t quarantined_records;
+size_t heltec_chat_flash_quarantined(void) { return quarantined_records; }
 static rns_status_t rd(void *c,size_t o,uint8_t *p,size_t n) {
     if(o>HELTEC_CHAT_JOURNAL_BYTES || n>HELTEC_CHAT_JOURNAL_BYTES-o) return RNS_ERROR_OVERFLOW;
     return esp_partition_read(c,o,p,n)==ESP_OK?RNS_OK:RNS_ERROR_IO;
@@ -18,6 +20,7 @@ static rns_status_t wr(void *c,size_t o,const uint8_t *p,size_t n) {
 rns_status_t heltec_chat_flash_open(rns_storage_t **out) {
     if(!out) return RNS_ERROR_INVALID_ARGUMENT;
     *out=NULL;
+    quarantined_records=0;
     const esp_partition_t *p=esp_partition_find_first(ESP_PARTITION_TYPE_DATA,ESP_PARTITION_SUBTYPE_ANY,"storage");
     if(!p || p->size<HELTEC_CHAT_JOURNAL_BYTES) return RNS_ERROR_NOT_FOUND;
     /* This reserved partition must not contain an existing filesystem or
@@ -33,7 +36,7 @@ rns_status_t heltec_chat_flash_open(rns_storage_t **out) {
     }
     free(buffer);
     heltec_chat_flash_ops ops={.context=(void *)p,.read=rd,.erase=erase,.write=wr};
-    rns_status_t status = heltec_chat_journal_open(&ops,out);
+    rns_status_t status = heltec_chat_journal_open_report(&ops,out,&quarantined_records);
     if (status != RNS_OK)
         ESP_LOGE("chat_storage", "Journal validation failed: %d; no erase performed", (int)status);
     return status;

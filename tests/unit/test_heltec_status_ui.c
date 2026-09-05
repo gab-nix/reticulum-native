@@ -158,6 +158,14 @@ int main(void) {
     assert(oled.settings.screen == RNS_HELTEC_OLED_SCREEN_MENU);
     assert(rns_heltec_oled_render(&oled));
     assert(oled.frame[3U*128U+125U] == 0x7fU); /* Selected list row is highlighted. */
+    rns_heltec_oled_set_menu(&oled, "CHANNEL");
+    assert(rns_heltec_oled_render(&oled));
+    assert(oled.frame[6U*128U+125U] == 0x7fU);
+    memcpy(status_frame, oled.frame, sizeof(status_frame));
+    rns_heltec_oled_set_menu(&oled, "UNVERIFIED");
+    assert(rns_heltec_oled_render(&oled));
+    assert(oled.frame[6U*128U+125U] == 0x7fU);
+    assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
     char live_lines[8][22] = {{0}};
     memcpy(live_lines[0], "MESSAGES", 9);
     memcpy(live_lines[7], "TAP NEXT HOLD MENU", 19);

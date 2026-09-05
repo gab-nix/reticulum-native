@@ -25,11 +25,13 @@ static uint64_t now_ms;
 static rns_status_t test_clock(void *context, uint64_t *now) { (void)context; *now = now_ms; return RNS_OK; }
 static rns_status_t write_status = RNS_OK;
 static uint8_t out_records[4][680]; static size_t out_lengths[4];
+static bool quarantined[4];
 static uint32_t tx_id; static unsigned tracked_sends;
 static rns_status_t read_record(void *c, const char *key, uint8_t *out, size_t cap, size_t *len) {
     (void)c;
     if(!strncmp(key,"out",3)) {
         unsigned i=(unsigned)(key[3]-'0'); assert(i<4 && !key[4]);
+        if(quarantined[i]) return RNS_ERROR_QUARANTINED;
         if(!out_lengths[i]) return RNS_ERROR_NOT_FOUND;
         assert(cap>=out_lengths[i]); memcpy(out,out_records[i],out_lengths[i]); *len=out_lengths[i]; return RNS_OK;
     }
@@ -41,6 +43,7 @@ static rns_status_t write_record(void *c, const char *key, const uint8_t *data, 
     (void)c; (void)key; if (write_status != RNS_OK) return write_status;
     if(!strncmp(key,"out",3)) {
         unsigned i=(unsigned)(key[3]-'0'); assert(i<4 && len==680);
+        assert(!quarantined[i]);
         memcpy(out_records[i],data,len); out_lengths[i]=len; return RNS_OK;
     }
     assert(len == sizeof(record)); memcpy(record, data, len); record_length = len; return RNS_OK;
@@ -340,7 +343,11 @@ int main(void) {
     assert(lxmf_packet_node_outgoing(n,0,&outgoing));
     assert(lxmf_packet_node_cancel(n,outgoing.id)==RNS_OK);
     unsigned before=tracked_sends;
-    lxmf_packet_node_poll(n,1); assert(tracked_sends==before+3);
+    lxmf_packet_node_poll_ready(n,1,4U); assert(tracked_sends==before+1);
+    assert(lxmf_packet_node_outgoing(n,1,&outgoing) && outgoing.state==LXMF_PACKET_QUEUED && outgoing.attempts==0);
+    assert(lxmf_packet_node_outgoing(n,0,&outgoing) && outgoing.state==LXMF_PACKET_CANCELLED && outgoing.durable);
+    lxmf_packet_node_poll_ready(n,2,0U); assert(tracked_sends==before+1);
+    lxmf_packet_node_poll(n,3); assert(tracked_sends==before+3);
     assert(lxmf_packet_node_outgoing(n,0,&outgoing) && outgoing.state==LXMF_PACKET_CANCELLED && outgoing.durable);
     lxmf_packet_node_tx_complete(n,0,RNS_OK,2);
     assert(lxmf_packet_node_outgoing(n,0,&outgoing) && outgoing.state==LXMF_PACKET_CANCELLED);
@@ -352,6 +359,24 @@ int main(void) {
     assert(tracked_sends==before+3);
     assert(lxmf_packet_node_outgoing(n,0,&outgoing) && outgoing.state==LXMF_PACKET_CANCELLED);
     lxmf_packet_node_destroy(n);
+    quarantined[0]=true;
+    uint8_t damaged_copy[680]; memcpy(damaged_copy,out_records[0],sizeof(damaged_copy));
+    out_records[1][3]=RNS_ERROR_QUARANTINED;
+    assert(lxmf_packet_node_create(storage,radio,NULL,NULL,&n)==RNS_OK);
+    assert(lxmf_packet_node_open_outbox(n,storage)==RNS_OK);
+    assert(!lxmf_packet_node_outgoing(n,0,&outgoing));
+    assert(lxmf_packet_node_outgoing(n,1,&outgoing));
+    assert(lxmf_packet_node_cancel(n,outgoing.id)==RNS_OK);
+    lxmf_packet_node_poll(n,0);
+    assert(lxmf_packet_node_release(n,1)==RNS_OK);
+    assert(rns_announce_build(&sender,p.destination_hash,name,prefix,6000,recipient_ratchet,NULL,0,
+        body,sizeof(body),&p.data_length,&p.context_flag));
+    assert(rns_packet_encode(&p,ann,sizeof(ann),&ann_length));
+    assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+    assert(lxmf_packet_node_send(n,m.source,(const uint8_t *)"Yes",3,6000,reply_id)==RNS_OK);
+    assert(lxmf_packet_node_outgoing(n,1,&outgoing) && !lxmf_packet_node_outgoing(n,0,&outgoing));
+    assert(!memcmp(damaged_copy,out_records[0],sizeof(damaged_copy)));
+    lxmf_packet_node_destroy(n); quarantined[0]=false;
     assert(lxmf_packet_node_create(storage,radio,NULL,NULL,&n)==RNS_OK);
     out_records[1][0]=2;
     assert(lxmf_packet_node_open_outbox(n,storage)==RNS_ERROR_PROTOCOL);

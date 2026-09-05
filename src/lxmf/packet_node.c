@@ -32,6 +32,7 @@ struct lxmf_packet_node {
     void *context;
     lxmf_packet_node_stats_t stats;
     rns_storage_t *outbox;
+    bool quarantined_outbox[4];
     struct {
         bool used, dirty;
         lxmf_packet_outgoing view;
@@ -326,9 +327,10 @@ rns_status_t lxmf_packet_node_open_outbox(lxmf_packet_node_t *n,rns_storage_t *s
         char key[8]; size_t length=0; out_key(i,key);
         status=rns_storage_read(storage,key,wire,sizeof(wire),&length);
         if(status==RNS_ERROR_NOT_FOUND) { status=RNS_OK; continue; }
+        if(status==RNS_ERROR_QUARANTINED) { n->quarantined_outbox[i]=true; status=RNS_OK; continue; }
         if(status!=RNS_OK) break;
         if(length!=sizeof(wire) || wire[0]!=1 || wire[1]<1 || wire[1]>6 ||
-            wire[2]>3 || wire[3]>RNS_ERROR_OVERFLOW || !wire[118] || wire[118]>32 ||
+            wire[2]>3 || wire[3]>RNS_ERROR_QUARANTINED || !wire[118] || wire[118]>32 ||
             ((wire[1]==LXMF_PACKET_TRANSMITTING || wire[1]==LXMF_PACKET_AWAITING_PROOF || wire[1]==LXMF_PACKET_DELIVERED) && !wire[2]) ||
             memcmp(wire+660,n->address,16)) { status=RNS_ERROR_PROTOCOL; break; }
         size_t raw_length=(size_t)wire[116]*256U+wire[117];
@@ -357,7 +359,7 @@ rns_status_t lxmf_packet_node_open_outbox(lxmf_packet_node_t *n,rns_storage_t *s
         n->outgoing[i].used=true; n->outgoing[i].dirty=true;
     }
     rns_hal_secure_zero(wire,sizeof(wire));
-    if(status!=RNS_OK) { rns_hal_secure_zero(n->outgoing,sizeof(n->outgoing)); return status; }
+    if(status!=RNS_OK) { rns_hal_secure_zero(n->outgoing,sizeof(n->outgoing)); memset(n->quarantined_outbox,0,sizeof(n->quarantined_outbox)); return status; }
     n->outbox=storage; return RNS_OK;
 }
 bool lxmf_packet_node_peer_info(const lxmf_packet_node_t *n,
@@ -380,7 +382,7 @@ rns_status_t lxmf_packet_node_send(lxmf_packet_node_t *n,const uint8_t destinati
     for(size_t i=0;i<PEERS;++i) if(n->peers[i].used && !memcmp(n->peers[i].address,destination,16)) peer=i;
     if(peer==PEERS || !n->peers[peer].delivery) return RNS_ERROR_NOT_FOUND;
     if(!n->peers[peer].has_ratchet || n->peers[peer].requires_stamp) return RNS_ERROR_UNSUPPORTED;
-    for(size_t i=0;i<4;++i) if(!n->outgoing[i].used) { slot=i; break; }
+    for(size_t i=0;i<4;++i) if(!n->quarantined_outbox[i] && !n->outgoing[i].used) { slot=i; break; }
     if(slot==4) return RNS_ERROR_OVERFLOW;
     lxmf_message_t message={.timestamp=(double)timestamp,.content={text,length}}, parsed;
     memcpy(message.source,n->address,16); memcpy(message.destination,destination,16);
@@ -412,13 +414,16 @@ static void retry_out(lxmf_packet_node_t *n,size_t i,rns_status_t status,uint64_
     n->outgoing[i].dirty=true;
 }
 void lxmf_packet_node_poll(lxmf_packet_node_t *n,uint64_t now) {
+    lxmf_packet_node_poll_ready(n,now,0x0fU);
+}
+void lxmf_packet_node_poll_ready(lxmf_packet_node_t *n,uint64_t now,uint8_t ready_mask) {
     if(!n || !n->outbox) return;
     for(size_t i=0;i<4;++i) {
         if(!n->outgoing[i].used) continue;
         if(n->outgoing[i].dirty && save_out(n,i)!=RNS_OK) continue;
         if(n->outgoing[i].view.state==LXMF_PACKET_AWAITING_PROOF && now>=n->outgoing[i].deadline)
             retry_out(n,i,RNS_ERROR_TIMEOUT,now);
-        if(n->outgoing[i].view.state!=LXMF_PACKET_QUEUED || now<n->outgoing[i].ready) continue;
+        if(!(ready_mask & (1U<<i)) || n->outgoing[i].view.state!=LXMF_PACKET_QUEUED || now<n->outgoing[i].ready) continue;
         ++n->outgoing[i].view.attempts; n->outgoing[i].view.state=LXMF_PACKET_TRANSMITTING;
         n->outgoing[i].dirty=true;
         if(save_out(n,i)!=RNS_OK) {

@@ -9,6 +9,7 @@ struct heltec_chat_store {
     rns_storage_t *storage;
     heltec_chat chats[HELTEC_CHAT_COUNT], scratch;
     uint8_t record[RECORD_SIZE];
+    bool quarantined[HELTEC_CHAT_COUNT];
 };
 static void key_for(size_t slot, char key[8]) { (void)snprintf(key, 8, "chat%u", (unsigned)slot); }
 static rns_status_t save(heltec_chat_store *s, size_t slot, const heltec_chat *c) {
@@ -52,6 +53,7 @@ rns_status_t heltec_chat_store_open(rns_storage_t *storage, heltec_chat_store **
         char key[8]; size_t n = 0; key_for(i, key);
         rns_status_t status = rns_storage_read(storage, key, s->record, sizeof(s->record), &n);
         if (status == RNS_ERROR_NOT_FOUND) continue;
+        if (status == RNS_ERROR_QUARANTINED) { s->quarantined[i]=true; continue; }
         if (status != RNS_OK || n != sizeof(s->record) || !decode(s, &s->chats[i])) {
             heltec_chat_store_close(s); return status == RNS_OK ? RNS_ERROR_PROTOCOL : status;
         }
@@ -83,10 +85,10 @@ rns_status_t heltec_chat_store_add(heltec_chat_store *s, const uint8_t sender[16
     size_t slot = HELTEC_CHAT_COUNT;
     for (size_t i = 0; i < HELTEC_CHAT_COUNT; ++i) if (s->chats[i].used && !memcmp(s->chats[i].sender, sender, 16)) { slot = i; break; }
     if (slot == HELTEC_CHAT_COUNT) {
-        for (size_t i = 0; i < HELTEC_CHAT_COUNT; ++i) if (!s->chats[i].used) { slot = i; break; }
+        for (size_t i = 0; i < HELTEC_CHAT_COUNT; ++i) if (!s->quarantined[i] && !s->chats[i].used) { slot = i; break; }
     }
     if (slot == HELTEC_CHAT_COUNT) {
-        for (size_t i = 0; i < HELTEC_CHAT_COUNT; ++i) if (!pending(&s->chats[i]) &&
+        for (size_t i = 0; i < HELTEC_CHAT_COUNT; ++i) if (!s->quarantined[i] && !pending(&s->chats[i]) &&
             (slot == HELTEC_CHAT_COUNT || s->chats[i].messages[0].timestamp < s->chats[slot].messages[0].timestamp)) slot = i;
     }
     if (slot == HELTEC_CHAT_COUNT) return RNS_ERROR_OVERFLOW;

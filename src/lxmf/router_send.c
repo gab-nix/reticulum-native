@@ -233,6 +233,7 @@ static void propagation_sync_clear(lxmf_router_t *router, bool cancel) {
         slot->session = NULL;
     }
     slot->status.active = false;
+    slot->status.waiting_for_upload = false;
 }
 
 static void propagation_sync_reject(
@@ -458,6 +459,8 @@ static void propagation_fail(lxmf_router_t *router, lxmf_status_t result) {
 static void propagation_poll(lxmf_router_t *router) {
     lxmf_router_propagation_slot_t *slot = &router->propagation;
     if (!slot->used) return;
+    if (slot->storage_retry_at_ms != 0u &&
+        router_monotonic_ms(router) < slot->storage_retry_at_ms) return;
     lxmf_delivery_metadata_t metadata;
     if (lxmf_store_read_delivery(router->config.store, slot->message_id,
                                  &metadata) != LXMF_OK) {
@@ -520,10 +523,26 @@ static void propagation_poll(lxmf_router_t *router) {
         metadata.retry_at_ms = 0u;
         metadata.progress = LXMF_DELIVERY_PROGRESS_COMPLETE;
         metadata.attempts = slot->attempt;
-        (void)lxmf_store_update_delivery(router->config.store,
-                                         slot->message_id, &metadata);
-        (void)lxmf_store_update_status(router->config.store, slot->message_id,
-                                       LXMF_DELIVERY_SENT);
+        lxmf_status_t saved = lxmf_store_update_delivery(router->config.store,
+            slot->message_id, &metadata);
+        if (saved == LXMF_OK)
+            saved = lxmf_store_update_status(router->config.store,
+                slot->message_id, LXMF_DELIVERY_SENT);
+        if (saved != LXMF_OK) {
+            /* Keep the completed session: retry only persistence, not RF or
+             * network upload. No durable-success callback until both writes
+             * succeed. Restart uses the existing interrupted-send recovery. */
+            uint64_t now = router_monotonic_ms(router);
+            slot->storage_retry_at_ms = now > UINT64_MAX - 1000u
+                ? UINT64_MAX : now + 1000u;
+            if (slot->storage_error != saved) {
+                slot->storage_error = saved;
+                report_event(router, slot->message_id,
+                    LXMF_DELIVERY_METHOD_PROPAGATED, LXMF_DELIVERY_SENDING,
+                    LXMF_QUEUE_REASON_STORAGE, saved, slot->attempt);
+            }
+            return;
+        }
         report(router, slot->message_id, LXMF_DELIVERY_SENT, LXMF_OK);
         report_event(router, slot->message_id,
             LXMF_DELIVERY_METHOD_PROPAGATED, LXMF_DELIVERY_SENT,
@@ -545,6 +564,15 @@ static lxmf_status_t propagation_sync_result(
 
 static void propagation_sync_poll(lxmf_router_t *router) {
     lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
+    if (slot->status.active && slot->status.waiting_for_upload) {
+        if (router->propagation.used) return;
+        bool retain = slot->status.retain_on_node;
+        slot->status.active = false;
+        slot->status.waiting_for_upload = false;
+        /* Runs before the outbound queue, so a second upload cannot starve
+         * an already accepted sync. Start reports terminal allocation errors. */
+        (void)lxmf_router_propagation_sync_start(router, retain);
+    }
     if (!slot->status.active || slot->session == NULL) return;
     rns_status_t polled = lxmf_pn_session_poll(
         slot->session, (double)router_monotonic_ms(router) / 1000.0);
@@ -605,6 +633,12 @@ typedef struct {
 static bool recover_interrupted(void *context,
                                 const lxmf_store_message_t *message) {
     recovery_context_t *recovery = context;
+    if (message->delivery.queue_reason == LXMF_QUEUE_REASON_IDENTITY_TIMEOUT &&
+        message->status == LXMF_DELIVERY_QUEUED) {
+        recovery->status = lxmf_store_update_status(recovery->router->config.store,
+            message->message_id, LXMF_DELIVERY_FAILED);
+        return recovery->status == LXMF_OK;
+    }
     if ((message->status == LXMF_DELIVERY_QUEUED || message->status == LXMF_DELIVERY_FAILED) &&
         message->delivery.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY &&
         message->delivery.retry_at_ms != 0u) {
@@ -695,6 +729,8 @@ const char *lxmf_queue_reason_string(lxmf_queue_reason_t reason) {
         case LXMF_QUEUE_REASON_RETRY_BACKOFF: return "retry backoff";
         case LXMF_QUEUE_REASON_RETRY_EXHAUSTED: return "retry exhausted";
         case LXMF_QUEUE_REASON_CANCELLED: return "cancelled";
+        case LXMF_QUEUE_REASON_IDENTITY_TIMEOUT: return "peer identity discovery timed out; retry explicitly";
+        case LXMF_QUEUE_REASON_STORAGE: return "message storage recovery";
         default: return "invalid";
     }
 }
@@ -1492,12 +1528,14 @@ lxmf_status_t lxmf_router_send_message(
             method = LXMF_DELIVERY_METHOD_OPPORTUNISTIC;
     }
     if (stored.delivery.queue_reason == LXMF_QUEUE_REASON_CANCELLED ||
-        stored.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_EXHAUSTED) {
+        stored.delivery.queue_reason == LXMF_QUEUE_REASON_RETRY_EXHAUSTED ||
+        stored.delivery.queue_reason == LXMF_QUEUE_REASON_IDENTITY_TIMEOUT) {
         /* This call is an explicit resend: terminal records are excluded from
          * automatic polling, so begin a fresh bounded attempt budget before
          * method-specific availability checks alter the actionable reason. */
         stored.delivery.attempts = 0U;
         stored.delivery.retry_at_ms = 0U;
+        stored.delivery.identity_deadline = 0U;
     }
     if (method == LXMF_DELIVERY_METHOD_PROPAGATED) {
         if (router->propagation.used || router->propagation_sync.status.active) {
@@ -1531,6 +1569,32 @@ lxmf_status_t lxmf_router_send_message(
      * freshly verified announce can immediately unblock this message. */
     if (destination == NULL) {
         uint64_t now = router_monotonic_ms(router);
+        uint64_t wall = 0u;
+        if (router->config.wall_clock != NULL)
+            wall = router->config.wall_clock(router->config.wall_clock_context);
+        else {
+            uint64_t milliseconds;
+            if (rns_hal_wallclock_ms(&milliseconds) != RNS_OK) return LXMF_ERR_CRYPTO;
+            wall = milliseconds / 1000u;
+        }
+        if (stored.delivery.identity_deadline == 0u) {
+            uint64_t timeout = router->config.identity_discovery_timeout_seconds != 0u
+                ? router->config.identity_discovery_timeout_seconds : 300u;
+            if (wall > UINT64_MAX - timeout) return LXMF_ERR_BOUNDS;
+            stored.delivery.identity_deadline = wall + timeout;
+            if (lxmf_store_update_delivery(router->config.store, id, &stored.delivery) != LXMF_OK)
+                return LXMF_ERR_CRYPTO;
+        } else if (wall >= stored.delivery.identity_deadline) {
+            stored.delivery.queue_reason = LXMF_QUEUE_REASON_IDENTITY_TIMEOUT;
+            stored.delivery.retry_at_ms = 0u;
+            if (lxmf_store_update_delivery(router->config.store, id, &stored.delivery) != LXMF_OK ||
+                lxmf_store_update_status(router->config.store, id, LXMF_DELIVERY_FAILED) != LXMF_OK)
+                return LXMF_ERR_CRYPTO;
+            report(router, id, LXMF_DELIVERY_FAILED, LXMF_ERR_TIMEOUT);
+            report_event(router, id, method, LXMF_DELIVERY_FAILED,
+                LXMF_QUEUE_REASON_IDENTITY_TIMEOUT, LXMF_ERR_TIMEOUT, stored.delivery.attempts);
+            return LXMF_ERR_TIMEOUT;
+        }
         if (stored.delivery.queue_reason == LXMF_QUEUE_REASON_PEER_IDENTITY &&
             stored.delivery.retry_at_ms > now) return LXMF_ERR_PENDING;
         if (router->config.runtime != NULL)
@@ -1550,6 +1614,7 @@ lxmf_status_t lxmf_router_send_message(
     stored.delivery.actual_method = LXMF_DELIVERY_METHOD_UNKNOWN;
     stored.delivery.queue_reason = LXMF_QUEUE_REASON_NONE;
     stored.delivery.retry_at_ms = 0u;
+    stored.delivery.identity_deadline = 0u;
     stored.delivery.progress = 0u;
     stored.delivery.has_proof_id = false;
     memset(stored.delivery.proof_id, 0, sizeof stored.delivery.proof_id);
@@ -1803,6 +1868,7 @@ static bool collect_pending(void *context, const lxmf_store_message_t *message) 
     pending_messages_t *pending = context;
     if (message->delivery.queue_reason != LXMF_QUEUE_REASON_CANCELLED &&
         message->delivery.queue_reason != LXMF_QUEUE_REASON_RETRY_EXHAUSTED &&
+        message->delivery.queue_reason != LXMF_QUEUE_REASON_IDENTITY_TIMEOUT &&
         (message->status == LXMF_DELIVERY_QUEUED ||
          message->status == LXMF_DELIVERY_FAILED) && pending->count < LXMF_STORE_MAX_MESSAGES)
         memcpy(pending->ids[pending->count++], message->message_id,
@@ -1903,7 +1969,7 @@ lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,
         router->config.propagation_node_identity == NULL)
         return LXMF_ERR_ARGUMENT;
     lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
-    if (slot->status.active || router->propagation.used)
+    if (slot->status.active)
         return LXMF_ERR_PENDING;
     if (slot->session != NULL) propagation_sync_clear(router, false);
     memset(slot, 0, sizeof *slot);
@@ -1913,6 +1979,11 @@ lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,
     slot->status.result = LXMF_ERR_PENDING;
     slot->status.transport_error = RNS_OK;
     slot->status.retain_on_node = retain_on_node;
+    if (router->propagation.used) {
+        slot->status.active = true;
+        slot->status.waiting_for_upload = true;
+        return LXMF_OK;
+    }
     lxmf_pn_session_options_t options = {
         .runtime = router->config.runtime,
         .local_identity = router->config.identity,
@@ -1952,7 +2023,14 @@ lxmf_status_t lxmf_router_propagation_sync_start(lxmf_router_t *router,
 lxmf_status_t lxmf_router_propagation_sync_cancel(lxmf_router_t *router) {
     if (router == NULL) return LXMF_ERR_ARGUMENT;
     lxmf_router_propagation_sync_slot_t *slot = &router->propagation_sync;
-    if (!slot->status.active || slot->session == NULL) return LXMF_ERR_FORMAT;
+    if (!slot->status.active) return LXMF_ERR_FORMAT;
+    if (slot->status.waiting_for_upload) {
+        slot->status.state = LXMF_PN_CANCELLED;
+        slot->status.result = LXMF_ERR_CANCELLED;
+        propagation_sync_clear(router, false);
+        return LXMF_OK;
+    }
+    if (slot->session == NULL) return LXMF_ERR_FORMAT;
     lxmf_pn_session_cancel(slot->session);
     const lxmf_pn_session_progress_t *progress =
         lxmf_pn_session_progress(slot->session);
