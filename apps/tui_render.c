@@ -438,6 +438,10 @@ static void config_interface_line(const rns_config_interface_t *interface,
                                   char *line, size_t capacity) {
     const char *state = interface->enabled ? "enabled" : "disabled";
     switch (interface->type) {
+        case RNS_CONFIG_PROVIDER:
+            (void)snprintf(line, capacity, "%s  Runtime provider  %s",
+                           interface->name, state);
+            break;
         case RNS_CONFIG_TCP_CLIENT:
             (void)snprintf(line, capacity, "%s  TCP client  %s  %s:%u",
                            interface->name, state, interface->target_host,

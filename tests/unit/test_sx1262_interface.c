@@ -338,6 +338,10 @@ static void test_one_and_two_frame_success(void) {
     assert(phy.tx_count == 1U && phy.transmitted_lengths[0] == 11U);
     push_control(&phy, RNS_SX1262_PHY_EVENT_TX_DONE,
                  phy.transmitted_tokens[0], RNS_OK);
+    clock.now_ms += 60000U; /* Completion already queued before delayed poll. */
+    assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
+                                     0U) == RNS_OK);
+    assert(phy.event_count == 1U && results.count == 0U);
     assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
                                      1U) == RNS_OK);
     assert(results.count == 1U && results.ids[0] == id1 &&
@@ -851,6 +855,9 @@ static void test_rx_stream_does_not_starve_tx(void) {
     }
     assert(rns_sx1262_interface_send(interface_value, packet, sizeof(packet),
                                      &id) == RNS_OK);
+    assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
+                                     0U) == RNS_OK);
+    assert(phy.event_count == 4U && receive.count == 0U);
     assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,
                                      1U) == RNS_OK);
     assert(rns_sx1262_interface_poll(interface_value, capture_receive, &receive,

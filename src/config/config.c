@@ -163,6 +163,7 @@ const char *rns_config_interface_type_name(rns_config_interface_type_t type) {
         case RNS_CONFIG_AUTO: return "AutoInterface";
         case RNS_CONFIG_KISS: return "KISSInterface";
         case RNS_CONFIG_RNODE: return "RNodeInterface";
+        case RNS_CONFIG_PROVIDER: return "RuntimeProvider";
         default: return NULL;
     }
 }
