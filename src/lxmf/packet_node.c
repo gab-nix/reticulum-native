@@ -26,6 +26,8 @@ struct lxmf_packet_node {
     struct { bool used; uint8_t raw[RNS_MTU], source[16], id[32]; size_t length; uint64_t received_ms; } pending[PENDING];
     uint8_t plain[RNS_MTU], raw[RNS_MTU], body[RNS_MTU];
     lxmf_packet_message_fn callback;
+    lxmf_packet_accept_fn accept;
+    void *accept_context;
     void *context;
     lxmf_packet_node_stats_t stats;
 };
@@ -77,6 +79,9 @@ void lxmf_packet_node_destroy(lxmf_packet_node_t *n) {
     if (n) { rns_hal_secure_zero(n, sizeof(*n)); free(n); }
 }
 const uint8_t *lxmf_packet_node_address(const lxmf_packet_node_t *n) { return n ? n->address : NULL; }
+void lxmf_packet_node_set_accept(lxmf_packet_node_t *n, lxmf_packet_accept_fn accept, void *context) {
+    if (n) { n->accept = accept; n->accept_context = context; }
+}
 rns_status_t lxmf_packet_node_announce(lxmf_packet_node_t *n, uint64_t timestamp) {
     if (!n || timestamp > RNS_ANNOUNCE_MAX_TIMESTAMP) return RNS_ERROR_INVALID_ARGUMENT;
     if (n->last_announce == RNS_ANNOUNCE_MAX_TIMESTAMP) return RNS_ERROR_OVERFLOW;
@@ -170,6 +175,11 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
                 if (n->pending[i].used && !memcmp(n->pending[i].id, message.message_id, 32)) duplicate_pending = true;
                 if (!n->pending[i].used && slot == PENDING) slot = i;
             }
+            if (!duplicate_pending && n->accept)
+                (void)n->accept(n->accept_context, &message, LXMF_SIGNATURE_UNVERIFIED, raw, length);
+            /* The bounded ciphertext cache remains available even when an
+             * application cannot yet archive unknown senders. No proof is
+             * issued, and later verified acceptance still requires saving. */
             if (clock_ok && !duplicate_pending && slot != PENDING && length <= RNS_MTU) {
                 memcpy(n->pending[slot].raw, raw, length);
                 memcpy(n->pending[slot].source, message.source, 16);
@@ -186,6 +196,13 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
         if (n->replay_used[i] && !memcmp(n->replay[i], message.message_id, 32)) duplicate = true;
     if (duplicate) ++n->stats.duplicates;
     else {
+        if (n->accept) {
+            rns_status_t accepted = n->accept(n->accept_context, &message, LXMF_SIGNATURE_VERIFIED, raw, length);
+            if (accepted != RNS_OK) {
+                rns_hal_secure_zero(n->plain, sizeof(n->plain));
+                return accepted;
+            }
+        }
         memcpy(n->replay[n->next_replay], message.message_id, 32);
         n->replay_used[n->next_replay] = true; n->next_replay = (n->next_replay + 1) % REPLAYS;
         ++n->stats.messages;
@@ -210,4 +227,43 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
 }
 void lxmf_packet_node_stats(const lxmf_packet_node_t *n, lxmf_packet_node_stats_t *stats) {
     if (n && stats) *stats = n->stats;
+}
+typedef struct {
+    lxmf_identity_verifier_context_t verifier;
+    lxmf_status_t status;
+} archive_verifier_context;
+void lxmf_packet_node_forget_pending(lxmf_packet_node_t *n, const uint8_t id[32]) {
+    if(!n || !id) return;
+    for(size_t i=0;i<PENDING;++i) if(n->pending[i].used && !memcmp(n->pending[i].id,id,32)) {
+        rns_hal_secure_zero(&n->pending[i],sizeof(n->pending[i]));
+        --n->stats.pending_senders;
+    }
+}
+static lxmf_status_t archive_verify(void *context, const uint8_t source[16],
+    const uint8_t *data, size_t length, const uint8_t signature[64]) {
+    archive_verifier_context *v = context;
+    v->status = lxmf_identity_verifier(&v->verifier, source, data, length, signature);
+    /* Preserve verification separately while obtaining a fully parsed result. */
+    return v->status == LXMF_ERR_SIGNATURE || v->status == LXMF_ERR_UNKNOWN_SIGNER ? LXMF_OK : v->status;
+}
+rns_status_t lxmf_packet_node_check_archive(lxmf_packet_node_t *n,
+    const uint8_t *raw, size_t length, const uint8_t source[16],
+    const uint8_t id[32], lxmf_signature_state_t *signature) {
+    if (!n || !raw || !length || length > RNS_MTU || !source || !id || !signature)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    if (raw[0] & 0x80U) return RNS_ERROR_PROTOCOL;
+    archive_verifier_context verifier = {{resolve, n}, LXMF_ERR_ARGUMENT};
+    lxmf_message_t message; size_t plain_length = 0;
+    lxmf_status_t status = lxmf_opportunistic_packet_unpack_ratchets(raw, length,
+        &n->identity, n->ratchet_private, 1, 0, archive_verify, &verifier,
+        n->plain, sizeof(n->plain), &plain_length, &message, NULL, NULL);
+    rns_status_t result = RNS_ERROR_PROTOCOL;
+    if (status == LXMF_OK &&
+        !memcmp(source, message.source, 16) && !memcmp(id, message.message_id, 32)) {
+        *signature = verifier.status == LXMF_OK ? LXMF_SIGNATURE_VERIFIED :
+            verifier.status == LXMF_ERR_UNKNOWN_SIGNER ? LXMF_SIGNATURE_UNVERIFIED : LXMF_SIGNATURE_FAILED;
+        result = RNS_OK;
+    }
+    rns_hal_secure_zero(n->plain, sizeof(n->plain));
+    return result;
 }

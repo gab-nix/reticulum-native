@@ -11,6 +11,15 @@
 static uint8_t record[105], sent[500];
 static size_t record_length, sent_length;
 static unsigned messages;
+static unsigned unverified_events, verified_events;
+static bool reject_save;
+static rns_status_t accept_message(void *context, const lxmf_message_t *m,
+    lxmf_signature_state_t signature, const uint8_t *raw, size_t length) {
+    (void)context; assert(raw && length && m->content.len == 5);
+    if (signature == LXMF_SIGNATURE_UNVERIFIED) ++unverified_events;
+    else { assert(signature == LXMF_SIGNATURE_VERIFIED); ++verified_events; }
+    return reject_save ? RNS_ERROR_IO : RNS_OK;
+}
 static uint64_t now_ms;
 static rns_status_t test_clock(void *context, uint64_t *now) { (void)context; *now = now_ms; return RNS_OK; }
 static rns_status_t write_status = RNS_OK;
@@ -37,6 +46,12 @@ static rns_status_t stats(void *c, rns_interface_stats_t *s) {
 }
 static void message(void *c, const lxmf_message_t *m) {
     (void)c; assert(m->content.len == 5 && !memcmp(m->content.data, "hello", 5)); ++messages;
+}
+static void set_message_id(lxmf_message_t *m,rns_identity *sender) {
+    uint8_t packed[500]; size_t length; lxmf_message_t parsed;
+    assert(lxmf_pack(m,lxmf_identity_signer,sender,packed,sizeof(packed),&length)==LXMF_OK);
+    assert(lxmf_unpack(packed,length,NULL,NULL,&parsed)==LXMF_OK);
+    memcpy(m->message_id,parsed.message_id,32);
 }
 int main(void) {
     rns_platform_ops_t platform = *rns_platform_current();
@@ -82,6 +97,10 @@ int main(void) {
     lxmf_packet_node_stats_t info; lxmf_packet_node_stats(n, &info);
     assert(info.unknown_senders == 1 && info.proofs_queued == 0);
     assert(info.pending_senders == 1);
+    lxmf_signature_state_t signature = LXMF_SIGNATURE_FAILED;
+    set_message_id(&m,&sender);
+    assert(lxmf_packet_node_check_archive(n, wire, wire_length, m.source, m.message_id, &signature) == RNS_OK);
+    assert(signature == LXMF_SIGNATURE_UNVERIFIED);
     uint8_t body[465], name[10], prefix[5] = {0}, ann[500]; size_t ann_length;
     rns_packet p = {.packet_type = 1, .data = body};
     const char *node_aspects[] = {"node"};
@@ -150,6 +169,50 @@ int main(void) {
     assert(lxmf_packet_node_receive(n, NULL, 0) == RNS_ERROR_PROTOCOL);
     lxmf_packet_node_stats(n, &info);
     assert(info.pending_senders == 0 && info.expired_pending == 4);
+    lxmf_packet_node_destroy(n);
+    assert(lxmf_packet_node_create(storage, radio, NULL, NULL, &n) == RNS_OK);
+    lxmf_packet_node_set_accept(n, accept_message, NULL);
+    reject_save = true;
+    assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK);
+    assert(unverified_events == 1 && verified_events == 0);
+    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 0 && info.pending_senders == 1);
+    p.packet_type = 1; p.context = 0;
+    assert(rns_destination_hash(&sender, "nomadnetwork", node_aspects, 1, p.destination_hash));
+    assert(rns_announce_build(&sender, p.destination_hash, name, prefix, 3000, NULL, NULL, 0,
+        body, sizeof(body), &p.data_length, &p.context_flag));
+    assert(rns_packet_encode(&p, ann, sizeof(ann), &ann_length));
+    reject_save = true;
+    assert(lxmf_packet_node_receive(n, ann, ann_length) == RNS_OK);
+    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 0 && info.messages == 0);
+    reject_save = false;
+    assert(lxmf_packet_node_receive(n, wire, wire_length) == RNS_OK);
+    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 1 && info.messages == 1);
+    assert(verified_events == 2);
+    set_message_id(&m,&sender);
+    assert(lxmf_packet_node_check_archive(n, wire, wire_length, m.source, m.message_id, &signature) == RNS_OK);
+    assert(signature == LXMF_SIGNATURE_VERIFIED);
+    uint8_t wrong_id[32] = {0};
+    assert(lxmf_packet_node_check_archive(n, wire, wire_length, m.source, wrong_id, &signature) == RNS_ERROR_PROTOCOL);
+    assert(signature == LXMF_SIGNATURE_VERIFIED);
+    lxmf_packet_node_stats(n, &info); assert(info.proofs_queued == 1 && info.messages == 1);
+    uint8_t forged[500], encrypted[500], bad_packet[500]; size_t forged_len, encrypted_len, bad_len;
+    assert(lxmf_pack(&m,lxmf_identity_signer,&sender,forged,sizeof(forged),&forged_len)==LXMF_OK);
+    forged[32]^=1; /* Well-formed, decryptable message with an invalid signature. */
+    assert(rns_identity_encrypt(&local,ratchet,forged+16,forged_len-16,encrypted,sizeof(encrypted),&encrypted_len));
+    rns_packet bad={.data=encrypted,.data_length=encrypted_len};
+    memcpy(bad.destination_hash,address,16);
+    assert(rns_packet_encode(&bad,bad_packet,sizeof(bad_packet),&bad_len));
+    assert(lxmf_packet_node_check_archive(n,bad_packet,bad_len,m.source,m.message_id,&signature)==RNS_OK);
+    assert(signature==LXMF_SIGNATURE_FAILED);
+    lxmf_packet_node_stats(n,&info); assert(info.proofs_queued==1 && info.messages==1);
+    lxmf_packet_node_destroy(n);
+    assert(lxmf_packet_node_create(storage,radio,NULL,NULL,&n)==RNS_OK);
+    assert(lxmf_packet_node_receive(n,wire,wire_length)==RNS_OK);
+    lxmf_packet_node_stats(n,&info); assert(info.pending_senders==1);
+    lxmf_packet_node_forget_pending(n,m.message_id);
+    lxmf_packet_node_stats(n,&info); assert(info.pending_senders==0);
+    assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+    lxmf_packet_node_stats(n,&info); assert(info.messages==0 && info.proofs_queued==0);
     lxmf_packet_node_destroy(n);
     record[0] = 2;
     assert(lxmf_packet_node_create(storage, radio, message, NULL, &n) == RNS_ERROR_PROTOCOL && n == NULL);

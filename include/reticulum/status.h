@@ -15,7 +15,8 @@ typedef enum rns_status {
     RNS_ERROR_NOT_FOUND,
     RNS_ERROR_INVALID_STATE,
     RNS_ERROR_UNSUPPORTED,
-    RNS_ERROR_OVERFLOW
+    RNS_ERROR_OVERFLOW,
+    RNS_ERROR_QUARANTINED
 } rns_status_t;
 
 const char *rns_status_string(rns_status_t status);
