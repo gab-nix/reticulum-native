@@ -420,11 +420,12 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
     if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_LIVE) {
         for (size_t i = 0; i < 8U; ++i) draw_compact_line(oled->frame, i, oled->model.lines[i]);
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MENU) {
-        static const char *items[] = {"STATUS", "MESSAGES", "ANNOUNCE", "CLEAR MSG", "NODES"};
+        static const char *items[] = {"HOME", "MESSAGES", "ANNOUNCE", "CLEAR MSG", "NODES", "CHANNEL"};
         draw_compact_line(oled->frame, 0U, "MENU");
+        size_t first = !strcmp(oled->model.menu_label, "CHANNEL") ? 1U : 0U;
         for (size_t i = 0; i < 5U; ++i) {
-            draw_compact_line(oled->frame, i+2U, items[i]);
-            if (!strcmp(items[i], oled->model.menu_label))
+            draw_compact_line(oled->frame, i+2U, items[first+i]);
+            if (!strcmp(items[first+i], oled->model.menu_label))
                 for (size_t x = 0; x < 126U; ++x) oled->frame[(i+2U)*128U+x] ^= 0x7fU;
         }
         draw_compact_line(oled->frame, 7U, "TAP NEXT  HOLD OPEN");

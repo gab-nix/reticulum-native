@@ -110,6 +110,8 @@ typedef struct rns_sx1262_scheduler_stats {
     uint64_t frames_sent;
     uint64_t tx_bytes;
     uint64_t rx_frames;
+    bool signal_valid;
+    int16_t last_rssi_dbm, last_snr_db;
     uint64_t rx_packets;
     uint64_t rx_bytes;
     uint64_t rx_malformed;

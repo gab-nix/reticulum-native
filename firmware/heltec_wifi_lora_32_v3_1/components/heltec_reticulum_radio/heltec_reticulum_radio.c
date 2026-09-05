@@ -305,6 +305,15 @@ static rns_status_t interface_get_stats(void *context,
         return status;
     }
     stats->effective_mtu = RNS_RADIO_PACKET_MTU;
+    stats->radio_telemetry_valid = 1;
+    stats->radio_signal_valid = scheduler_stats.signal_valid;
+    stats->radio_last_rssi_dbm = scheduler_stats.last_rssi_dbm;
+    stats->radio_last_snr_db = scheduler_stats.last_snr_db;
+    stats->radio_rx_frames = scheduler_stats.rx_frames;
+    stats->radio_tx_frames = scheduler_stats.frames_sent;
+    stats->radio_cad_busy = scheduler_stats.cad_busy;
+    stats->radio_airtime_us = scheduler_stats.rolling_airtime_us;
+    stats->radio_duty_deferrals = scheduler_stats.duty_deferrals;
     stats->bytes_received = scheduler_stats.rx_bytes;
     stats->bytes_sent = scheduler_stats.tx_bytes;
     stats->rx_overflows = scheduler_stats.rx_overflows;

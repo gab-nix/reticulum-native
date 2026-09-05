@@ -12,7 +12,7 @@ int main(void) {
     heltec_button_menu m = {0};
     assert(press(&m, 0, 1000) == HELTEC_MENU_NONE && !m.open);
     assert(press(&m, 2000, 100) == HELTEC_MENU_NONE && m.open);
-    assert(!strcmp(heltec_button_menu_label(&m), "STATUS"));
+    assert(!strcmp(heltec_button_menu_label(&m), "HOME"));
     assert(press(&m, 3000, 100) == HELTEC_MENU_NONE && m.selected == 1);
     assert(press(&m, 4000, 800) == HELTEC_MENU_MESSAGE && !m.open);
     assert(press(&m, 5000, 100) == HELTEC_MENU_NONE);
@@ -28,8 +28,8 @@ int main(void) {
     m.open = true; m.selected = 1;
     assert(heltec_button_menu_poll(&m, true, 72000) == HELTEC_MENU_NONE);
     assert(heltec_button_menu_poll(&m, true, 72050) == HELTEC_MENU_NONE);
-    assert(heltec_button_menu_poll(&m, true, 72749) == HELTEC_MENU_NONE);
-    assert(heltec_button_menu_poll(&m, true, 72750) == HELTEC_MENU_MESSAGE);
+    assert(heltec_button_menu_poll(&m, true, 72549) == HELTEC_MENU_NONE);
+    assert(heltec_button_menu_poll(&m, true, 72550) == HELTEC_MENU_MESSAGE);
     assert(!m.open);
     assert(heltec_button_menu_poll(&m, true, 74000) == HELTEC_MENU_NONE);
     assert(heltec_button_menu_poll(&m, false, 74100) == HELTEC_MENU_NONE);
@@ -44,5 +44,10 @@ int main(void) {
     assert(heltec_button_menu_poll(&m, false, 77050) == HELTEC_MENU_NONE && m.selected == 0);
     m.selected = 4;
     assert(press(&m, 78000, 800) == HELTEC_MENU_NODES);
+    m.open = true; m.selected = 5;
+    assert(!strcmp(heltec_button_menu_label(&m), "CHANNEL"));
+    assert(press(&m, 80000, 800) == HELTEC_MENU_CHANNEL);
+    m.open = true; m.selected = 5;
+    assert(press(&m, 82000, 100) == HELTEC_MENU_NONE && m.selected == 0);
     return 0;
 }
