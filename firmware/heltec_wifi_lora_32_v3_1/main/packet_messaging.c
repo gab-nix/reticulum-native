@@ -70,8 +70,18 @@ static rns_status_t quick_reply(void *context,const uint8_t sender[16],const cha
             timestamp=out.timestamp+1U;
         }
     }
-    return lxmf_packet_node_send(node,sender,(const uint8_t *)text,strlen(text),
-        timestamp,id);
+    rns_status_t result=lxmf_packet_node_send(node,sender,(const uint8_t *)text,strlen(text),timestamp,id);
+    lxmf_packet_peer_info peer={0};
+    bool found=lxmf_packet_node_peer_info(node,sender,&peer);
+    if(result==RNS_ERROR_UNSUPPORTED) {
+        if(!found || !peer.delivery) (void)snprintf(chats_ui.reply_error,22,"NEED PEER ANNOUNCE");
+        else if(!peer.metadata_valid) (void)snprintf(chats_ui.reply_error,22,"ANNOUNCE FORMAT ERROR");
+        else if(peer.stamp_cost) (void)snprintf(chats_ui.reply_error,22,"STAMP COST %u UNSUPP",(unsigned)peer.stamp_cost);
+        else if(!peer.has_ratchet) (void)snprintf(chats_ui.reply_error,22,"NEED RATCHET ANNOUNCE");
+    }
+    ESP_LOGI(TAG,"Quick reply status=%d peer=%d delivery=%d ratchet=%d metadata=%d stamp_cost=%u",
+        (int)result,found,peer.delivery,peer.has_ratchet,peer.metadata_valid,(unsigned)peer.stamp_cost);
+    return result;
 }
 static rns_status_t cancel_reply(void *context,const uint8_t id[32]) {
     (void)context; return lxmf_packet_node_cancel(node,id);
@@ -213,7 +223,9 @@ static rns_status_t received(void *context, const uint8_t *packet, size_t length
     (void)context;
     heltec_radio_discovery_packet(&discovery, packet, length, clock_ms(NULL));
     /* Malformed or unsupported packets must not stop the radio poll loop. */
-    (void)lxmf_packet_node_receive(node, packet, length);
+    rns_status_t received_status=lxmf_packet_node_receive(node, packet, length);
+    if(received_status!=RNS_OK)
+        ESP_LOGW(TAG,"Packet acceptance status=%d chat_storage=%d",(int)received_status,(int)chat_status);
     return RNS_OK;
 }
 void heltec_packet_messaging_run(rns_storage_t *storage) {

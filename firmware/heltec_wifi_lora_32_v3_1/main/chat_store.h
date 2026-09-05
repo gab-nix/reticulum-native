@@ -24,6 +24,9 @@ typedef struct heltec_chat_store heltec_chat_store;
 rns_status_t heltec_chat_store_open(rns_storage_t *storage, heltec_chat_store **out);
 void heltec_chat_store_close(heltec_chat_store *store);
 const heltec_chat *heltec_chat_store_get(const heltec_chat_store *store, size_t slot);
+/* Full verified chats may rotate completed records, never pending sends.
+ * Archived records consume the same quota and are not evicted by this store. */
+bool heltec_chat_can_rotate(const heltec_chat *chat, size_t combined_count, bool verified);
 rns_status_t heltec_chat_store_add(heltec_chat_store *store, const uint8_t sender[16],
                                   const heltec_chat_message *message);
 rns_status_t heltec_chat_store_delete(heltec_chat_store *store, size_t slot);

@@ -304,6 +304,22 @@ int main(void) {
     assert(rns_packet_encode(&p,ann,sizeof(ann),&ann_length));
     assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
     assert(lxmf_packet_node_send(n,m.source,(const uint8_t *)"Yes",3,5000,reply_id)==RNS_ERROR_UNSUPPORTED);
+    lxmf_packet_peer_info peer_info;
+    assert(lxmf_packet_node_peer_info(n,m.source,&peer_info));
+    assert(peer_info.delivery && peer_info.has_ratchet && peer_info.metadata_valid && peer_info.stamp_cost==5);
+    const uint8_t invalid_metadata[]={0x91};
+    assert(rns_announce_build(&sender,p.destination_hash,name,prefix,5000,recipient_ratchet,invalid_metadata,sizeof(invalid_metadata),
+        body,sizeof(body),&p.data_length,&p.context_flag));
+    assert(rns_packet_encode(&p,ann,sizeof(ann),&ann_length));
+    assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+    assert(lxmf_packet_node_peer_info(n,m.source,&peer_info) && !peer_info.metadata_valid && !peer_info.stamp_cost);
+    assert(lxmf_packet_node_send(n,m.source,(const uint8_t *)"Yes",3,5000,reply_id)==RNS_ERROR_UNSUPPORTED);
+    assert(rns_announce_build(&sender,p.destination_hash,name,prefix,5000,NULL,NULL,0,
+        body,sizeof(body),&p.data_length,&p.context_flag));
+    assert(rns_packet_encode(&p,ann,sizeof(ann),&ann_length));
+    assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+    assert(lxmf_packet_node_peer_info(n,m.source,&peer_info) && peer_info.metadata_valid && !peer_info.has_ratchet);
+    assert(lxmf_packet_node_send(n,m.source,(const uint8_t *)"Yes",3,5000,reply_id)==RNS_ERROR_UNSUPPORTED);
     assert(rns_announce_build(&sender,p.destination_hash,name,prefix,5001,recipient_ratchet,NULL,0,
         body,sizeof(body),&p.data_length,&p.context_flag));
     assert(rns_packet_encode(&p,ann,sizeof(ann),&ann_length));

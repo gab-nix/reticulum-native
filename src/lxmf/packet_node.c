@@ -19,7 +19,7 @@ struct lxmf_packet_node {
     rns_interface_t *interface_value;
     rns_identity identity;
     uint8_t ratchet_private[32], ratchet_public[32], address[16], name_hash[10];
-    struct { bool used, delivery, has_ratchet, requires_stamp; uint8_t address[16], ratchet[32]; rns_identity identity; uint64_t timestamp, delivery_timestamp; } peers[PEERS];
+    struct { bool used, delivery, has_ratchet, requires_stamp, metadata_valid; uint8_t stamp_cost, address[16], ratchet[32]; rns_identity identity; uint64_t timestamp, delivery_timestamp; } peers[PEERS];
     size_t next_peer, next_replay;
     uint64_t last_announce;
     uint8_t replay[REPLAYS][32];
@@ -145,9 +145,10 @@ static void learn(lxmf_packet_node_t *n, const rns_packet *p) {
         n->peers[slot].delivery_timestamp=a.timestamp;
         n->peers[slot].has_ratchet=a.has_ratchet;
         if(a.has_ratchet) memcpy(n->peers[slot].ratchet,a.ratchet,32);
-        n->peers[slot].requires_stamp=a.app_data_length &&
-            (lxmf_announce_parse(a.app_data,a.app_data_length,&data)!=LXMF_OK ||
-             (data.has_stamp_cost && data.stamp_cost));
+        n->peers[slot].metadata_valid=!a.app_data_length ||
+            lxmf_announce_parse(a.app_data,a.app_data_length,&data)==LXMF_OK;
+        n->peers[slot].stamp_cost=n->peers[slot].metadata_valid && data.has_stamp_cost ? data.stamp_cost : 0;
+        n->peers[slot].requires_stamp=!n->peers[slot].metadata_valid || n->peers[slot].stamp_cost;
     }
     ++n->stats.learned_announces;
     for (size_t i = 0; i < PENDING; ++i) {
@@ -360,6 +361,17 @@ rns_status_t lxmf_packet_node_open_outbox(lxmf_packet_node_t *n,rns_storage_t *s
     rns_hal_secure_zero(wire,sizeof(wire));
     if(status!=RNS_OK) { rns_hal_secure_zero(n->outgoing,sizeof(n->outgoing)); memset(n->quarantined_outbox,0,sizeof(n->quarantined_outbox)); return status; }
     n->outbox=storage; return RNS_OK;
+}
+bool lxmf_packet_node_peer_info(const lxmf_packet_node_t *n,
+    const uint8_t destination[16], lxmf_packet_peer_info *info) {
+    if (!n || !destination || !info) return false;
+    memset(info,0,sizeof(*info));
+    for (size_t i=0;i<PEERS;++i) if(n->peers[i].used && !memcmp(n->peers[i].address,destination,16)) {
+        info->delivery=n->peers[i].delivery; info->has_ratchet=n->peers[i].has_ratchet;
+        info->metadata_valid=n->peers[i].metadata_valid; info->stamp_cost=n->peers[i].stamp_cost;
+        return true;
+    }
+    return false;
 }
 rns_status_t lxmf_packet_node_send(lxmf_packet_node_t *n,const uint8_t destination[16],
     const uint8_t *text,size_t length,uint64_t timestamp,uint8_t id[32]) {
