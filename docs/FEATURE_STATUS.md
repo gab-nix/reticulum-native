@@ -180,3 +180,4 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Heltec V3.1 SX1262, OLED and UART shell firmware integration | WIP | Receive-only verified discovery and OLED diagnostics are connected; attach the full Reticulum runtime and UART shell application handlers, then validate on physical hardware |
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |
+| Large-message integration watchdog | IMPLEMENTED | Multi-segment direct-delivery test permits up to 60 seconds on instrumented runners rather than ten. Monotonic progress, partial progress, receipt-confirmed delivery and exact received content assertions remain required; protocol deadlines are unchanged. This is test infrastructure, not new interoperability evidence |
