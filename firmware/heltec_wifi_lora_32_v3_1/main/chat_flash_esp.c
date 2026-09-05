@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "chat_journal.h"
 #include "esp_partition.h"
+#include "esp_log.h"
 #include <stdlib.h>
 static size_t quarantined_records;
 size_t heltec_chat_flash_quarantined(void) { return quarantined_records; }
@@ -28,9 +29,15 @@ rns_status_t heltec_chat_flash_open(rns_storage_t **out) {
     for(size_t offset=HELTEC_CHAT_JOURNAL_BYTES;offset<p->size;offset+=4096U) {
         size_t n=p->size-offset<4096U?p->size-offset:4096U;
         if(esp_partition_read(p,offset,buffer,n)!=ESP_OK) { free(buffer); return RNS_ERROR_IO; }
-        for(size_t i=0;i<n;++i) if(buffer[i]!=255U) { free(buffer); return RNS_ERROR_PROTOCOL; }
+        for(size_t i=0;i<n;++i) if(buffer[i]!=255U) {
+            ESP_LOGE("chat_storage", "Reserved partition contains data outside journal; refusing to format");
+            free(buffer); return RNS_ERROR_PROTOCOL;
+        }
     }
     free(buffer);
     heltec_chat_flash_ops ops={.context=(void *)p,.read=rd,.erase=erase,.write=wr};
-    return heltec_chat_journal_open_report(&ops,out,&quarantined_records);
+    rns_status_t status = heltec_chat_journal_open_report(&ops,out,&quarantined_records);
+    if (status != RNS_OK)
+        ESP_LOGE("chat_storage", "Journal validation failed: %d; no erase performed", (int)status);
+    return status;
 }
