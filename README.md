@@ -131,6 +131,10 @@ ctest --test-dir build -L interop --output-on-failure
 ```
 
 These tests require loopback socket access and may take several minutes each.
+The discovery tests exercise both directions against stock pinned Reticulum,
+including recovery after a missed startup announcement. A registered C service
+answers path requests only after its application explicitly announces it;
+unregistering the service removes its retained announcement identity and data.
 They cover direct and propagated LXMF over UDP/TCP, small and resource-backed
 pages served by the pinned NomadNet page handler, Python requests to C-hosted
 pages/forms and restricted pages, plus an RRC schema fixture

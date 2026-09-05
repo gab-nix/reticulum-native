@@ -179,7 +179,8 @@ static int handle_path_request(rns_node *node, const rns_packet *packet,
         drop(result, RNS_NODE_REASON_BAD_PATH_REQUEST);
         return 1;
     }
-    if (rns_transport_lookup(&node->transport,
+    if (!local_destination(node, result->path_request.destination_hash) &&
+        rns_transport_lookup(&node->transport,
                              result->path_request.destination_hash) == NULL) {
         drop(result, RNS_NODE_REASON_NO_PATH);
         return 1;
