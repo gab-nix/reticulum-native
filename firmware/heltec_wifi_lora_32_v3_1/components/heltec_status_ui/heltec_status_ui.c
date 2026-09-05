@@ -354,6 +354,7 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
         const char *state = "NO RNS";
         if (strstr(oled->model.radio, "FAULT") != NULL) state = "FAULT";
         else if (strstr(oled->model.radio, "ERROR") != NULL) state = "ERROR";
+        else if (strstr(oled->model.radio, "RX/TX") != NULL) state = "RX/TX";
         else if (strstr(oled->model.radio, "RX") != NULL) state = "RX ONLY";
         draw_large_line(oled->frame, 0U, state);
         draw_large_line(oled->frame, 1U,

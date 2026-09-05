@@ -16,6 +16,12 @@ function(reticulum_add_test name source)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 reticulum_add_test(test_runtime_provider unit/test_runtime_provider.c)
+reticulum_add_test(test_lxmf_packet_node unit/test_lxmf_packet_node.c)
+reticulum_add_test(test_announce_button unit/test_announce_button.c)
+target_sources(test_announce_button PRIVATE
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/announce_button.c)
+target_include_directories(test_announce_button PRIVATE
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main)
 reticulum_add_test(test_heltec_discovery unit/test_heltec_discovery.c)
 target_sources(test_heltec_discovery PRIVATE
     ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/radio_discovery.c)

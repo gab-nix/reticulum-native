@@ -10,6 +10,7 @@ extern "C" {
 #endif
 
 enum {
+    RNS_HELTEC_V3_1_GPIO_PRG = 0,
     RNS_HELTEC_V3_1_GPIO_RADIO_NSS = 8,
     RNS_HELTEC_V3_1_GPIO_RADIO_SCK = 9,
     RNS_HELTEC_V3_1_GPIO_RADIO_MOSI = 10,

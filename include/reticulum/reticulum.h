@@ -14,6 +14,7 @@
 #include "reticulum/ifac.h"
 #include "reticulum/identity.h"
 #include "reticulum/lxmf.h"
+#include "reticulum/lxmf_packet_node.h"
 #include "reticulum/lxmf_delivery.h"
 #include "reticulum/lxmf_peer_store.h"
 #include "reticulum/lxmf_router.h"

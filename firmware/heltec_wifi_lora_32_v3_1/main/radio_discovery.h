@@ -20,6 +20,8 @@ typedef struct {
     size_t identity_count;
 } heltec_radio_discovery;
 void heltec_radio_discovery_init(heltec_radio_discovery *state);
+void heltec_radio_discovery_packet(heltec_radio_discovery *state,
+    const uint8_t *packet, size_t length, uint64_t now_ms);
 void heltec_radio_discovery_poll(heltec_radio_discovery *state, uint64_t now_ms);
 void heltec_radio_discovery_receive(heltec_radio_discovery *state,
     const uint8_t *frame, size_t length, uint64_t now_ms);
