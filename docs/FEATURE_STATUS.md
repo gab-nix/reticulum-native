@@ -109,7 +109,7 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 
 | Acceptance behavior | Status | Evidence and remaining work |
 | --- | --- | --- |
-| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Nine opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
+| Repeatable pinned Python acceptance entry point | IMPLEMENTED | Eleven opt-in CTest cases; explicit checkout paths, serial execution and bounded timeouts |
 | Direct packet and multi-segment LXMF, UDP/TCP | VERIFIED | `interop_lxmf_direct_udp` and `interop_lxmf_direct_tcp` pass bidirectionally with pinned Python; loss/restart scenarios remain outside this evidence |
 | Bidirectional local-service path discovery, UDP/TCP | VERIFIED | `interop_discovery_udp/tcp` prove stock Python requests recover the C identity/path after losing its startup announce, and C requests discover a never-announced Python destination; public keys match in both directions. Multi-hop cached-route responses and adversarial discovery remain outside this evidence |
 | Bidirectional ticket exchange and stamped resource replies, UDP/TCP | VERIFIED | Direct drivers exchange signed ticket fields, then validate ticket-backed stamps for packet and multi-segment replies against pinned Python; renewal, expiry-boundary and restart scenarios remain outside this evidence |
