@@ -3,6 +3,7 @@
 #include "button_menu.h"
 #include "live_view.h"
 #include "home_view.h"
+#include "activity_led.h"
 #include "cpu_usage.h"
 #include "channel_view.h"
 #include "chat_store.h"
@@ -250,10 +251,18 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
     ESP_LOGI(TAG, "Packet identity opening: %d", (int)status);
     if (status == RNS_OK) {
         chat_status = heltec_chat_flash_open(&chat_storage);
-        if (chat_status == RNS_OK) chat_status = heltec_chat_store_open(chat_storage, &saved_chats);
-        if (chat_status == RNS_OK) chat_status = heltec_message_archive_open(chat_storage, &archive);
+        ESP_LOGI(TAG, "Chat journal opening: %d", (int)chat_status);
+        if (chat_status == RNS_OK) {
+            chat_status = heltec_chat_store_open(chat_storage, &saved_chats);
+            ESP_LOGI(TAG, "Chat records opening: %d", (int)chat_status);
+        }
+        if (chat_status == RNS_OK) {
+            chat_status = heltec_message_archive_open(chat_storage, &archive);
+            ESP_LOGI(TAG, "Message archive opening: %d", (int)chat_status);
+        }
         if (chat_status == RNS_OK) {
             chat_status=lxmf_packet_node_open_outbox(node,chat_storage);
+            ESP_LOGI(TAG, "Reply outbox opening: %d", (int)chat_status);
             outbox_ready=chat_status==RNS_OK;
             if(outbox_ready) {
                 chats_ui.send_reply=quick_reply; chats_ui.cancel_reply=cancel_reply;
@@ -292,6 +301,14 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE, .intr_type = GPIO_INTR_DISABLE};
     bool button_ready = gpio_config(&input) == ESP_OK;
+    gpio_config_t led_output = {.pin_bit_mask = UINT64_C(1) << RNS_HELTEC_V3_1_GPIO_LED,
+        .mode = GPIO_MODE_OUTPUT, .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE, .intr_type = GPIO_INTR_DISABLE};
+    bool led_ready = gpio_config(&led_output) == ESP_OK;
+    bool led_on = false;
+    heltec_activity_led activity = {0};
+    if (led_ready) led_ready = gpio_set_level(RNS_HELTEC_V3_1_GPIO_LED, 0) == ESP_OK;
+    ESP_LOGI(TAG, "RX/TX activity LED: %s", led_ready ? "ready" : "unavailable");
     ESP_LOGI(TAG, "868.100 MHz SF11 BW250 CR4/5; packet LXMF; PRG=%s; no automatic announce",
         button_ready ? "ready" : "unavailable");
     uint64_t next_display = 0, next_log = 0, next_cpu = 0;
@@ -331,6 +348,14 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         }
         rns_interface_stats_t radio_stats = {0};
         (void)rns_interface_get_stats(radio, &radio_stats);
+        bool active = heltec_activity_led_sample(&activity, clock_ms(NULL), &radio_stats);
+        if (led_ready && active != led_on) {
+            if (gpio_set_level(RNS_HELTEC_V3_1_GPIO_LED, active ? 1 : 0) != ESP_OK) {
+                led_ready = false;
+                ESP_LOGW(TAG, "Activity LED unavailable; radio continues");
+            }
+            led_on = active;
+        }
         heltec_channel_sample(&channel, now, &radio_stats);
         heltec_radio_discovery_poll(&discovery, now);
         bool was_open = menu.open;
