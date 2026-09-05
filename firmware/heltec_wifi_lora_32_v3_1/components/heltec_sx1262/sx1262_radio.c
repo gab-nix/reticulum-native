@@ -62,11 +62,16 @@ rns_status_t rns_sx1262_lora_airtime_ms(const rns_sx1262_config_t *c,
                                         size_t length, uint32_t *out_ms) {
   int64_t signed_ceil_numerator;
   uint64_t ceil_numerator, ceil_denominator, symbols, numerator;
+  uint32_t effective_bandwidth_hz;
   bool ldro;
   if (!valid_cfg(c) || !length || length > RNS_SX1262_MAX_PAYLOAD || !out_ms)
     return RNS_ERROR_INVALID_ARGUMENT;
+  /* SX126X_LORA_BW_041 is 41.667 kHz; 41700 is only the public nominal
+     spelling. Use the hardware value so PHY and scheduler deadlines agree. */
+  effective_bandwidth_hz =
+      c->bandwidth_hz == 41700U ? 41667U : c->bandwidth_hz;
   ldro = ((uint64_t)1U << c->spreading_factor) * 1000000ULL >=
-         (uint64_t)c->bandwidth_hz * 16000ULL;
+         (uint64_t)effective_bandwidth_hz * 16000ULL;
   signed_ceil_numerator = (int64_t)(length * 8U) +
                           (c->crc_enabled ? 16 : 0) -
                           (int64_t)(4U * c->spreading_factor) + 20;
@@ -86,8 +91,8 @@ rns_status_t rns_sx1262_lora_airtime_ms(const rns_sx1262_config_t *c,
     symbols += 2U;
   numerator = (4U * symbols + 1U) *
               ((uint64_t)1U << (c->spreading_factor - 2U)) * 1000U;
-  *out_ms = (uint32_t)((numerator + c->bandwidth_hz - 1U) /
-                       c->bandwidth_hz);
+  *out_ms = (uint32_t)((numerator + effective_bandwidth_hz - 1U) /
+                       effective_bandwidth_hz);
   return RNS_OK;
 }
 rns_status_t rns_sx1262_radio_create(const rns_sx1262_chip_ops_t *o, void *ctx,
@@ -456,4 +461,45 @@ rns_status_t rns_sx1262_radio_stop(rns_sx1262_radio_t *r) {
     r->stats.state = RNS_SX1262_FAULT;
   }
   return s;
+}
+
+rns_status_t rns_sx1262_radio_abort_and_restart(
+    rns_sx1262_radio_t *r, const rns_sx1262_config_t *c) {
+  rns_status_t s;
+  if (!r || !valid_cfg(c))
+    return RNS_ERROR_INVALID_ARGUMENT;
+
+  /* Standby is best-effort: reset below is the authoritative cancellation.
+     Clear all payload-bearing queues before attempting recovery so a failed
+     restart cannot later expose or transmit stale work. */
+  (void)r->ops->standby(r->ctx);
+  memset(r->rx, 0, sizeof(r->rx));
+  memset(r->tx, 0, sizeof(r->tx));
+  memset(r->tx_results, 0, sizeof(r->tx_results));
+  memset(&r->cad_result, 0, sizeof(r->cad_result));
+  r->rx_head = 0U;
+  r->rx_count = 0U;
+  r->tx_head = 0U;
+  r->tx_count = 0U;
+  r->tx_result_head = 0U;
+  r->tx_result_count = 0U;
+  r->cad_requested = false;
+  r->cad_result_pending = false;
+  r->recovery_polls_remaining = 0U;
+  r->config = *c;
+
+  s = r->ops->reset(r->ctx);
+  if (s == RNS_OK)
+    s = r->ops->configure(r->ctx, c);
+  if (s == RNS_OK)
+    s = enter_rx(r);
+  if (s != RNS_OK) {
+    r->stats.command_errors++;
+    r->stats.last_error = s;
+    r->stats.state = RNS_SX1262_FAULT;
+    return s;
+  }
+  r->stats.recoveries++;
+  r->stats.last_error = RNS_OK;
+  return RNS_OK;
 }

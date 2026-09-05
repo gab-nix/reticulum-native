@@ -4,6 +4,7 @@
 #include "nvs_flash.h"
 
 #include "reticulum/boards/heltec_wifi_lora_32_v3_1.h"
+#include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/esp_idf.h"
 
 static const char *TAG = "reticulum";
@@ -11,6 +12,7 @@ static rns_storage_t *storage;
 
 void app_main(void) {
     const rns_heltec_v3_1_board_t *board = rns_heltec_v3_1_board();
+    rns_heltec_reticulum_radio_config_t radio_config;
     esp_err_t status = nvs_flash_init();
 
     if (status == ESP_ERR_NVS_NO_FREE_PAGES ||
@@ -39,10 +41,18 @@ void app_main(void) {
         return;
     }
 
+    /* Link and validate the complete scheduler-to-PHY adapter without starting
+       RF. Runtime ownership and the radio poll loop land in a later milestone. */
+    rns_heltec_reticulum_radio_default_config(&radio_config);
+
     ESP_LOGI(TAG, "Reticulum firmware scaffold for %s", board->name);
     ESP_LOGI(TAG, "UART%d console at %lu baud on TX GPIO%d/RX GPIO%d",
              board->console_uart, (unsigned long)board->console_baud,
              board->uart_tx, board->uart_rx);
     ESP_LOGI(TAG, "ESP-IDF platform, crypto and bounded NVS storage providers are ready");
-    ESP_LOGW(TAG, "Radio, OLED, identity and LXMF services are not enabled in this scaffold");
+    ESP_LOGI(TAG, "SX1262 adapter linked for %lu Hz, SF%u, BW %lu Hz (not started)",
+             (unsigned long)radio_config.frequency_hz,
+             (unsigned)radio_config.scheduler.spreading_factor,
+             (unsigned long)radio_config.scheduler.bandwidth_hz);
+    ESP_LOGW(TAG, "Radio owner loop, OLED, identity and LXMF services are not enabled in this scaffold");
 }

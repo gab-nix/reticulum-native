@@ -138,11 +138,21 @@ rns_status_t rns_sx1262_radio_receive(rns_sx1262_radio_t *,
 rns_status_t rns_sx1262_radio_get_stats(const rns_sx1262_radio_t *,
                                         rns_sx1262_stats_t *);
 rns_status_t rns_sx1262_radio_stop(rns_sx1262_radio_t *);
+/*
+ * Cancels every accepted operation without publishing stale terminal results,
+ * clears bounded RX/TX/result storage, then resets, reconfigures and returns
+ * the radio to receive mode. The caller must provide external synchronisation.
+ */
+rns_status_t rns_sx1262_radio_abort_and_restart(
+    rns_sx1262_radio_t *, const rns_sx1262_config_t *);
 const rns_sx1262_chip_ops_t *rns_sx1262_semtech_chip_ops(void);
 #ifdef ESP_PLATFORM
 typedef struct rns_heltec_sx1262 rns_heltec_sx1262_t;
 rns_status_t rns_heltec_sx1262_open(rns_heltec_sx1262_t **);
 rns_status_t rns_heltec_sx1262_open_with_config(
+    const rns_sx1262_config_t *, rns_heltec_sx1262_t **);
+/* Allocates and configures the device plumbing without starting RX. */
+rns_status_t rns_heltec_sx1262_open_stopped_with_config(
     const rns_sx1262_config_t *, rns_heltec_sx1262_t **);
 rns_status_t rns_heltec_sx1262_send(rns_heltec_sx1262_t *, const uint8_t *,
                                     size_t);
@@ -158,8 +168,14 @@ rns_status_t rns_heltec_sx1262_receive_cad_result(
     rns_heltec_sx1262_t *, rns_sx1262_cad_result_t *);
 rns_status_t rns_heltec_sx1262_get_stats(rns_heltec_sx1262_t *,
                                          rns_sx1262_stats_t *);
+rns_status_t rns_heltec_sx1262_stop(rns_heltec_sx1262_t *);
+/* Serialised with the owner task and all public radio operations. */
+rns_status_t rns_heltec_sx1262_abort_and_restart(
+    rns_heltec_sx1262_t *, const rns_sx1262_config_t *);
 /* The owner must prevent concurrent public calls while close destroys the
-   ESP handle and its mutex. */
+   ESP handle and its mutex. A timeout leaves the complete handle allocated,
+   inactive to new calls and self-contained so a later close may finish; no
+   caller-owned memory is retained. */
 rns_status_t rns_heltec_sx1262_close(rns_heltec_sx1262_t *);
 #endif
 #ifdef __cplusplus

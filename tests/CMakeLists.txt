@@ -209,6 +209,16 @@ target_compile_features(test_heltec_sx1262_semtech PRIVATE c_std_17)
 reticulum_set_project_warnings(test_heltec_sx1262_semtech)
 add_test(NAME test_heltec_sx1262_semtech COMMAND test_heltec_sx1262_semtech)
 
+add_executable(test_heltec_reticulum_radio
+    unit/test_heltec_reticulum_radio.c)
+target_include_directories(test_heltec_reticulum_radio PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_reticulum_radio/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262/include)
+target_link_libraries(test_heltec_reticulum_radio PRIVATE reticulum::reticulum)
+target_compile_features(test_heltec_reticulum_radio PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_reticulum_radio)
+add_test(NAME test_heltec_reticulum_radio COMMAND test_heltec_reticulum_radio)
+
 reticulum_add_test(test_crypto unit/test_crypto.c)
 
 # The host shim exercises the complete provider table and libsodium key
