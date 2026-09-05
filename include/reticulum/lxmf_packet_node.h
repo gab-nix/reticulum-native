@@ -44,4 +44,13 @@ rns_status_t lxmf_packet_node_announce(lxmf_packet_node_t *node, uint64_t unix_s
 rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *node,
     const uint8_t *packet, size_t length);
 void lxmf_packet_node_stats(const lxmf_packet_node_t *node, lxmf_packet_node_stats_t *stats);
+/* Recheck an archived packet against current verified peer keys. No callback,
+ * replay-cache mutation or RF transmission. Expected source/ID bind the result
+ * to the archived record. On non-OK, signature is not modified. */
+rns_status_t lxmf_packet_node_check_archive(lxmf_packet_node_t *node,
+    const uint8_t *packet, size_t length, const uint8_t source[16],
+    const uint8_t message_id[32], lxmf_signature_state_t *signature);
+/* Drop volatile deferred copies after an application-confirmed deletion.
+ * Does not block future packets from the sender or erase identity data. */
+void lxmf_packet_node_forget_pending(lxmf_packet_node_t *node, const uint8_t message_id[32]);
 #endif

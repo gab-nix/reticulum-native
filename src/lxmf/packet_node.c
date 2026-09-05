@@ -228,3 +228,42 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
 void lxmf_packet_node_stats(const lxmf_packet_node_t *n, lxmf_packet_node_stats_t *stats) {
     if (n && stats) *stats = n->stats;
 }
+typedef struct {
+    lxmf_identity_verifier_context_t verifier;
+    lxmf_status_t status;
+} archive_verifier_context;
+void lxmf_packet_node_forget_pending(lxmf_packet_node_t *n, const uint8_t id[32]) {
+    if(!n || !id) return;
+    for(size_t i=0;i<PENDING;++i) if(n->pending[i].used && !memcmp(n->pending[i].id,id,32)) {
+        rns_hal_secure_zero(&n->pending[i],sizeof(n->pending[i]));
+        --n->stats.pending_senders;
+    }
+}
+static lxmf_status_t archive_verify(void *context, const uint8_t source[16],
+    const uint8_t *data, size_t length, const uint8_t signature[64]) {
+    archive_verifier_context *v = context;
+    v->status = lxmf_identity_verifier(&v->verifier, source, data, length, signature);
+    /* Preserve verification separately while obtaining a fully parsed result. */
+    return v->status == LXMF_ERR_SIGNATURE || v->status == LXMF_ERR_UNKNOWN_SIGNER ? LXMF_OK : v->status;
+}
+rns_status_t lxmf_packet_node_check_archive(lxmf_packet_node_t *n,
+    const uint8_t *raw, size_t length, const uint8_t source[16],
+    const uint8_t id[32], lxmf_signature_state_t *signature) {
+    if (!n || !raw || !length || length > RNS_MTU || !source || !id || !signature)
+        return RNS_ERROR_INVALID_ARGUMENT;
+    if (raw[0] & 0x80U) return RNS_ERROR_PROTOCOL;
+    archive_verifier_context verifier = {{resolve, n}, LXMF_ERR_ARGUMENT};
+    lxmf_message_t message; size_t plain_length = 0;
+    lxmf_status_t status = lxmf_opportunistic_packet_unpack_ratchets(raw, length,
+        &n->identity, n->ratchet_private, 1, 0, archive_verify, &verifier,
+        n->plain, sizeof(n->plain), &plain_length, &message, NULL, NULL);
+    rns_status_t result = RNS_ERROR_PROTOCOL;
+    if (status == LXMF_OK &&
+        !memcmp(source, message.source, 16) && !memcmp(id, message.message_id, 32)) {
+        *signature = verifier.status == LXMF_OK ? LXMF_SIGNATURE_VERIFIED :
+            verifier.status == LXMF_ERR_UNKNOWN_SIGNER ? LXMF_SIGNATURE_UNVERIFIED : LXMF_SIGNATURE_FAILED;
+        result = RNS_OK;
+    }
+    rns_hal_secure_zero(n->plain, sizeof(n->plain));
+    return result;
+}
