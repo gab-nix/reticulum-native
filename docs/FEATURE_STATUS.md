@@ -192,3 +192,4 @@ Successful fixture tests alone do not verify an entire screen or subsystem.
 | Complete Nomad Network behavioral parity | PLANNED | All remaining WIP items and compatibility gates |
 | Complete Reticulum daemon and utility parity | PLANNED | Full implementation |
 | Channel airtime display bounds | IMPLEMENTED | Explicit six-character numeric field prevents host-width-dependent GCC format truncation failures. `test_channel_view` checks zero, saturation and UINT64_MAX input without losing the budget suffix. Hardware validation remains separate |
+| Large-message integration watchdog | IMPLEMENTED | Multi-segment direct-delivery test permits up to 60 seconds on instrumented runners rather than ten. Monotonic progress, partial progress, receipt-confirmed delivery and exact received content assertions remain required; protocol deadlines are unchanged. This is test infrastructure, not new interoperability evidence |
