@@ -609,8 +609,8 @@ static void draw_thread(tui_state_t *state, const tui_layout_t *layout) {
         const tui_message_t *message = tui_state_thread_message(state, index);
         if (message == NULL) continue;
         message_text(state, message, rendered, sizeof rendered);
-        size_t offset = 0u, start, bytes;
-        while (tui_text_wrap_next(rendered, strlen(rendered), (size_t)layout->pane_width,
+        size_t offset = 0u, start, bytes, length = strlen(rendered);
+        while (tui_text_wrap_next(rendered, length, (size_t)layout->pane_width,
                                   &offset, &start, &bytes)) ++total;
     }
     size_t capacity = layout->content_rows > 0 ? (size_t)layout->content_rows : 0u;
@@ -696,8 +696,9 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
         }
     }
     char reference_hint[TUI_FIELD_PREVIEW_MAX + 80u];
-    const char *hint = editor != NULL
+    const char *hint = state->field == TUI_FIELD_COMPOSE
                            ? "Enter send  Ctrl-N newline  Up/Down move  Esc leave"
+                           : editor != NULL ? "Enter accept  Esc leave  Home/End  Ctrl-U/K/W"
                            : "e reply  z react  d route  v save  / search  i info  ? help";
     if (editor != NULL && state->compose_reference.kind !=
                               TUI_COMPOSE_REFERENCE_NONE) {
