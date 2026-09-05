@@ -515,11 +515,13 @@ static void test_host_controls(void) {
 static void test_host_startup_and_announces(void) {
     char root[] = "/tmp/nomad-host-startup-XXXXXX";
     assert(mkdtemp(root) != NULL);
-    char identity[512], store[512], config_path[512], settings_path[520], page[512];
+    char identity[512], store[512], config_path[512], page[512];
+    char settings_path[sizeof store + sizeof ".settings"];
     (void)snprintf(identity, sizeof identity, "%s/identity", root);
     (void)snprintf(store, sizeof store, "%s/messages", root);
     (void)snprintf(config_path, sizeof config_path, "%s/network", root);
-    (void)snprintf(settings_path, sizeof settings_path, "%s.settings", store);
+    int settings_length = snprintf(settings_path, sizeof settings_path, "%s.settings", store);
+    assert(settings_length > 0 && (size_t)settings_length < sizeof settings_path);
     (void)snprintf(page, sizeof page, "%s/index.mu", root);
     FILE *identity_file = fopen(identity, "wb");
     assert(identity_file != NULL && fclose(identity_file) == 0);
