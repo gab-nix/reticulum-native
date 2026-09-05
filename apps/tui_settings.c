@@ -10,7 +10,7 @@
 
 #define SETTINGS_V1_HEADER_SIZE 40u
 #define SETTINGS_V2_HEADER_SIZE 20u
-#define SETTINGS_V2_BODY_MAX 2048u
+#define SETTINGS_V2_BODY_MAX 4096u
 
 enum settings_record_type {
     SETTINGS_RECORD_DISPLAY_NAME = 1,
@@ -20,7 +20,10 @@ enum settings_record_type {
     SETTINGS_RECORD_RRC_NICK = 12,
     SETTINGS_RECORD_RRC_ROOM = 13,
     SETTINGS_RECORD_RRC_DRAFT = 14,
-    SETTINGS_RECORD_RRC_RECONNECT = 15
+    SETTINGS_RECORD_RRC_RECONNECT = 15,
+    SETTINGS_RECORD_HOST_ROOT = 20,
+    SETTINGS_RECORD_HOST_PAGES = 21,
+    SETTINGS_RECORD_HOST_FLAGS = 22
 };
 
 static void put16(uint8_t *out, uint16_t value) {
@@ -69,6 +72,7 @@ void tui_settings_defaults(tui_settings_t *settings) {
     settings->announce_at_start = true;
     settings->announce_interval_minutes = TUI_SETTINGS_DEFAULT_ANNOUNCE_MINUTES;
     settings->rrc_auto_reconnect = true;
+    memcpy(settings->host_pages, "index.mu", sizeof "index.mu");
 }
 
 static bool stored_text_valid(const char *text, size_t capacity,
@@ -101,7 +105,8 @@ static bool known_record(uint16_t type) {
            type == SETTINGS_RECORD_RRC_IDENTITY ||
            type == SETTINGS_RECORD_RRC_NICK || type == SETTINGS_RECORD_RRC_ROOM ||
            type == SETTINGS_RECORD_RRC_DRAFT ||
-           type == SETTINGS_RECORD_RRC_RECONNECT;
+           type == SETTINGS_RECORD_RRC_RECONNECT || type == SETTINGS_RECORD_HOST_ROOT ||
+           type == SETTINGS_RECORD_HOST_PAGES || type == SETTINGS_RECORD_HOST_FLAGS;
 }
 
 static bool unknown_records_valid(const tui_settings_t *settings) {
@@ -132,6 +137,11 @@ bool tui_settings_valid(const tui_settings_t *settings) {
     }
     if (settings->has_stamp_cost &&
         (settings->stamp_cost < 1u || settings->stamp_cost > 254u))
+        return false;
+    if (!stored_text_valid(settings->host_pages_root, TUI_SETTINGS_HOST_ROOT_MAX, false) ||
+        !stored_text_valid(settings->host_pages, TUI_SETTINGS_HOST_PAGES_MAX, false) ||
+        (settings->host_pages_root[0] != 0 && settings->host_pages_root[0] != '/') ||
+        (settings->host_enabled && (settings->host_pages_root[0] == 0 || settings->host_pages[0] == 0)))
         return false;
     return hex_or_empty(settings->rrc_hub_address,
                         TUI_SETTINGS_RRC_HUB_ADDRESS_MAX) &&
@@ -238,6 +248,7 @@ static bool load_v2(FILE *file, uint16_t version, tui_settings_t *loaded) {
     bool seen_display = false, seen_general = false, seen_hub = false;
     bool seen_identity = false, seen_nick = false, seen_room = false;
     bool seen_draft = false, seen_reconnect = false;
+    bool seen_host_root = false, seen_host_pages = false, seen_host_flags = false;
     if (fread(header, 1u, sizeof header, file) != sizeof header ||
         memcmp(header, "NOMSET\0\0", 8u) != 0 ||
         get16(header + 8u) != version || version < 2u ||
@@ -309,6 +320,19 @@ static bool load_v2(FILE *file, uint16_t version, tui_settings_t *loaded) {
                 loaded->rrc_auto_reconnect = value[0] != 0u;
                 seen_reconnect = true;
                 break;
+            case SETTINGS_RECORD_HOST_ROOT:
+                if (seen_host_root || !set_text(loaded->host_pages_root,
+                    TUI_SETTINGS_HOST_ROOT_MAX, value, length)) return false;
+                seen_host_root = true; break;
+            case SETTINGS_RECORD_HOST_PAGES:
+                if (seen_host_pages || !set_text(loaded->host_pages,
+                    TUI_SETTINGS_HOST_PAGES_MAX, value, length)) return false;
+                seen_host_pages = true; break;
+            case SETTINGS_RECORD_HOST_FLAGS:
+                if (seen_host_flags || length != 1u || value[0] > 3u) return false;
+                loaded->host_enabled = (value[0] & 1u) != 0;
+                loaded->host_identified_only = (value[0] & 2u) != 0;
+                seen_host_flags = true; break;
             default:
                 if (4u + length > TUI_SETTINGS_UNKNOWN_MAX -
                         loaded->unknown_records_length) return false;
@@ -390,6 +414,8 @@ bool tui_settings_save(const char *path, const tui_settings_t *settings) {
     memcpy(general + 6u, settings->propagation_node,
            sizeof settings->propagation_node);
     uint8_t reconnect = settings->rrc_auto_reconnect ? 1u : 0u;
+    uint8_t host_flags = (uint8_t)((settings->host_enabled ? 1u : 0u) |
+                                  (settings->host_identified_only ? 2u : 0u));
     bool encoded = append_record(body, sizeof body, &used,
             SETTINGS_RECORD_DISPLAY_NAME,
             (const uint8_t *)settings->display_name, settings->display_name_len) &&
@@ -409,7 +435,12 @@ bool tui_settings_save(const char *path, const tui_settings_t *settings) {
         append_record(body, sizeof body, &used, SETTINGS_RECORD_RRC_DRAFT,
             (const uint8_t *)settings->rrc_draft, strlen(settings->rrc_draft)) &&
         append_record(body, sizeof body, &used, SETTINGS_RECORD_RRC_RECONNECT,
-                      &reconnect, 1u);
+                      &reconnect, 1u) &&
+        append_record(body, sizeof body, &used, SETTINGS_RECORD_HOST_ROOT,
+            (const uint8_t *)settings->host_pages_root, strlen(settings->host_pages_root)) &&
+        append_record(body, sizeof body, &used, SETTINGS_RECORD_HOST_PAGES,
+            (const uint8_t *)settings->host_pages, strlen(settings->host_pages)) &&
+        append_record(body, sizeof body, &used, SETTINGS_RECORD_HOST_FLAGS, &host_flags, 1u);
     if (!encoded || settings->unknown_records_length > sizeof body - used)
         return false;
     memcpy(body + used, settings->unknown_records,

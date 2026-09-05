@@ -98,7 +98,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Directory screen | PLANNED | Match upstream 1.2.0 placeholder; contact-directory behavior is covered by Network/contact workflows |
 | Map screen | PLANNED | Match upstream 1.2.0 placeholder; a full mapping system is outside this parity baseline |
 | Hosted propagation-node controls | PLANNED | Full implementation |
-| Hosted Node TUI screen | PLANNED | Replace unavailable action with hosting controls and headless acceptance tests |
+| Hosted Node TUI static-service controls | IMPLEMENTED | `test_tui_settings_ui` covers explicit enable/stop, root/page/access persistence, startup recovery, announce scheduling/offline retry, rollback on invalid publication/save failure and 38x10 curses rendering. Long-value editor viewport has UTF-8 boundary tests. File hosting, OS executable pages, propagation hosting and integrated stock TUI acceptance remain separate |
 | Terminal QR address display | IMPLEMENTED | Bounded public-address QR, four-module quiet zone and half-block rendering; `test_tui_qr` checks bounds/rows/layout, headless dispatcher checks modal keys, `tools/test_tui_qr_decode.py` independently decodes synthetic output with pinned zxing-cpp; physical phone scan and paper-message QR remain |
 | RRC persistent room history | PLANNED | Bounded persistence, restart recovery and history UI tests |
 | RRC Resource envelopes | PLANNED | Oversized channel envelope exchange and upstream acceptance |

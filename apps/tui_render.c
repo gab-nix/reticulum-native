@@ -598,6 +598,7 @@ static void draw_input(const tui_state_t *state, const tui_layout_t *layout) {
             editor = &state->node_search; prompt = "Find node: "; break;
         case TUI_FIELD_ADDRESS: editor = &state->address; prompt = "Address: "; break;
         case TUI_FIELD_SETTING:
+        case TUI_FIELD_HOST:
         case TUI_FIELD_RRC:
         case TUI_FIELD_BROWSER_FORM:
             break;
@@ -845,6 +846,35 @@ static void draw_setting_row(const tui_state_t *state, const tui_layout_t *layou
     if (selected) (void)attron(A_REVERSE);
     clipped(stdscr, row, 2, layout->columns - 4, text);
     if (selected) (void)attroff(A_REVERSE);
+}
+
+static void draw_host(const tui_state_t *state, const tui_layout_t *layout) {
+    char items[TUI_HOST_COUNT][1100];
+    (void)snprintf(items[TUI_HOST_ROOT], sizeof items[0], "Page root: %s", state->settings.host_pages_root);
+    (void)snprintf(items[TUI_HOST_PAGES], sizeof items[0], "Pages (semicolon-separated): %s", state->settings.host_pages);
+    (void)snprintf(items[TUI_HOST_ACCESS], sizeof items[0], "Access: %s", state->settings.host_identified_only ? "identified links" : "anonymous links allowed");
+    (void)snprintf(items[TUI_HOST_TOGGLE], sizeof items[0], "%s hosting", state->host.node != NULL ? "Stop" : "Start");
+    (void)snprintf(items[TUI_HOST_ANNOUNCE], sizeof items[0], "Announce now (%zu sent; %s)", state->host.announces, rns_status_string(state->host.error));
+    char host_address[33];
+    if (state->host.node != NULL)
+        tui_hex_format(rns_hosted_node_destination(state->host.node), 16u, host_address);
+    clipped(stdscr, 2, 1, layout->columns - 2, state->host.node != NULL ? host_address : "Node: stopped (no service advertised)");
+    int capacity = layout->divider_row - 4;
+    int first = (int)state->host_selected >= capacity ? (int)state->host_selected - capacity + 1 : 0;
+    for (int i = first, row = 4; i < (int)TUI_HOST_COUNT && row < layout->divider_row; ++i, ++row) {
+        if (i == (int)state->host_selected) (void)attron(A_REVERSE);
+        clipped(stdscr, row, 1, layout->columns - 2, items[i]);
+        if (i == (int)state->host_selected) (void)attroff(A_REVERSE);
+    }
+    clipped(stdscr, 3, 1, layout->columns - 2, "Executables, files and propagation hosting disabled");
+    (void)mvhline(layout->divider_row, 0, ACS_HLINE, layout->columns);
+    size_t offset = 0u, cursor = 0u;
+    if (state->field == TUI_FIELD_HOST) {
+        (void)tui_editor_view(&state->host_editor, (size_t)layout->columns, &offset, &cursor);
+        clipped(stdscr, layout->input_row, 0, layout->columns, tui_editor_text(&state->host_editor) + offset);
+    } else clipped(stdscr, layout->input_row, 0, layout->columns, state->status);
+    clipped(stdscr, layout->hint_row, 0, layout->columns, state->field == TUI_FIELD_HOST ? "Enter save  Esc cancel" : "j/k select  Enter edit/action  C conversations");
+    if (state->field == TUI_FIELD_HOST) (void)move(layout->input_row, (int)cursor);
 }
 
 static void draw_settings(const tui_state_t *state, const tui_layout_t *layout) {
@@ -1339,6 +1369,11 @@ void tui_render_draw(tui_state_t *state) {
         return;
     }
     draw_chrome(state, &layout);
+    if (state->screen == TUI_SCREEN_NODE) {
+        draw_host(state, &layout);
+        (void)refresh();
+        return;
+    }
     if (state->screen == TUI_SCREEN_NETWORK) {
         draw_network(state, &layout);
         if (state->overlay == TUI_OVERLAY_NODE_ACTIONS) draw_node_popup(state);
@@ -1403,6 +1438,18 @@ int tui_render_dump(const tui_state_t *state, FILE *output) {
     if (state == NULL || output == NULL) return -1;
     tui_hex_format(state->local, LXMF_DESTINATION_LENGTH, address);
     (void)fprintf(output, "Nomad Chat\nIdentity: %s\n", address);
+    if (state->screen == TUI_SCREEN_NODE) {
+        if (state->host.node != NULL) {
+            char host_address[33];
+            tui_hex_format(rns_hosted_node_destination(state->host.node), 16u, host_address);
+            (void)fprintf(output, "Hosted address: %s\n", host_address);
+        }
+        (void)fprintf(output, "Screen: Node\nHosting: %s\nStartup: %s\nPage root: %s\nPages: %s\nAccess: %s\nAnnounces: %zu\nExecutables, files and propagation hosting disabled\nStatus: %s\n",
+            state->host.node != NULL ? "active" : "stopped", state->settings.host_enabled ? "enabled" : "disabled",
+            state->settings.host_pages_root, state->settings.host_pages,
+            state->settings.host_identified_only ? "identified" : "anonymous", state->host.announces, state->status);
+        return ferror(output) ? -1 : 0;
+    }
     if (state->screen == TUI_SCREEN_SETTINGS) {
         char propagation[TUI_ADDRESS_DIGITS + 1u];
         (void)fprintf(output, "Screen: Settings\nDisplay name: %s\n",

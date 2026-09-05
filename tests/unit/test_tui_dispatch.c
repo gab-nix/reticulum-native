@@ -89,7 +89,7 @@ static void test_screen_scoping(void) {
         assert(tui_dispatch_key(state, 'k'));
         assert(state->selected == selected);
         if (screen != TUI_SCREEN_CONVERSATIONS && screen != TUI_SCREEN_SETTINGS &&
-            screen != TUI_SCREEN_RRC) {
+            screen != TUI_SCREEN_RRC && screen != TUI_SCREEN_NODE) {
             assert(tui_dispatch_key(state, '\n'));
             assert(state->field == TUI_FIELD_NONE && state->overlay == TUI_OVERLAY_NONE);
             assert(state->screen == (tui_screen_t)screen);

@@ -5,6 +5,7 @@
 #include "tui_interfaces.h"
 #include "tui_rrc.h"
 #include "tui_settings.h"
+#include "tui_host.h"
 
 #include "reticulum/browser.h"
 #include "reticulum/identity.h"
@@ -63,7 +64,8 @@ typedef enum {
     TUI_FIELD_SETTING,
     TUI_FIELD_RRC,
     TUI_FIELD_REACTION,
-    TUI_FIELD_BROWSER_FORM
+    TUI_FIELD_BROWSER_FORM,
+    TUI_FIELD_HOST
 } tui_field_t;
 
 typedef enum {
@@ -91,6 +93,11 @@ typedef enum {
     TUI_SETTING_ANNOUNCE_NOW,
     TUI_SETTING_COUNT
 } tui_setting_item_t;
+
+typedef enum {
+    TUI_HOST_ROOT, TUI_HOST_PAGES, TUI_HOST_ACCESS, TUI_HOST_TOGGLE,
+    TUI_HOST_ANNOUNCE, TUI_HOST_COUNT
+} tui_host_item_t;
 
 typedef enum {
     TUI_OVERLAY_NONE,
@@ -214,6 +221,9 @@ typedef struct tui_state {
     tui_editor_t setting;
     tui_field_t field;
     tui_overlay_t overlay;
+    tui_host_t host;
+    tui_host_item_t host_selected;
+    tui_editor_t host_editor;
     tui_screen_t screen;
     tui_trust_t tab;
 
@@ -379,6 +389,9 @@ void tui_state_browse_node(tui_state_t *state, const rns_node_record *node);
 bool tui_state_browse_cancel(tui_state_t *state);
 
 void tui_state_setting_move(tui_state_t *state, int delta);
+void tui_state_host_move(tui_state_t *state, int delta);
+void tui_state_host_activate(tui_state_t *state);
+bool tui_state_host_apply(tui_state_t *state);
 /* Starts editing, toggles a setting, or sends an announcement as applicable. */
 void tui_state_setting_activate(tui_state_t *state);
 bool tui_state_setting_apply(tui_state_t *state);

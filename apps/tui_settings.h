@@ -16,6 +16,8 @@
 #define TUI_SETTINGS_RRC_NICK_MAX 32u
 #define TUI_SETTINGS_RRC_ROOM_MAX 64u
 #define TUI_SETTINGS_RRC_DRAFT_MAX 350u
+#define TUI_SETTINGS_HOST_ROOT_MAX 512u
+#define TUI_SETTINGS_HOST_PAGES_MAX 1024u
 
 typedef struct {
     uint16_t format_version;
@@ -33,6 +35,10 @@ typedef struct {
     char rrc_last_room[TUI_SETTINGS_RRC_ROOM_MAX + 1u];
     char rrc_draft[TUI_SETTINGS_RRC_DRAFT_MAX + 1u];
     bool rrc_auto_reconnect;
+    bool host_enabled;
+    bool host_identified_only;
+    char host_pages_root[TUI_SETTINGS_HOST_ROOT_MAX + 1u];
+    char host_pages[TUI_SETTINGS_HOST_PAGES_MAX + 1u]; /* Semicolon-separated relative pages. */
     /* Complete unrecognised v2 TLV records, retained verbatim on save. */
     uint8_t unknown_records[TUI_SETTINGS_UNKNOWN_MAX];
     size_t unknown_records_length;
