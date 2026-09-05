@@ -2,6 +2,7 @@
 #include "reticulum/boards/heltec_status_ui.h"
 
 #include <stdio.h>
+#include <inttypes.h>
 #include <string.h>
 
 static size_t utf8_sequence_length(uint8_t first) {
@@ -88,6 +89,57 @@ static uint16_t glyph_bits(char character) {
         case ':': return 0x0082U; case '-': return 0x00e0U;
         case '.': return 0x1000U; case '/': return 0x0124U;
         case ' ': return 0U; default: return 0x1555U;
+    }
+}
+
+static const uint8_t *large_glyph(char character) {
+    /* Seven rows of five pixels, most significant used bit at the left. */
+    static const uint8_t letters[26][7] = {
+        {14,17,17,31,17,17,17}, {30,17,17,30,17,17,30},
+        {14,17,16,16,16,17,14}, {30,17,17,17,17,17,30},
+        {31,16,16,30,16,16,31}, {31,16,16,30,16,16,16},
+        {14,17,16,23,17,17,15}, {17,17,17,31,17,17,17},
+        {14,4,4,4,4,4,14}, {7,2,2,2,18,18,12},
+        {17,18,20,24,20,18,17}, {16,16,16,16,16,16,31},
+        {17,27,21,21,17,17,17}, {17,25,25,21,19,19,17},
+        {14,17,17,17,17,17,14}, {30,17,17,30,16,16,16},
+        {14,17,17,17,21,18,13}, {30,17,17,30,20,18,17},
+        {15,16,16,14,1,1,30}, {31,4,4,4,4,4,4},
+        {17,17,17,17,17,17,14}, {17,17,17,17,17,10,4},
+        {17,17,17,21,21,27,17}, {17,17,10,4,10,17,17},
+        {17,17,10,4,4,4,4}, {31,1,2,4,8,16,31}
+    };
+    static const uint8_t digits[10][7] = {
+        {14,17,19,21,25,17,14}, {4,12,4,4,4,4,14},
+        {14,17,1,2,4,8,31}, {30,1,1,14,1,1,30},
+        {2,6,10,18,31,2,2}, {31,16,16,30,1,1,30},
+        {14,16,16,30,17,17,14}, {31,1,2,4,8,8,8},
+        {14,17,17,14,17,17,14}, {14,17,17,15,1,1,14}
+    };
+    static const uint8_t dot[7] = {0,0,0,0,0,4,4};
+    static const uint8_t blank[7] = {0};
+    if (character >= 'A' && character <= 'Z') return letters[character - 'A'];
+    if (character >= '0' && character <= '9') return digits[character - '0'];
+    return character == '.' ? dot : blank;
+}
+
+static void draw_large_line(uint8_t *frame, size_t row, const char *text) {
+    if (row >= 4U) return;
+    for (size_t column = 0U; column < 10U && text[column] != '\0'; column++) {
+        const uint8_t *glyph = large_glyph(text[column]);
+        for (size_t y = 0U; y < 7U; y++) {
+            for (size_t x = 0U; x < 5U; x++) {
+                if ((glyph[y] & (1U << (4U - x))) == 0U) continue;
+                for (size_t dy = 0U; dy < 2U; dy++) {
+                    size_t pixel_y = row * 16U + y * 2U + dy;
+                    for (size_t dx = 0U; dx < 2U; dx++) {
+                        size_t pixel_x = column * 12U + x * 2U + dx;
+                        frame[pixel_x + (pixel_y / 8U) * 128U] |=
+                            (uint8_t)(1U << (pixel_y % 8U));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -193,7 +245,7 @@ void rns_heltec_oled_set_settings(rns_heltec_oled_t *oled,
         memset(oled->model.preview, 0, sizeof(oled->model.preview));
         oled->preview_deadline_ms = 0U;
     }
-    if (oled->settings.screen > RNS_HELTEC_OLED_SCREEN_ROUTES)
+    if (oled->settings.screen > RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS)
         oled->settings.screen = RNS_HELTEC_OLED_SCREEN_STATUS;
     oled->dirty = true;
     if (!oled->ready || oled->failed) return;
@@ -229,6 +281,24 @@ void rns_heltec_oled_set_status(rns_heltec_oled_t *oled,
     oled->model.peer_count = peers;
     oled->model.route_count = routes;
     oled->model.unread_count = unread;
+    oled->dirty = true;
+}
+
+void rns_heltec_oled_set_diagnostics(rns_heltec_oled_t *oled,
+                                     const char *radio,
+                                     uint32_t heap_free_bytes,
+                                     uint64_t rx_packets,
+                                     int16_t rssi_dbm,
+                                     int16_t snr_db,
+                                     bool signal_valid) {
+    if (oled == NULL) return;
+    copy_text(oled->model.radio, sizeof(oled->model.radio), radio);
+    oled->model.heap_free_bytes = heap_free_bytes;
+    oled->model.rx_packets = rx_packets;
+    oled->model.rssi_dbm = rssi_dbm;
+    oled->model.snr_db = snr_db;
+    oled->model.signal_valid = signal_valid;
+    oled->settings.screen = RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS;
     oled->dirty = true;
 }
 
@@ -268,10 +338,27 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
     if (oled == NULL || !oled->ready || oled->failed) return false;
     if (!oled->settings.enabled || !oled->dirty) return true;
     memset(oled->frame, 0, sizeof(oled->frame));
-    draw_line(oled->frame, 0U, "RETICULUM");
+    if (oled->settings.screen != RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS)
+        draw_line(oled->frame, 0U, "RETICULUM");
     if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MESSAGE) {
         draw_line(oled->frame, 1U, "MESSAGE PREVIEW");
         draw_wrapped(oled->frame, 2U, 8U, oled->model.preview);
+    } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS) {
+        const char *state = "NO RNS";
+        if (strstr(oled->model.radio, "FAULT") != NULL) state = "FAULT";
+        else if (strstr(oled->model.radio, "ERROR") != NULL) state = "ERROR";
+        else if (strstr(oled->model.radio, "RX") != NULL) state = "RX ONLY";
+        draw_large_line(oled->frame, 0U, state);
+        draw_large_line(oled->frame, 1U,
+                         strstr(oled->model.radio, "868.2") != NULL ? "868.2 SF8" : "NO RNS");
+        uint64_t count = oled->model.rx_packets;
+        if (count > UINT64_C(99999999)) count = UINT64_C(99999999);
+        (void)snprintf(line, sizeof(line), "RX%" PRIu64, count);
+        draw_large_line(oled->frame, 2U, line);
+        uint32_t kib = oled->model.heap_free_bytes / 1024U;
+        if (kib > 99999U) kib = 99999U;
+        (void)snprintf(line, sizeof(line), "HEAP%" PRIu32 "K", kib);
+        draw_large_line(oled->frame, 3U, line);
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_ROUTES) {
         draw_line(oled->frame, 1U, "NETWORK");
         (void)snprintf(line, sizeof(line), "PEERS %u",

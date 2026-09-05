@@ -72,7 +72,7 @@ static int ck(int ok, const char *m) {
   return ok ? 0 : 1;
 }
 int main(void) {
-  log_t l = {.status_byte = 0x24U, .sync_readback_valid = true};
+  log_t l = {.status_byte = 0x34U, .sync_readback_valid = true};
   rns_sx1262_config_t c;
   const rns_sx1262_chip_ops_t *o = rns_sx1262_semtech_chip_ops();
   int f = 0;
@@ -128,7 +128,9 @@ int main(void) {
                   RNS_OK &&
               has(&l, 0x0e, (const uint8_t[]){0, 0xaa, 0xbb}, 3),
           "TX buffer");
+  l.status_byte = 0x54U;
   f += ck(o->start_rx(&l, &c) == RNS_OK, "continuous RX");
+  l.status_byte = 0x34U;
   f += ck(o->start_cad(&l, &c) == RNS_OK &&
               has(&l, 0x88, (const uint8_t[]){2, 21, 10, 0, 0, 0, 0}, 7) &&
               has(&l, 0xc5, (const uint8_t[]){0}, 0),
@@ -152,7 +154,7 @@ int main(void) {
   f += ck(o->configure(&l, &c) == RNS_ERROR_INVALID_ARGUMENT,
           "unsupported bandwidth rejected");
   {
-    log_t initial_xosc = {.status_byte = 0x24U,
+    log_t initial_xosc = {.status_byte = 0x34U,
                           .sync_readback_valid = true,
                           .initial_errors = SX126X_ERRORS_XOSC_START};
     rns_sx1262_default_config(&c);
@@ -161,7 +163,7 @@ int main(void) {
             "stale startup XOSC error cleared before calibration");
   }
   {
-    log_t bad_health = {.status_byte = 0x24U,
+    log_t bad_health = {.status_byte = 0x34U,
                         .sync_readback_valid = true,
                         .initial_errors = SX126X_ERRORS_PLL_LOCK};
     rns_sx1262_default_config(&c);
@@ -173,6 +175,24 @@ int main(void) {
     rns_sx1262_default_config(&c);
     f += ck(o->configure(&disconnected, &c) == RNS_ERROR_PROTOCOL,
             "invalid chip status rejected");
+  }
+  for (unsigned mode = 0; mode < 8; ++mode) {
+    for (unsigned cmd = 0; cmd < 8; ++cmd) {
+      log_t sample = {.status_byte = (uint8_t)((mode << 4U) | (cmd << 1U)),
+                      .sync_readback_valid = true};
+      bool non_error = cmd == 1U || cmd == 2U || cmd == 6U;
+      rns_sx1262_default_config(&c);
+      f += ck((o->configure(&sample, &c) == RNS_OK) ==
+              (mode == 3U && non_error), "standby mode/status matrix");
+      sample.count = 0;
+      f += ck((o->start_rx(&sample, &c) == RNS_OK) ==
+              (mode == 5U && non_error), "RX mode/status matrix");
+    }
+  }
+  {
+    log_t broken_readback = {.status_byte = 0x32U, .sync_readback_valid = false};
+    f += ck(o->configure(&broken_readback, &c) == RNS_ERROR_PROTOCOL,
+            "RFU command status cannot bypass register readback");
   }
   return f ? 1 : 0;
 }

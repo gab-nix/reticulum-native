@@ -1,6 +1,18 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "reticulum/heltec_sx1262.h"
 #include "sx126x.h"
+#ifdef ESP_PLATFORM
+#include "esp_log.h"
+#endif
+static rns_status_t protocol_error(const char *stage, unsigned value) {
+#ifdef ESP_PLATFORM
+  ESP_LOGE("sx1262", "Initialization check %s failed: 0x%x", stage, value);
+#else
+  (void)stage;
+  (void)value;
+#endif
+  return RNS_ERROR_PROTOCOL;
+}
 static rns_status_t mapped(sx126x_status_t s) {
   switch (s) {
   case SX126X_STATUS_OK:
@@ -58,12 +70,15 @@ static void image_calibration_band(uint32_t hz, uint8_t *low, uint8_t *high) {
     *high = 0x6fU;
   }
 }
-static bool command_status_valid(const sx126x_chip_status_t *status) {
-  return status && status->cmd_status != SX126X_CMD_STATUS_RESERVED &&
-         status->cmd_status != SX126X_CMD_STATUS_RFU &&
-         status->cmd_status != SX126X_CMD_STATUS_CMD_TIMEOUT &&
-         status->cmd_status != SX126X_CMD_STATUS_CMD_PROCESS_ERROR &&
-         status->cmd_status != SX126X_CMD_STATUS_CMD_EXEC_FAILURE;
+static bool command_status_valid(const sx126x_chip_status_t *status,
+                                 sx126x_chip_modes_t expected_mode) {
+  /* V3.1 hardware reports command=1 after SetStandby. That field is RFU,
+     not a documented error; never use it alone as evidence of health.
+     Require the commanded mode plus the configuration error/readback checks. */
+  return status && status->chip_mode == expected_mode &&
+         (status->cmd_status == SX126X_CMD_STATUS_RFU ||
+          status->cmd_status == SX126X_CMD_STATUS_DATA_AVAILABLE ||
+          status->cmd_status == SX126X_CMD_STATUS_CMD_TX_DONE);
 }
 static sx126x_pkt_params_lora_t packet_params(const rns_sx1262_config_t *cfg,
                                               uint8_t payload_size) {
@@ -101,7 +116,7 @@ static rns_status_t configure(void *c, const rns_sx1262_config_t *cfg) {
     s = sx126x_get_device_errors(c, &errors);
   if (s == SX126X_STATUS_OK &&
       (errors & (sx126x_errors_mask_t)~SX126X_ERRORS_XOSC_START) != 0U)
-    return RNS_ERROR_PROTOCOL;
+    return protocol_error("reset-errors", errors);
   if (s == SX126X_STATUS_OK && errors != 0U)
     s = sx126x_clear_device_errors(c);
   if (s == SX126X_STATUS_OK)
@@ -109,7 +124,7 @@ static rns_status_t configure(void *c, const rns_sx1262_config_t *cfg) {
   if (s == SX126X_STATUS_OK)
     s = sx126x_get_device_errors(c, &errors);
   if (s == SX126X_STATUS_OK && errors != 0U)
-    return RNS_ERROR_PROTOCOL;
+    return protocol_error("tcxo-errors", errors);
   if (s == SX126X_STATUS_OK)
     s = sx126x_set_dio2_as_rf_sw_ctrl(c, true);
   if (s == SX126X_STATUS_OK)
@@ -121,13 +136,19 @@ static rns_status_t configure(void *c, const rns_sx1262_config_t *cfg) {
   if (s == SX126X_STATUS_OK)
     s = sx126x_get_device_errors(c, &errors);
   if (s == SX126X_STATUS_OK && errors != 0U)
-    return RNS_ERROR_PROTOCOL;
+    return protocol_error("calibration-errors", errors);
   if (s == SX126X_STATUS_OK)
     s = sx126x_set_standby(c, SX126X_STANDBY_CFG_XOSC);
   if (s == SX126X_STATUS_OK)
     s = sx126x_get_status(c, &status);
-  if (s == SX126X_STATUS_OK && !command_status_valid(&status))
-    return RNS_ERROR_PROTOCOL;
+#ifdef ESP_PLATFORM
+  if (s == SX126X_STATUS_OK)
+    ESP_LOGI("sx1262", "Standby status: mode=%u command=%u",
+             (unsigned)status.chip_mode, (unsigned)status.cmd_status);
+#endif
+  if (s == SX126X_STATUS_OK &&
+      !command_status_valid(&status, SX126X_CHIP_MODE_STBY_XOSC))
+    return protocol_error("command-status", (unsigned)status.cmd_status);
   if (s == SX126X_STATUS_OK)
     s = sx126x_set_pkt_type(c, SX126X_PKT_TYPE_LORA);
   if (s == SX126X_STATUS_OK)
@@ -144,7 +165,7 @@ static rns_status_t configure(void *c, const rns_sx1262_config_t *cfg) {
     s = sx126x_read_register(c, 0x0740U, sync_word, sizeof(sync_word));
   if (s == SX126X_STATUS_OK &&
       (sync_word[0] != 0x14U || sync_word[1] != 0x24U))
-    return RNS_ERROR_PROTOCOL;
+    return protocol_error("sync-readback", ((unsigned)sync_word[0] << 8U) | sync_word[1]);
   if (s == SX126X_STATUS_OK)
     s = sx126x_set_pa_cfg(c, &pa);
   if (s == SX126X_STATUS_OK)
@@ -196,6 +217,12 @@ static rns_status_t start_rx(void *c, const rns_sx1262_config_t *cfg) {
   sx126x_status_t s = sx126x_set_lora_pkt_params(c, &p);
   if (s == SX126X_STATUS_OK)
     s = sx126x_set_rx_with_timeout_in_rtc_step(c, SX126X_RX_CONTINUOUS);
+  sx126x_chip_status_t status = {0};
+  if (s == SX126X_STATUS_OK) s = sx126x_get_status(c, &status);
+  if (s == SX126X_STATUS_OK &&
+      !command_status_valid(&status, SX126X_CHIP_MODE_RX))
+    return protocol_error("rx-mode", ((unsigned)status.chip_mode << 4U) |
+                          ((unsigned)status.cmd_status << 1U));
   return mapped(s);
 }
 static rns_status_t start_tx(void *c, const rns_sx1262_config_t *cfg,

@@ -68,12 +68,19 @@ the complete invocation, and guarded commands are unavailable unless the
 adapter supplies secure randomness and SHA-256. OLED message previews have a
 separate enable setting; disabling previews immediately clears retained text.
 
-These cores are intentionally not connected in `app_main.c` yet. A later
-integration change must supply the ESP-IDF I2C/UART0 adapters and register
-device, identity, radio, path, and LXMF handlers. The shell only dispatches
-application handlers; it cannot construct Reticulum packets or access private
-identity material by itself. The firmware still does not provide the Heltec
-SPI/IRQ radio backend, active OLED display, Reticulum runtime, or LXMF services.
+The firmware now starts the SSD1306 through an ESP-IDF I2C adapter and opens
+the SX1262 in receive-only mode after its crypto/storage boot checks. The
+large-text diagnostic display shows radio state, free heap and RX count.
+Display failures do not stop radio receive. The USB console
+reports health counters without packet contents; received payloads are
+discarded until protocol dispatch is integrated. No RF transmission is queued.
+The profile uses 868.2 MHz, 125 kHz bandwidth, SF8, CR4/5 and an 18-symbol
+preamble. Actual over-air reception still requires a matching external peer.
+
+The UART command shell, persistent identity, Reticulum runtime and LXMF
+services are not yet connected. The shell core only dispatches application
+handlers; it cannot construct Reticulum packets or access private identity
+material by itself.
 
 The descriptor follows Heltec's official V3 board pin definition and the
 upstream RNode `BOARD_HELTEC32_V3` mapping. V3.1 keeps the V3 radio/display

@@ -16,6 +16,18 @@ function(reticulum_add_test name source)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 reticulum_add_test(test_runtime_provider unit/test_runtime_provider.c)
+add_executable(test_heltec_bringup unit/test_heltec_bringup.c
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/bringup.c)
+target_include_directories(test_heltec_bringup PRIVATE
+    heltec_bringup_fakes ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/components/heltec_status_ui/include
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/components/heltec_sx1262/include
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/components/heltec_v3_1_bsp/include)
+target_compile_definitions(test_heltec_bringup PRIVATE ESP_PLATFORM)
+target_compile_features(test_heltec_bringup PRIVATE c_std_17)
+reticulum_set_project_warnings(test_heltec_bringup)
+add_test(NAME test_heltec_bringup COMMAND test_heltec_bringup)
 add_test(NAME test_heltec_boot_config COMMAND ${CMAKE_COMMAND}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/heltec_boot_config.cmake)
 
