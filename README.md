@@ -97,12 +97,19 @@ separate enable setting; disabling previews immediately clears retained text.
 
 The firmware now starts the SSD1306 through an ESP-IDF I2C adapter and opens
 the SX1262 in receive-only mode after its crypto/storage boot checks. The
-large-text diagnostic display shows radio state, free heap and RX count.
+large-text diagnostic display shows radio state, RX count and unique verified
+identity count (`IDS`). Identities are not physical device counts: one identity
+can advertise multiple services, and one device can host multiple identities.
 Display failures do not stop radio receive. The USB console
-reports health counters without packet contents; received payloads are
-discarded until protocol dispatch is integrated. No RF transmission is queued.
+reports health counters without packet contents. RNode frames are reassembled
+and announces are signature-verified before entering a bounded 32-destination
+diagnostic table. Duplicate and older announces do not refresh entries; entries
+expire after an hour. This is not yet a routing or messaging service. IFAC-protected
+packets are rejected until interface credentials are supported. No RF transmission is queued.
 The receive-only profile uses 868.100 MHz, 250 kHz bandwidth, SF11, CR4/5 and an 18-symbol
-preamble. Actual over-air reception still requires a matching external peer.
+preamble. Raw over-air reception has been observed with a matching external peer;
+incoming announces have also passed signature verification on the board, with
+stable heap and more than 2 KiB stack headroom. Outbound interoperability remains unverified.
 
 The UART command shell, persistent identity, Reticulum runtime and LXMF
 services are not yet connected. The shell core only dispatches application

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "bringup.h"
+#include "radio_discovery.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -10,6 +11,8 @@
 #include <inttypes.h>
 
 static const char *TAG = "bringup";
+/* Keep bounded receive state off the crypto verification task stack. */
+static heltec_radio_discovery discovery;
 
 static const char *radio_state(rns_status_t status, rns_sx1262_state_t state) {
     if (status != RNS_OK) return "RADIO ERROR";
@@ -24,6 +27,7 @@ static const char *radio_state(rns_status_t status, rns_sx1262_state_t state) {
 }
 
 void heltec_bringup_run(void) {
+    heltec_radio_discovery_init(&discovery);
     rns_heltec_oled_esp_t *display = NULL;
     rns_heltec_sx1262_t *radio = NULL;
     rns_sx1262_config_t config;
@@ -47,12 +51,13 @@ void heltec_bringup_run(void) {
     for (;;) {
         uint64_t now_ms = (uint64_t)esp_timer_get_time() / 1000U;
         rns_sx1262_stats_t stats = {0};
+        heltec_radio_discovery_poll(&discovery, now_ms);
         if (radio != NULL) {
-            /* Bound each pass and discard payloads without logging private
-               message bodies. Reticulum packet dispatch lands separately. */
+            /* Bound work; only verified announce metadata survives this pass. */
             for (size_t i = 0U; i < RNS_SX1262_RX_QUEUE_CAPACITY; ++i) {
                 rns_sx1262_packet_t packet;
                 if (rns_heltec_sx1262_receive(radio, &packet) != RNS_OK) break;
+                heltec_radio_discovery_receive(&discovery, packet.data, packet.length, now_ms);
             }
             radio_status = rns_heltec_sx1262_get_stats(radio, &stats);
         }
@@ -60,6 +65,7 @@ void heltec_bringup_run(void) {
         if (now_ms >= next_display_ms) {
             if (display_ready) {
                 rns_heltec_oled_t *core = rns_heltec_oled_esp_core(display);
+                rns_heltec_oled_set_discovery_count(core, (uint16_t)discovery.identity_count);
                 rns_heltec_oled_set_diagnostics(core, state,
                     (uint32_t)heap_caps_get_free_size(MALLOC_CAP_8BIT),
                     stats.rx_packets, stats.last_rssi_dbm, stats.last_snr_db,
@@ -73,6 +79,11 @@ void heltec_bringup_run(void) {
             next_display_ms = now_ms + 1000U;
         }
         if (now_ms >= next_log_ms) {
+            ESP_LOGI(TAG, "Discovery packets=%" PRIu64 " verified=%" PRIu64
+                " destinations=%u identities=%u invalid=%" PRIu64 " duplicate=%" PRIu64 " stale=%" PRIu64,
+                discovery.packets, discovery.verified, (unsigned)discovery.peer_count,
+                (unsigned)discovery.identity_count,
+                discovery.invalid, discovery.duplicates, discovery.stale);
             ESP_LOGI(TAG, "%s rx=%" PRIu64 " tx=%" PRIu64 " crc=%" PRIu64
                 " overflow=%" PRIu64 " recovery=%" PRIu64 " error=%d api=%d heap=%lu stack=%lu oled=%s",
                 state, stats.rx_packets, stats.tx_packets, stats.crc_errors,

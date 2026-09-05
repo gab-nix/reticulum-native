@@ -16,8 +16,15 @@ function(reticulum_add_test name source)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 reticulum_add_test(test_runtime_provider unit/test_runtime_provider.c)
+reticulum_add_test(test_heltec_discovery unit/test_heltec_discovery.c)
+target_sources(test_heltec_discovery PRIVATE
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/radio_discovery.c)
+target_include_directories(test_heltec_discovery PRIVATE
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main)
 add_executable(test_heltec_bringup unit/test_heltec_bringup.c
-    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/bringup.c)
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/bringup.c
+    ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main/radio_discovery.c)
+target_link_libraries(test_heltec_bringup PRIVATE reticulum::reticulum)
 target_include_directories(test_heltec_bringup PRIVATE
     heltec_bringup_fakes ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/firmware/heltec_wifi_lora_32_v3_1/main

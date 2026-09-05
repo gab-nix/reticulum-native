@@ -146,6 +146,9 @@ int main(void) {
                                    99999999U, -120, -8, true);
     assert(rns_heltec_oled_render(&oled));
     assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) == 0);
+    rns_heltec_oled_set_discovery_count(&oled, 32U);
+    assert(oled.model.discovery_active && oled.model.peer_count == 32U);
+    assert(rns_heltec_oled_render(&oled));
     rns_heltec_oled_set_diagnostics(&oled, "FAULT", 4096U, 1U, 0, 0, false);
     assert(rns_heltec_oled_render(&oled));
     assert_large_font_grid(oled.frame);

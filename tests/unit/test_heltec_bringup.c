@@ -53,6 +53,9 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *handle) {
     ++fake.renders;
     return fake.render_ok;
 }
+void rns_heltec_oled_set_discovery_count(rns_heltec_oled_t *handle, uint16_t peers) {
+    assert(handle == &core && peers == 0U);
+}
 void rns_sx1262_default_config(rns_sx1262_config_t *config) {
     memset(config, 0, sizeof(*config));
     config->frequency_hz = 868200000U;
@@ -75,6 +78,7 @@ rns_status_t rns_heltec_sx1262_open_with_config(
 rns_status_t rns_heltec_sx1262_receive(rns_heltec_sx1262_t *handle,
     rns_sx1262_packet_t *packet) {
     assert(handle == &radio && packet != NULL);
+    memset(packet, 0, sizeof(*packet));
     ++fake.receives;
     ++fake.receives_this_loop;
     assert(fake.receives_this_loop <= RNS_SX1262_RX_QUEUE_CAPACITY);
