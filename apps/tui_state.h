@@ -217,6 +217,9 @@ typedef struct tui_state {
     bool filter_dirty;
 
     tui_editor_t composer;
+    tui_editor_t command;
+    bool command_active;
+    char last_command[128];
     tui_editor_t reaction;
     tui_compose_reference_t compose_reference;
     tui_editor_t search;

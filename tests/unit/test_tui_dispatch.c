@@ -678,7 +678,49 @@ static void test_address_qr_shortcuts(void) {
     state_destroy(state);
 }
 
+static void command_type(tui_state_t *state, const char *text) {
+    assert(tui_dispatch_key(state, ':') && state->command_active);
+    for (size_t i = 0u; text[i] != '\0'; ++i)
+        assert(tui_dispatch_key(state, (unsigned char)text[i]));
+}
+
+static void test_command_mode(void) {
+    tui_state_t *state = state_create();
+    command_type(state, "network");
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->screen == TUI_SCREEN_NETWORK && !state->command_active);
+    command_type(state, "!touch forbidden");
+    assert(tui_dispatch_key(state, '\n'));
+    assert(state->command_active && strstr(state->status, "Unknown command") != NULL);
+    assert(state->screen == TUI_SCREEN_NETWORK);
+    assert(tui_dispatch_key(state, 27) && !state->command_active);
+    command_type(state, "chats");
+    assert(tui_dispatch_key(state, '\n') && state->screen == TUI_SCREEN_CONVERSATIONS);
+    assert(tui_dispatch_key(state, ':'));
+    assert(tui_dispatch_key(state, KEY_UP));
+    assert(strcmp(state->command.text, "chats") == 0);
+    assert(tui_dispatch_key(state, 27));
+    state->thread_layout_valid = true; state->thread_scroll_limit = 20u;
+    assert(tui_dispatch_key(state, 21) && state->scroll == 5u);
+    assert(tui_dispatch_key(state, 4) && state->scroll == 0u);
+    state->field = TUI_FIELD_COMPOSE;
+    assert(tui_dispatch_key(state, ':'));
+    assert(!state->command_active && strcmp(state->composer.text, ":") == 0);
+    assert(tui_dispatch_key(state, 27));
+    command_type(state, "announce");
+    assert(tui_dispatch_key(state, '\n') && !state->command_active);
+    assert(strstr(state->status, "offline") != NULL);
+    assert(strcmp(state->composer.text, ":") == 0);
+    state->overlay = TUI_OVERLAY_HELP;
+    assert(tui_dispatch_key(state, ':') && !state->command_active);
+    assert(tui_dispatch_key(state, 27));
+    command_type(state, "q");
+    assert(!tui_dispatch_key(state, '\n'));
+    state_destroy(state);
+}
+
 int main(void) {
+    test_command_mode();
     test_address_qr_shortcuts();
     assert(!tui_dispatch_key(NULL, '\n'));
     test_screen_scoping();

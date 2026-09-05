@@ -78,6 +78,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Feature | Status | Remaining work |
 | --- | --- | --- |
 | Terminal application shell and screen dispatcher | IMPLEMENTED | Additional accessibility controls |
+| Command popup and framed editor | IMPLEMENTED | Bounded app-only `:` commands, previous-command recall, Normal/Insert/Command labels, wider framed composer with byte count, wrapped popup feedback and single-frame modal rendering. `test_tui_dispatch` checks command isolation, unknown commands, quit, offline announce, draft preservation and Ctrl-U/D; `test_tui_settings_ui` checks 38x10 popup cursor and textbox bounds. Full Vim motions, completion, safe bracketed paste and redesign of remaining dialogs are WIP |
 | Conversation list and message composer | WIP | Notifications and complete attachment workflows |
 | Wrapped conversation text and composing | IMPLEMENTED | Word-wrapped cached bodies/metadata, preserved LF, visual-row scrolling, a cursor-following multirow composer (Ctrl-N newline, Enter send, Up/Down movement), terminal-cell-aware clipping and connection/node/unread/traffic bar. `test_tui_text`, `test_tui_editor`, `test_tui_settings_ui` cover long lines, wide/combining text, vertical motion, narrow cursor position and scrolling. Existing 4096-byte preview limit and rich browser/RRC/dialog wrapping remain WIP |
 | Per-conversation drafts | IMPLEMENTED | Draft management controls |
