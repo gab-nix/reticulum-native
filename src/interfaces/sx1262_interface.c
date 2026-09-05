@@ -445,6 +445,9 @@ static rns_status_t handle_rx_event(
         return RNS_ERROR_PROTOCOL;
     }
     interface_value->stats.rx_frames++;
+    interface_value->stats.signal_valid = true;
+    interface_value->stats.last_rssi_dbm = event->rssi_dbm;
+    interface_value->stats.last_snr_db = event->snr_db;
     status = rns_radio_reassembler_feed(
         &interface_value->reassembler, event->frame, event->frame_length,
         now_ms, receive_frame_callback, &dispatch);
@@ -1007,6 +1010,9 @@ static rns_status_t adapter_get_stats(void *context,
     }
     stats->effective_mtu = RNS_RADIO_PACKET_MTU;
     stats->radio_telemetry_valid = 1;
+    stats->radio_signal_valid = scheduler_stats.signal_valid;
+    stats->radio_last_rssi_dbm = scheduler_stats.last_rssi_dbm;
+    stats->radio_last_snr_db = scheduler_stats.last_snr_db;
     stats->radio_rx_frames = scheduler_stats.rx_frames;
     stats->radio_tx_frames = scheduler_stats.frames_sent;
     stats->radio_cad_busy = scheduler_stats.cad_busy;

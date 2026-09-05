@@ -12,6 +12,10 @@ int main(void) {
     s.radio_tx_frames = 1; s.radio_cad_busy = 1;
     heltec_channel_sample(&v, 2000, &s); assert(v.samples[59] == 6);
     heltec_channel_lines(&v, &s, lines);
+    assert(!strcmp(lines[6], "LAST SIGNAL UNKNOWN"));
+    s.radio_signal_valid = 1; s.radio_last_rssi_dbm = -112; s.radio_last_snr_db = -7;
+    heltec_channel_lines(&v, &s, lines);
+    assert(!strcmp(lines[6], "R-112 S-7 LAST"));
     assert(lines[1][20] == '*' && lines[2][20] == '*' && lines[3][20] == '*');
     heltec_channel_sample(&v, 5000, &s); assert(v.samples[59] == 8);
     heltec_channel_sample(&v, 100000, &s);

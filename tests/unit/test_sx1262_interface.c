@@ -185,6 +185,7 @@ static void push_frame(fake_phy_t *phy, const uint8_t *frame,
     memcpy(phy->event_frames[tail], frame, frame_length);
     phy->events[tail] = (rns_sx1262_phy_event_t){
         .type = RNS_SX1262_PHY_EVENT_RX_FRAME,
+        .rssi_dbm = -112, .snr_db = -7,
         .frame = phy->event_frames[tail],
         .frame_length = frame_length};
     phy->event_count++;
@@ -827,6 +828,7 @@ static void test_rx_reassembly_malformed_overflow_and_reentrancy(void) {
         assert(rns_sx1262_interface_get_stats(interface_value, &stats) ==
                RNS_OK);
         assert(stats.rx_malformed >= 2U && stats.rx_overflows >= 1U);
+        assert(stats.signal_valid && stats.last_rssi_dbm == -112 && stats.last_snr_db == -7);
     }
     rns_sx1262_interface_destroy(interface_value);
 }

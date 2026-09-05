@@ -26,6 +26,8 @@ typedef struct rns_interface_stats {
     int broadcast;
     /* Optional radio telemetry; zero validity means unavailable, not quiet. */
     int radio_telemetry_valid;
+    int radio_signal_valid;
+    int16_t radio_last_rssi_dbm, radio_last_snr_db;
     uint64_t radio_rx_frames, radio_tx_frames, radio_cad_busy;
     uint64_t radio_airtime_us, radio_duty_deferrals;
 } rns_interface_stats_t;

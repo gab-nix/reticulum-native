@@ -42,6 +42,8 @@ void heltec_channel_lines(const heltec_channel_view *v,
         (void)snprintf(lines[5], 22, "QUEUE %u DEF %u", (unsigned)(s->pending_tx > 999U ? 999U : s->pending_tx),
             (unsigned)(s->radio_duty_deferrals > 999U ? 999U : s->radio_duty_deferrals));
     } else memcpy(lines[4], "RADIO UNAVAILABLE", 18U);
-    memcpy(lines[6], "B CAD BUSY  ? UNKNOWN", 22U);
+    if (s->radio_telemetry_valid && s->radio_signal_valid)
+        (void)snprintf(lines[6], 22, "R%d S%d LAST", (int)s->radio_last_rssi_dbm, (int)s->radio_last_snr_db);
+    else memcpy(lines[6], "LAST SIGNAL UNKNOWN", 20U);
     memcpy(lines[7], "HOLD MENU", 10U);
 }
