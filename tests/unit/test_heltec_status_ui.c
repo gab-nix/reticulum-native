@@ -154,6 +154,10 @@ int main(void) {
     assert_large_font_grid(oled.frame);
     assert(memcmp(status_frame, oled.frame, sizeof(status_frame)) != 0);
     settings.screen = RNS_HELTEC_OLED_SCREEN_STATUS;
+    rns_heltec_oled_set_menu(&oled, "LAST MSG");
+    assert(oled.settings.screen == RNS_HELTEC_OLED_SCREEN_MENU);
+    assert(rns_heltec_oled_render(&oled));
+    assert_large_font_grid(oled.frame);
     rns_heltec_oled_set_settings(&oled, &settings);
     assert(rns_heltec_oled_render(&oled));
 

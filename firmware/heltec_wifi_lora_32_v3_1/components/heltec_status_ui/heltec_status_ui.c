@@ -270,7 +270,7 @@ void rns_heltec_oled_set_settings(rns_heltec_oled_t *oled,
         memset(oled->model.preview, 0, sizeof(oled->model.preview));
         oled->preview_deadline_ms = 0U;
     }
-    if (oled->settings.screen > RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS)
+    if (oled->settings.screen > RNS_HELTEC_OLED_SCREEN_MENU)
         oled->settings.screen = RNS_HELTEC_OLED_SCREEN_STATUS;
     oled->dirty = true;
     if (!oled->ready || oled->failed) return;
@@ -313,6 +313,12 @@ void rns_heltec_oled_set_discovery_count(rns_heltec_oled_t *oled, uint16_t peers
     if (oled == NULL) return;
     oled->model.discovery_active = true;
     oled->model.peer_count = peers;
+    oled->dirty = true;
+}
+void rns_heltec_oled_set_menu(rns_heltec_oled_t *oled, const char *label) {
+    if (!oled) return;
+    copy_text(oled->model.menu_label, sizeof(oled->model.menu_label), label);
+    oled->settings.screen = RNS_HELTEC_OLED_SCREEN_MENU;
     oled->dirty = true;
 }
 
@@ -377,9 +383,15 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
     if (!oled->settings.enabled || !oled->dirty) return true;
     memset(oled->frame, 0, sizeof(oled->frame));
     if (oled->settings.screen != RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS &&
-        oled->settings.screen != RNS_HELTEC_OLED_SCREEN_MESSAGE)
+        oled->settings.screen != RNS_HELTEC_OLED_SCREEN_MESSAGE &&
+        oled->settings.screen != RNS_HELTEC_OLED_SCREEN_MENU)
         draw_line(oled->frame, 0U, "RETICULUM");
-    if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MESSAGE) {
+    if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MENU) {
+        draw_large_line(oled->frame, 0U, "MENU");
+        draw_large_line(oled->frame, 1U, oled->model.menu_label);
+        draw_large_line(oled->frame, 2U, "TAP NEXT");
+        draw_large_line(oled->frame, 3U, "HOLD OPEN");
+    } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_MESSAGE) {
         draw_large_preview(oled);
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS) {
         const char *state = "NO RNS";

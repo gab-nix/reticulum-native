@@ -24,7 +24,8 @@ typedef enum {
     RNS_HELTEC_OLED_SCREEN_STATUS = 0,
     RNS_HELTEC_OLED_SCREEN_MESSAGE = 1,
     RNS_HELTEC_OLED_SCREEN_ROUTES = 2,
-    RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS = 3
+    RNS_HELTEC_OLED_SCREEN_DIAGNOSTICS = 3,
+    RNS_HELTEC_OLED_SCREEN_MENU = 4
 } rns_heltec_oled_screen_t;
 
 typedef struct {
@@ -49,6 +50,7 @@ typedef struct {
     int16_t snr_db;
     bool signal_valid;
     bool discovery_active;
+    char menu_label[32];
 } rns_heltec_oled_model_t;
 
 typedef struct {
@@ -100,6 +102,7 @@ void rns_heltec_oled_set_diagnostics(rns_heltec_oled_t *oled,
                                      bool signal_valid);
 void rns_heltec_oled_poll(rns_heltec_oled_t *oled, uint64_t now_ms);
 void rns_heltec_oled_set_discovery_count(rns_heltec_oled_t *oled, uint16_t peers);
+void rns_heltec_oled_set_menu(rns_heltec_oled_t *oled, const char *label);
 bool rns_heltec_oled_render(rns_heltec_oled_t *oled);
 bool rns_heltec_oled_is_ready(const rns_heltec_oled_t *oled);
 bool rns_heltec_oled_has_failed(const rns_heltec_oled_t *oled);
