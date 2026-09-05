@@ -34,10 +34,15 @@ struct rns_heltec_sx1262 {
   TaskHandle_t owner;
   bool bus_owned;
   bool isr_registered;
+  bool closing;
+  rns_sx1262_config_t config;
   rns_status_t owner_status;
 };
 static bool valid(const struct rns_heltec_sx1262 *d) {
   return d && d->magic == MAGIC && d->spi;
+}
+static bool usable(const struct rns_heltec_sx1262 *d) {
+  return valid(d) && !d->closing;
 }
 static bool busy(void *c) {
   (void)c;
@@ -113,14 +118,20 @@ static void dio1_isr(void *c) {
 static void owner_task(void *c) {
   struct rns_heltec_sx1262 *d = c;
   for (;;) {
+    EventBits_t bits;
     (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(OWNER_POLL_MS));
-    if ((xEventGroupGetBits(d->events) & OWNER_STOP_BIT) != 0U)
-      break;
-    if ((xEventGroupGetBits(d->events) & OWNER_RUN_BIT) == 0U)
-      continue;
     if (xSemaphoreTake(d->mutex, portMAX_DELAY) == pdTRUE) {
-      d->owner_status =
-          rns_sx1262_radio_poll(d->radio, RNS_SX1262_RX_QUEUE_CAPACITY);
+      /* Re-check lifecycle state after taking the mutex. A wakeup can race
+         close/stop before the owner acquires it; no radio command may begin
+         after closing is published or RUN is cleared. */
+      bits = xEventGroupGetBits(d->events);
+      if ((bits & OWNER_STOP_BIT) != 0U || d->closing) {
+        xSemaphoreGive(d->mutex);
+        break;
+      }
+      if ((bits & OWNER_RUN_BIT) != 0U)
+        d->owner_status =
+            rns_sx1262_radio_poll(d->radio, RNS_SX1262_RX_QUEUE_CAPACITY);
       xSemaphoreGive(d->mutex);
     }
   }
@@ -165,8 +176,9 @@ static rns_status_t spi_setup(struct rns_heltec_sx1262 *d) {
   return spi_bus_add_device(SPI2_HOST, &v, &d->spi) == ESP_OK ? RNS_OK
                                                               : RNS_ERROR_IO;
 }
-rns_status_t rns_heltec_sx1262_open_with_config(
-    const rns_sx1262_config_t *cfg, rns_heltec_sx1262_t **out) {
+static rns_status_t open_internal(const rns_sx1262_config_t *cfg,
+                                  bool start_radio,
+                                  rns_heltec_sx1262_t **out) {
   struct rns_heltec_sx1262 *d;
   rns_status_t s;
   esp_err_t e;
@@ -180,7 +192,12 @@ rns_status_t rns_heltec_sx1262_open_with_config(
   d->mutex = xSemaphoreCreateMutex();
   d->events = xEventGroupCreate();
   if (!d->mutex || !d->events) {
-    rns_heltec_sx1262_close(d);
+    if (d->events)
+      vEventGroupDelete(d->events);
+    if (d->mutex)
+      vSemaphoreDelete(d->mutex);
+    d->magic = 0U;
+    free(d);
     return RNS_ERROR_NO_MEMORY;
   }
   d->bus = (rns_sx1262_bus_t){
@@ -206,10 +223,12 @@ rns_status_t rns_heltec_sx1262_open_with_config(
                                  OWNER_PRIORITY, &d->owner) != pdPASS)
     s = RNS_ERROR_NO_MEMORY;
   if (s == RNS_OK) {
+    d->config = *cfg;
     d->bus.busy_timeout_us = cfg->busy_timeout_us;
-    s = rns_sx1262_radio_start(d->radio, cfg);
+    if (start_radio)
+      s = rns_sx1262_radio_start(d->radio, cfg);
   }
-  if (s == RNS_OK) {
+  if (s == RNS_OK && start_radio) {
     xEventGroupSetBits(d->events, OWNER_RUN_BIT);
     xTaskNotifyGive(d->owner);
   }
@@ -219,6 +238,14 @@ rns_status_t rns_heltec_sx1262_open_with_config(
   }
   *out = d;
   return RNS_OK;
+}
+rns_status_t rns_heltec_sx1262_open_with_config(
+    const rns_sx1262_config_t *cfg, rns_heltec_sx1262_t **out) {
+  return open_internal(cfg, true, out);
+}
+rns_status_t rns_heltec_sx1262_open_stopped_with_config(
+    const rns_sx1262_config_t *cfg, rns_heltec_sx1262_t **out) {
+  return open_internal(cfg, false, out);
 }
 rns_status_t rns_heltec_sx1262_open(rns_heltec_sx1262_t **out) {
   rns_sx1262_config_t cfg;
@@ -234,11 +261,12 @@ rns_status_t rns_heltec_sx1262_send_with_id(rns_heltec_sx1262_t *d,
                                             const uint8_t *p, size_t n,
                                             uint32_t *out_id) {
   rns_status_t s;
-  if (!valid(d) || !out_id)
+  if (!usable(d) || !out_id)
     return RNS_ERROR_INVALID_ARGUMENT;
   if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
     return RNS_ERROR_IO;
-  s = rns_sx1262_radio_send_with_id(d->radio, p, n, out_id);
+  s = usable(d) ? rns_sx1262_radio_send_with_id(d->radio, p, n, out_id)
+                : RNS_ERROR_INVALID_STATE;
   xSemaphoreGive(d->mutex);
   if (s == RNS_OK)
     xTaskNotifyGive(d->owner);
@@ -247,32 +275,35 @@ rns_status_t rns_heltec_sx1262_send_with_id(rns_heltec_sx1262_t *d,
 rns_status_t rns_heltec_sx1262_receive_tx_result(
     rns_heltec_sx1262_t *d, rns_sx1262_tx_result_t *result) {
   rns_status_t s;
-  if (!valid(d) || !result)
+  if (!usable(d) || !result)
     return RNS_ERROR_INVALID_ARGUMENT;
   if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
     return RNS_ERROR_IO;
-  s = rns_sx1262_radio_receive_tx_result(d->radio, result);
+  s = usable(d) ? rns_sx1262_radio_receive_tx_result(d->radio, result)
+                : RNS_ERROR_INVALID_STATE;
   xSemaphoreGive(d->mutex);
   return s;
 }
 rns_status_t rns_heltec_sx1262_receive(rns_heltec_sx1262_t *d,
                                        rns_sx1262_packet_t *p) {
   rns_status_t s;
-  if (!valid(d))
+  if (!usable(d))
     return RNS_ERROR_INVALID_ARGUMENT;
   if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
     return RNS_ERROR_IO;
-  s = rns_sx1262_radio_receive(d->radio, p);
+  s = usable(d) ? rns_sx1262_radio_receive(d->radio, p)
+                : RNS_ERROR_INVALID_STATE;
   xSemaphoreGive(d->mutex);
   return s;
 }
 rns_status_t rns_heltec_sx1262_start_cad(rns_heltec_sx1262_t *d) {
   rns_status_t s;
-  if (!valid(d))
+  if (!usable(d))
     return RNS_ERROR_INVALID_ARGUMENT;
   if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
     return RNS_ERROR_IO;
-  s = rns_sx1262_radio_start_cad(d->radio);
+  s = usable(d) ? rns_sx1262_radio_start_cad(d->radio)
+                : RNS_ERROR_INVALID_STATE;
   xSemaphoreGive(d->mutex);
   if (s == RNS_OK)
     xTaskNotifyGive(d->owner);
@@ -281,31 +312,77 @@ rns_status_t rns_heltec_sx1262_start_cad(rns_heltec_sx1262_t *d) {
 rns_status_t rns_heltec_sx1262_receive_cad_result(
     rns_heltec_sx1262_t *d, rns_sx1262_cad_result_t *result) {
   rns_status_t s;
-  if (!valid(d) || !result)
+  if (!usable(d) || !result)
     return RNS_ERROR_INVALID_ARGUMENT;
   if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
     return RNS_ERROR_IO;
-  s = rns_sx1262_radio_receive_cad_result(d->radio, result);
+  s = usable(d) ? rns_sx1262_radio_receive_cad_result(d->radio, result)
+                : RNS_ERROR_INVALID_STATE;
   xSemaphoreGive(d->mutex);
   return s;
 }
 rns_status_t rns_heltec_sx1262_get_stats(rns_heltec_sx1262_t *d,
                                          rns_sx1262_stats_t *s) {
   rns_status_t v;
-  if (!valid(d))
+  if (!usable(d))
     return RNS_ERROR_INVALID_ARGUMENT;
   if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
     return RNS_ERROR_IO;
-  v = rns_sx1262_radio_get_stats(d->radio, s);
+  v = usable(d) ? rns_sx1262_radio_get_stats(d->radio, s)
+                : RNS_ERROR_INVALID_STATE;
   if (v == RNS_OK && d->owner_status != RNS_OK)
     s->last_error = d->owner_status;
   xSemaphoreGive(d->mutex);
   return v;
 }
+rns_status_t rns_heltec_sx1262_stop(rns_heltec_sx1262_t *d) {
+  rns_status_t s;
+  if (!usable(d))
+    return RNS_ERROR_INVALID_ARGUMENT;
+  xEventGroupClearBits(d->events, OWNER_RUN_BIT);
+  if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
+    return RNS_ERROR_IO;
+  s = usable(d) ? rns_sx1262_radio_stop(d->radio)
+                : RNS_ERROR_INVALID_STATE;
+  xSemaphoreGive(d->mutex);
+  return s;
+}
+rns_status_t rns_heltec_sx1262_abort_and_restart(
+    rns_heltec_sx1262_t *d, const rns_sx1262_config_t *cfg) {
+  rns_status_t s;
+  if (!usable(d) || !cfg)
+    return RNS_ERROR_INVALID_ARGUMENT;
+  if (xSemaphoreTake(d->mutex, portMAX_DELAY) != pdTRUE)
+    return RNS_ERROR_IO;
+  if (!usable(d)) {
+    xSemaphoreGive(d->mutex);
+    return RNS_ERROR_INVALID_STATE;
+  }
+  /* The BUSY deadline is part of the replacement configuration and must also
+     govern the reset/reconfigure commands themselves. */
+  d->bus.busy_timeout_us = cfg->busy_timeout_us;
+  s = rns_sx1262_radio_abort_and_restart(d->radio, cfg);
+  if (s == RNS_OK) {
+    d->config = *cfg;
+    d->owner_status = RNS_OK;
+  }
+  xSemaphoreGive(d->mutex);
+  if (s == RNS_OK) {
+    xEventGroupSetBits(d->events, OWNER_RUN_BIT);
+    xTaskNotifyGive(d->owner);
+  }
+  return s;
+}
 rns_status_t rns_heltec_sx1262_close(rns_heltec_sx1262_t *d) {
   rns_status_t status = RNS_OK;
   if (!d || d->magic != MAGIC)
     return RNS_ERROR_INVALID_ARGUMENT;
+  if (d->mutex && xSemaphoreTake(d->mutex, portMAX_DELAY) == pdTRUE) {
+    d->closing = true;
+    xSemaphoreGive(d->mutex);
+  } else {
+    return RNS_ERROR_IO;
+  }
   if (d->isr_registered) {
     if (gpio_isr_handler_remove(RNS_HELTEC_V3_1_GPIO_RADIO_DIO1) != ESP_OK)
       status = RNS_ERROR_IO;

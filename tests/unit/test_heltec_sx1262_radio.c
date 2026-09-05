@@ -1,4 +1,5 @@
 #include "reticulum/heltec_sx1262.h"
+#include "reticulum/sx1262_interface.h"
 #include "sx1262_bus.h"
 #include <stdio.h>
 #include <string.h>
@@ -12,10 +13,16 @@ typedef struct {
   bool fail_tx;
   bool fail_cad;
   bool fail_irq;
+  bool fail_reset;
   bool fail_standby;
 } fake_chip_t;
 static rns_status_t reset(void *c) {
-  ((fake_chip_t *)c)->resets++;
+  fake_chip_t *f = c;
+  f->resets++;
+  if (f->fail_reset) {
+    f->fail_reset = false;
+    return RNS_ERROR_IO;
+  }
   return RNS_OK;
 }
 static rns_status_t config(void *c, const rns_sx1262_config_t *v) {
@@ -124,6 +131,49 @@ int main(void) {
   const uint8_t d[] = {1, 2, 3};
   int fail = 0;
   rns_sx1262_default_config(&c);
+  {
+    static const uint32_t bandwidths[] = {7800U,  10400U, 15600U, 20800U,
+                                          31250U, 41700U, 62500U, 125000U,
+                                          250000U, 500000U};
+    static const size_t lengths[] = {1U, 128U, 255U};
+    rns_sx1262_scheduler_config_t scheduler;
+    size_t bandwidth_index, length_index;
+    unsigned sf, cr;
+    rns_sx1262_scheduler_default_config(&scheduler);
+    for (bandwidth_index = 0U;
+         bandwidth_index < sizeof(bandwidths) / sizeof(bandwidths[0]);
+         ++bandwidth_index) {
+      for (sf = 5U; sf <= 12U; ++sf) {
+        for (cr = 5U; cr <= 8U; ++cr) {
+          for (length_index = 0U;
+               length_index < sizeof(lengths) / sizeof(lengths[0]);
+               ++length_index) {
+            uint64_t scheduler_us = 0U;
+            uint32_t radio_ms = 0U;
+            c.bandwidth_hz = bandwidths[bandwidth_index];
+            c.spreading_factor = (uint8_t)sf;
+            c.coding_rate_denominator = (uint8_t)cr;
+            scheduler.bandwidth_hz = bandwidths[bandwidth_index];
+            scheduler.spreading_factor = (uint8_t)sf;
+            scheduler.coding_rate_denominator = (uint8_t)cr;
+            if (rns_sx1262_lora_airtime_ms(&c, lengths[length_index],
+                                           &radio_ms) != RNS_OK ||
+                rns_sx1262_airtime_us(&scheduler, lengths[length_index],
+                                      &scheduler_us) != RNS_OK ||
+                radio_ms != (scheduler_us + 999U) / 1000U) {
+              fprintf(stderr,
+                      "airtime mismatch bw=%u sf=%u cr=%u len=%zu: %u vs %llu us\n",
+                      bandwidths[bandwidth_index], sf, cr,
+                      lengths[length_index], radio_ms,
+                      (unsigned long long)scheduler_us);
+              fail++;
+            }
+          }
+        }
+      }
+    }
+    rns_sx1262_default_config(&c);
+  }
   fail += ck(c.frequency_hz == 868200000U && c.bandwidth_hz == 125000U &&
                  c.spreading_factor == 8U && c.coding_rate_denominator == 5U &&
                  c.preamble_symbols == 18U && c.crc_enabled && !c.invert_iq &&
@@ -224,6 +274,46 @@ int main(void) {
   fail += ck(rns_sx1262_radio_receive(r, &p) == RNS_ERROR_INVALID_STATE,
              "stopped receive");
   rns_sx1262_radio_destroy(r);
+  {
+    fake_chip_t restart = {0};
+    rns_sx1262_radio_t *restart_radio = NULL;
+    uint32_t restart_id = 0U;
+    rns_sx1262_default_config(&c);
+    restart.packet.length = 1U;
+    restart.packet.data[0] = 0x7eU;
+    fail += ck(rns_sx1262_radio_create(&OPS, &restart, &restart_radio) ==
+                       RNS_OK &&
+                   rns_sx1262_radio_start(restart_radio, &c) == RNS_OK &&
+                   rns_sx1262_radio_send_with_id(restart_radio, d, sizeof(d),
+                                                 &restart_id) == RNS_OK &&
+                   rns_sx1262_radio_poll(restart_radio, 1U) == RNS_OK,
+               "abort/restart fixture begins TX");
+    restart.irqs[restart.count++] = RNS_SX1262_IRQ_TX_DONE;
+    restart.irqs[restart.count++] = RNS_SX1262_IRQ_RX_DONE;
+    fail += ck(rns_sx1262_radio_poll(restart_radio, 2U) == RNS_OK,
+               "abort/restart fixture retains bounded results");
+    fail += ck(rns_sx1262_radio_abort_and_restart(restart_radio, &c) ==
+                       RNS_OK &&
+                   rns_sx1262_radio_receive_tx_result(restart_radio,
+                                                      &result) ==
+                       RNS_ERROR_NOT_FOUND &&
+                   rns_sx1262_radio_receive(restart_radio, &p) ==
+                       RNS_ERROR_NOT_FOUND,
+               "abort/restart clears TX/RX/results and returns to RX");
+    rns_sx1262_radio_get_stats(restart_radio, &s);
+    fail += ck(s.state == RNS_SX1262_RECEIVING && s.pending_tx == 0U &&
+                   s.pending_rx == 0U && s.pending_tx_results == 0U,
+               "abort/restart exposes clean receiving state");
+    restart.fail_reset = true;
+    fail += ck(rns_sx1262_radio_abort_and_restart(restart_radio, &c) ==
+                       RNS_ERROR_IO,
+               "abort/restart reports reset failure");
+    rns_sx1262_radio_get_stats(restart_radio, &s);
+    fail += ck(s.state == RNS_SX1262_FAULT && s.pending_tx == 0U &&
+                   s.pending_rx == 0U && s.pending_tx_results == 0U,
+               "failed restart remains clean and faulted");
+    rns_sx1262_radio_destroy(restart_radio);
+  }
   {
     fake_chip_t q = {0};
     rns_sx1262_radio_t *queue_radio = NULL;
