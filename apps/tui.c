@@ -34,6 +34,7 @@ static bool field_visible(tui_state_t *state) {
         case TUI_FIELD_SETTING: return state->screen == TUI_SCREEN_SETTINGS;
         case TUI_FIELD_RRC: return state->screen == TUI_SCREEN_RRC;
         case TUI_FIELD_BROWSER_FORM: return state->screen == TUI_SCREEN_BROWSER;
+        case TUI_FIELD_HOST: return state->screen == TUI_SCREEN_NODE;
         case TUI_FIELD_NONE: return true;
     }
     return false;
@@ -68,6 +69,7 @@ static tui_editor_t *active_editor(tui_state_t *state) {
         case TUI_FIELD_SETTING: return &state->setting;
         case TUI_FIELD_RRC: return &state->setting;
         case TUI_FIELD_BROWSER_FORM: return &state->browser_editor;
+        case TUI_FIELD_HOST: return &state->host_editor;
         case TUI_FIELD_NONE: break;
     }
     return NULL;
@@ -86,12 +88,6 @@ static bool editor_command(int key, tui_edit_command_t *command) {
         case 23: *command = TUI_EDIT_KILL_WORD; return true;
         default: return false;
     }
-}
-
-static void unavailable_screen(tui_state_t *state, const char *name) {
-    tui_state_set_status(state, "%s screen is not implemented; remaining in Conversations",
-                         name);
-    state->screen = TUI_SCREEN_CONVERSATIONS;
 }
 
 static void submit_address(tui_state_t *state) {
@@ -154,6 +150,7 @@ static void handle_field_key(tui_state_t *state, int key) {
     }
     if (key == '\n' || key == KEY_ENTER) {
         if (state->field == TUI_FIELD_SETTING) (void)tui_state_setting_apply(state);
+        else if (state->field == TUI_FIELD_HOST) (void)tui_state_host_apply(state);
         else if (state->field == TUI_FIELD_RRC) (void)tui_state_rrc_apply(state);
         else if (state->field == TUI_FIELD_BROWSER_FORM)
             (void)tui_state_browser_form_apply(state);
@@ -220,6 +217,7 @@ static void handle_node_actions_key(tui_state_t *state, int key) {
 }
 
 static void select_previous(tui_state_t *state) {
+    if (state->screen == TUI_SCREEN_NODE) { tui_state_host_move(state, -1); return; }
     if (state->screen == TUI_SCREEN_BROWSER) {
         tui_state_browser_move(state, -1);
     } else if (state->screen == TUI_SCREEN_SETTINGS) {
@@ -237,6 +235,7 @@ static void select_previous(tui_state_t *state) {
 }
 
 static void select_next(tui_state_t *state) {
+    if (state->screen == TUI_SCREEN_NODE) { tui_state_host_move(state, 1); return; }
     if (state->screen == TUI_SCREEN_BROWSER) {
         tui_state_browser_move(state, 1);
     } else if (state->screen == TUI_SCREEN_SETTINGS) {
@@ -254,6 +253,7 @@ static void select_next(tui_state_t *state) {
 }
 
 static void activate(tui_state_t *state) {
+    if (state->screen == TUI_SCREEN_NODE) { tui_state_host_activate(state); return; }
     if (state->screen == TUI_SCREEN_BROWSER) {
         tui_state_browser_activate(state);
     } else if (state->screen == TUI_SCREEN_SETTINGS) {
@@ -424,7 +424,7 @@ static bool handle_command_key(tui_state_t *state, int key) {
         case 'c': case 'C': state->screen = TUI_SCREEN_CONVERSATIONS; break;
         case 'N': state->screen = TUI_SCREEN_NETWORK; break;
         case 'B': state->screen = TUI_SCREEN_BROWSER; break;
-        case 'o': case 'O': unavailable_screen(state, "Node"); break;
+        case 'o': case 'O': state->screen = TUI_SCREEN_NODE; break;
         case 's': case 'S': state->screen = TUI_SCREEN_SETTINGS; break;
         case 'g': case 'G': state->screen = TUI_SCREEN_GUIDE; break;
         case 'I':

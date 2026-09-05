@@ -1331,6 +1331,7 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
     tui_editor_init(&state->address, TUI_ADDRESS_DIGITS);
     tui_editor_init(&state->setting, LXMF_DISPLAY_NAME_MAX);
     tui_editor_init(&state->browser_editor, RNS_MICRON_FORM_VALUE_MAX);
+    tui_editor_init(&state->host_editor, TUI_SETTINGS_HOST_PAGES_MAX);
     tui_rrc_init(&state->rrc);
     tui_settings_defaults(&state->settings);
     rns_config_init(&state->parsed_config);
@@ -1401,6 +1402,9 @@ int tui_state_open(tui_state_t *state, const char *identity_path,
         state->path_store_path[0] = '\0';
 
     if (config_path != NULL) start_runtime(state, config_path);
+    if (state->settings.host_enabled && tui_host_start(&state->host, state->runtime,
+        &state->identity, &state->settings) != RNS_OK)
+        tui_state_set_status(state, "Hosted node could not start: %s", rns_status_string(state->host.error));
     state->startup_announce_pending = state->runtime != NULL &&
                                       state->settings.announce_at_start;
     if (state->runtime != NULL &&
@@ -1439,6 +1443,7 @@ void tui_state_close(tui_state_t *state) {
     rns_browser_destroy(state->browser);
     state->browser = NULL;
     tui_rrc_close(&state->rrc);
+    tui_host_stop(&state->host);
     if (state->router_ready) lxmf_router_destroy(&state->router);
     state->router_ready = false;
     rns_runtime_destroy(state->runtime);
@@ -1561,6 +1566,7 @@ void tui_state_poll(tui_state_t *state) {
     if (rns_hal_monotonic_ms(&now) == RNS_OK) {
         (void)rns_node_registry_expire(&state->nodes, (double)now / 1000.0);
         tui_rrc_poll(&state->rrc, now);
+        tui_host_poll(&state->host, &state->settings, now);
         apply_propagation_route(state);
         bool network_ready = tui_state_link_ready(state);
         if (network_ready && !state->network_ready_last_poll &&
@@ -2022,6 +2028,75 @@ void tui_state_rrc_cancel(tui_state_t *state) {
 }
 
 /* ---------------------------------------------------------------- settings */
+
+void tui_state_host_move(tui_state_t *state, int delta) {
+    if (state == NULL || state->screen != TUI_SCREEN_NODE || state->field != TUI_FIELD_NONE) return;
+    int selected = (int)state->host_selected + (delta < 0 ? -1 : 1);
+    if (selected < 0) selected = (int)TUI_HOST_COUNT - 1;
+    if (selected >= (int)TUI_HOST_COUNT) selected = 0;
+    state->host_selected = (tui_host_item_t)selected;
+}
+
+void tui_state_host_activate(tui_state_t *state) {
+    if (state == NULL || state->screen != TUI_SCREEN_NODE || state->field != TUI_FIELD_NONE) return;
+    if (state->host_selected == TUI_HOST_ANNOUNCE) {
+        uint64_t now;
+        if (rns_hal_monotonic_ms(&now) != RNS_OK) { tui_state_set_status(state, "Clock unavailable"); return; }
+        rns_status_t status = tui_host_announce(&state->host, &state->settings, now);
+        tui_state_set_status(state, "Hosted node announce: %s", rns_status_string(status)); return;
+    }
+    if (state->host_selected == TUI_HOST_TOGGLE) {
+        if (state->host.node != NULL) {
+            tui_host_stop(&state->host); state->settings.host_enabled = false;
+            bool saved = tui_settings_save(state->settings_path, &state->settings);
+            tui_state_set_status(state, saved ? "Hosting stopped and disabled" :
+                "Hosting stopped; save failed, previous startup configuration remains");
+            return;
+        }
+        rns_status_t status = tui_host_start(&state->host, state->runtime, &state->identity, &state->settings);
+        if (status != RNS_OK) {
+            tui_state_set_status(state, "Host failed: %s; check root/pages (executables disabled)", rns_status_string(status)); return;
+        }
+        tui_settings_t changed = state->settings; changed.host_enabled = true;
+        if (!tui_settings_save(state->settings_path, &changed)) {
+            tui_host_stop(&state->host); tui_state_set_status(state, "Host not started: settings could not be saved"); return;
+        }
+        state->settings = changed; state->settings_load_error = false;
+        tui_state_set_status(state, "Hosting enabled: listed static pages are now served"); return;
+    }
+    if (state->host.node != NULL) { tui_state_set_status(state, "Stop hosting before changing root/pages/access"); return; }
+    if (state->host_selected == TUI_HOST_ACCESS) {
+        tui_settings_t changed = state->settings; changed.host_identified_only = !changed.host_identified_only;
+        if (!tui_settings_save(state->settings_path, &changed)) { tui_state_set_status(state, "Could not save host access policy"); return; }
+        state->settings = changed; state->settings_load_error = false;
+        tui_state_set_status(state, changed.host_identified_only ? "Hosting requires identified links" : "Hosting permits anonymous links; page allowlists still apply");
+        return;
+    }
+    if (state->host_selected != TUI_HOST_ROOT && state->host_selected != TUI_HOST_PAGES) return;
+    const char *value = state->host_selected == TUI_HOST_ROOT ? state->settings.host_pages_root : state->settings.host_pages;
+    tui_editor_init(&state->host_editor, state->host_selected == TUI_HOST_ROOT ? TUI_SETTINGS_HOST_ROOT_MAX : TUI_SETTINGS_HOST_PAGES_MAX);
+    (void)tui_editor_insert(&state->host_editor, value, strlen(value)); state->field = TUI_FIELD_HOST;
+}
+
+bool tui_state_host_apply(tui_state_t *state) {
+    if (state == NULL || state->screen != TUI_SCREEN_NODE || state->field != TUI_FIELD_HOST || state->host.node != NULL) return false;
+    tui_settings_t changed = state->settings;
+    const char *value = tui_editor_text(&state->host_editor);
+    if (state->host_selected == TUI_HOST_ROOT) {
+        if (strlen(value) >= sizeof changed.host_pages_root) return false;
+        memcpy(changed.host_pages_root, value, strlen(value) + 1u);
+    } else if (state->host_selected == TUI_HOST_PAGES) {
+        if (strlen(value) >= sizeof changed.host_pages) return false;
+        memcpy(changed.host_pages, value, strlen(value) + 1u);
+    }
+    else return false;
+    if (!tui_settings_valid(&changed) || !tui_settings_save(state->settings_path, &changed)) {
+        tui_state_set_status(state, "Host setting invalid or could not be saved; use an absolute root"); return false;
+    }
+    state->settings = changed; state->settings_load_error = false;
+    tui_editor_clear(&state->host_editor); state->field = TUI_FIELD_NONE;
+    tui_state_set_status(state, "Host settings saved; only explicitly listed pages will be published"); return true;
+}
 
 bool tui_state_save_settings(tui_state_t *state) {
     if (state == NULL || state->settings_path[0] == '\0') return false;

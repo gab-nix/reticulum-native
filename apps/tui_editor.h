@@ -44,6 +44,9 @@ size_t tui_editor_cursor(const tui_editor_t *editor);
 /* Cursor position measured in display columns rather than bytes. */
 size_t tui_editor_column(const tui_editor_t *editor);
 bool tui_editor_empty(const tui_editor_t *editor);
+/* UTF-8-safe horizontal view, using the editor's single-column text model. */
+bool tui_editor_view(const tui_editor_t *editor, size_t columns,
+    size_t *byte_offset, size_t *cursor_column);
 
 /* Accepts one terminal byte. Control bytes are rejected as editing commands. */
 bool tui_editor_insert_byte(tui_editor_t *editor, unsigned char byte);

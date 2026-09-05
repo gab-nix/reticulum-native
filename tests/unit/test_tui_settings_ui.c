@@ -1,6 +1,7 @@
 #include "tui.h"
 #include "tui_render.h"
 #include "tui_state.h"
+#include "reticulum/udp.h"
 
 #include <assert.h>
 #include <fcntl.h>
@@ -8,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <curses.h>
 
 static tui_state_t *make_state(const char *settings_path) {
     tui_state_t *state = calloc(1u, sizeof *state);
@@ -422,7 +425,171 @@ static void test_rrc_settings_and_draft_restart(void) {
     remove_sidecar(store_path, ".ratchets");
 }
 
+static void test_host_controls(void) {
+    char root[] = "/tmp/nomad-host-ui-XXXXXX";
+    assert(mkdtemp(root) != NULL);
+    char page[512], settings_path[512];
+    (void)snprintf(page, sizeof page, "%s/index.mu", root);
+    (void)snprintf(settings_path, sizeof settings_path, "%s/settings", root);
+    FILE *file = fopen(page, "wb");
+    assert(file != NULL && fputs("Synthetic page", file) >= 0 && fclose(file) == 0);
+    tui_state_t *state = make_state(settings_path);
+    assert(!state->settings.host_enabled && state->host.node == NULL);
+    assert(tui_dispatch_key(state, 'o') && state->screen == TUI_SCREEN_NODE);
+    assert(tui_dispatch_key(state, '\n') && state->field == TUI_FIELD_HOST);
+    assert(tui_editor_insert(&state->host_editor, "relative", 8u));
+    assert(!tui_state_host_apply(state));
+    assert(state->settings.host_pages_root[0] == 0);
+    tui_editor_clear(&state->host_editor);
+    assert(tui_editor_insert(&state->host_editor, root, strlen(root)));
+    assert(tui_state_host_apply(state));
+    assert(tui_dispatch_key(state, 'j') && state->host_selected == TUI_HOST_PAGES);
+    assert(tui_dispatch_key(state, '\n') && state->field == TUI_FIELD_HOST);
+    assert(tui_dispatch_key(state, 27) && state->field == TUI_FIELD_NONE);
+    state->host_selected = TUI_HOST_TOGGLE;
+    tui_state_host_activate(state); /* Offline failure preserves saved settings. */
+    assert(state->host.node == NULL && !state->settings.host_enabled);
+    rns_config_t config; rns_config_init(&config);
+    assert(rns_runtime_create(&state->runtime, &config, NULL) == RNS_OK);
+    assert(rns_identity_generate(&state->identity));
+    tui_state_host_activate(state);
+    if (state->host.node == NULL) fprintf(stderr, "Host test failure: %s\n", state->status);
+    assert(state->host.node != NULL && state->settings.host_enabled);
+    assert(rns_hosted_node_page_count(state->host.node) == 1u);
+    assert(state->host.announces == 0u);
+    tui_host_poll(&state->host, &state->settings, 1000u);
+    assert(state->host.error != RNS_OK && state->host.next_announce_ms == 31000u);
+    tui_host_poll(&state->host, &state->settings, 2000u);
+    assert(state->host.next_announce_ms == 31000u);
+    tui_host_poll(&state->host, &state->settings, 31000u);
+    assert(state->host.next_announce_ms == 61000u);
+    tui_settings_t loaded;
+    assert(tui_settings_load(settings_path, &loaded, NULL) && loaded.host_enabled);
+    assert(strcmp(loaded.host_pages_root, root) == 0);
+    state->host_selected = TUI_HOST_ROOT;
+    tui_state_host_activate(state);
+    assert(state->field == TUI_FIELD_NONE); /* Active root cannot change. */
+    file = tmpfile(); assert(file != NULL);
+    assert(tui_render_dump(state, file) == 0 && fseek(file, 0, SEEK_SET) == 0);
+    char output[2048] = {0};
+    assert(fread(output, 1, sizeof output - 1u, file) > 0 && fclose(file) == 0);
+    assert(strstr(output, "Screen: Node") && strstr(output, "Hosting: active"));
+    state->host_selected = TUI_HOST_TOGGLE;
+    tui_state_host_activate(state);
+    assert(state->host.node == NULL && !state->settings.host_enabled);
+    assert(tui_settings_load(settings_path, &loaded, NULL) && !loaded.host_enabled);
+    assert(chmod(page, 0700) == 0);
+    tui_state_host_activate(state);
+    assert(state->host.node == NULL && state->host.error == RNS_ERROR_UNSUPPORTED);
+    assert(chmod(page, 0600) == 0);
+    memcpy(state->settings.host_pages, "index.mu;../secret", sizeof "index.mu;../secret");
+    tui_state_host_activate(state);
+    assert(state->host.node == NULL); /* Partial registration rolled back. */
+    memcpy(state->settings.host_pages, "index.mu", sizeof "index.mu");
+    char saved_path[TUI_SETTINGS_PATH_MAX + 1u];
+    strcpy(saved_path, state->settings_path);
+    (void)snprintf(state->settings_path, sizeof state->settings_path, "%s/absent/settings", root);
+    tui_state_host_activate(state);
+    assert(state->host.node == NULL && !state->settings.host_enabled);
+    strcpy(state->settings_path, saved_path);
+    tui_state_host_activate(state);
+    assert(state->host.node != NULL);
+    tui_host_stop(&state->host);
+    rns_runtime_destroy(state->runtime);
+    destroy_state(state);
+    assert(unlink(page) == 0 && unlink(settings_path) == 0 && rmdir(root) == 0);
+}
+
+static void test_host_startup_and_announces(void) {
+    char root[] = "/tmp/nomad-host-startup-XXXXXX";
+    assert(mkdtemp(root) != NULL);
+    char identity[512], store[512], config_path[512], settings_path[520], page[512];
+    (void)snprintf(identity, sizeof identity, "%s/identity", root);
+    (void)snprintf(store, sizeof store, "%s/messages", root);
+    (void)snprintf(config_path, sizeof config_path, "%s/network", root);
+    (void)snprintf(settings_path, sizeof settings_path, "%s.settings", store);
+    (void)snprintf(page, sizeof page, "%s/index.mu", root);
+    FILE *identity_file = fopen(identity, "wb");
+    assert(identity_file != NULL && fclose(identity_file) == 0);
+    write_identity(identity);
+    FILE *file = fopen(page, "wb"); assert(file != NULL && fputs("Synthetic", file) >= 0 && fclose(file) == 0);
+    rns_udp_endpoint_t *reservation = NULL; rns_udp_address_t address;
+    assert(rns_udp_endpoint_create(&reservation, RNS_UDP_IPV4) == RNS_OK);
+    assert(rns_udp_bind(reservation, "127.0.0.1", 0u) == RNS_OK);
+    assert(rns_udp_local_address(reservation, &address) == RNS_OK);
+    rns_udp_endpoint_destroy(reservation);
+    file = fopen(config_path, "wb"); assert(file != NULL);
+    assert(fprintf(file, "[reticulum]\nshare_instance = No\n[interfaces]\n[[loopback]]\ntype = UDPInterface\nenabled = True\nlisten_ip = 127.0.0.1\nlisten_port = %u\nforward_ip = 127.0.0.1\nforward_port = %u\n",
+        (unsigned)address.port, (unsigned)address.port) > 0 && fclose(file) == 0);
+    tui_settings_t settings; tui_settings_defaults(&settings);
+    strcpy(settings.host_pages_root, root); settings.host_enabled = true;
+    assert(tui_settings_save(settings_path, &settings));
+    tui_state_t *state = calloc(1u, sizeof *state); assert(state != NULL);
+    assert(tui_state_open(state, identity, store, NULL, config_path) == 0);
+    if (state->host.node == NULL) fprintf(stderr, "Startup test: %s; config: %s; enabled=%d\n",
+        state->status, state->config_diagnostic.message, state->settings.host_enabled);
+    assert(state->host.node != NULL && state->host.announces == 0u);
+    tui_host_poll(&state->host, &state->settings, 1000u);
+    assert(state->host.announces == 1u && state->host.error == RNS_OK);
+    uint64_t next = state->host.next_announce_ms;
+    assert(next == 1000u + tui_settings_interval_ms(&state->settings));
+    tui_host_poll(&state->host, &state->settings, next - 1u);
+    assert(state->host.announces == 1u);
+    tui_host_poll(&state->host, &state->settings, next);
+    assert(state->host.announces == 2u);
+    state->screen = TUI_SCREEN_NODE; state->host_selected = TUI_HOST_TOGGLE;
+    tui_state_host_activate(state);
+    assert(state->host.node == NULL && !state->settings.host_enabled);
+    tui_state_close(state); free(state);
+    state = calloc(1u, sizeof *state); assert(state != NULL);
+    assert(tui_state_open(state, identity, store, NULL, config_path) == 0);
+    assert(state->host.node == NULL && !state->settings.host_enabled);
+    tui_state_close(state); free(state);
+    assert(unlink(identity) == 0 && unlink(store) == 0 && unlink(config_path) == 0 && unlink(page) == 0);
+    const char *sidecars[] = {".settings", ".peers", ".nodes", ".paths", ".tickets", ".ratchets"};
+    for (size_t i = 0; i < sizeof sidecars / sizeof sidecars[0]; ++i) remove_sidecar(store, sidecars[i]);
+    assert(rmdir(root) == 0);
+}
+
+static void test_host_narrow_render(void) {
+    FILE *input = tmpfile(), *output = tmpfile();
+    assert(input != NULL && output != NULL);
+    SCREEN *screen = newterm("xterm", output, input);
+    assert(screen != NULL);
+    assert(resizeterm(10, 38) == OK);
+    tui_state_t *state = make_state("unused-render-only");
+    state->screen = TUI_SCREEN_NODE;
+    for (int selected = 0; selected < (int)TUI_HOST_COUNT; ++selected) {
+        state->host_selected = (tui_host_item_t)selected;
+        tui_render_draw(state);
+        int row = selected == 0 ? 4 : 5;
+        assert((mvinch(row, 1) & A_REVERSE) != 0u);
+    }
+    state->host_selected = TUI_HOST_ROOT;
+    tui_editor_init(&state->host_editor, 512u);
+    const char *long_path = "/a/very/long/path/with/a/visible/editable/suffix";
+    assert(tui_editor_insert(&state->host_editor, long_path, strlen(long_path)));
+    state->field = TUI_FIELD_HOST;
+    tui_render_draw(state);
+    int y, x; getyx(stdscr, y, x);
+    assert(y == 7 && x == 37);
+    char line[39];
+    assert(mvinnstr(7, 0, line, 38) != ERR);
+    assert(strstr(line, "suffix") != NULL);
+    state->screen = TUI_SCREEN_NETWORK;
+    assert(tui_dispatch_key(state, KEY_RESIZE));
+    assert(tui_dispatch_key(state, 'j'));
+    assert(state->field == TUI_FIELD_NONE);
+    assert(strcmp(tui_editor_text(&state->host_editor), long_path) == 0);
+    destroy_state(state);
+    (void)endwin(); delscreen(screen);
+    assert(fclose(input) == 0 && fclose(output) == 0);
+}
+
 int main(void) {
+    test_host_startup_and_announces();
+    test_host_narrow_render();
+    test_host_controls();
     test_keys_dump_and_persistence();
     test_corruption_warning_survives_startup();
     test_submit_preserves_pending_status();

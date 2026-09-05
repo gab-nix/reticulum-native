@@ -121,6 +121,22 @@ hub using upstream codecs. The RRC test does not certify a stock RRC server.
 Use `ctest --test-dir build -LE interop` for the ordinary suite. Offline builds
 leave `RETICULUM_PYTHON_INTEROP` disabled and require no Python installation.
 
+## Optional static page hosting
+
+Open **Node** with `O`. Set an absolute page root and a semicolon-separated list
+of relative pages, such as `index.mu;about.mu`, then select **Start hosting**.
+Only listed static files are published; traversal, symlinks and executable files
+are rejected. The screen shows the hosted address while running. `j`/`k` select
+an item and Enter edits or activates it; stop hosting before changing its root,
+page list or access policy. Identified-only access requires clients to identify
+their links, and existing per-page `.allowed` policies still apply.
+
+Hosting is off by default. Enabling it persists startup behavior beside the
+message store; **Stop hosting** disables it for subsequent starts. The service
+announces after startup and at the configured Settings announcement interval;
+**Announce now** is also available. A failed save cancels activation. Executable
+pages, file serving and propagation-node hosting are not enabled by these controls.
+
 ## License
 
 In Conversations, `i` opens peer information and `q` shows its address QR; `U`

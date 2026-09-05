@@ -2,6 +2,22 @@
 
 #include "tui_text.h"
 
+bool tui_editor_view(const tui_editor_t *editor, size_t columns,
+    size_t *byte_offset, size_t *cursor_column) {
+    if (editor == NULL || byte_offset == NULL || cursor_column == NULL || columns == 0u)
+        return false;
+    size_t cursor = tui_editor_column(editor);
+    size_t skip = cursor >= columns ? cursor - columns + 1u : 0u;
+    size_t offset = 0u;
+    for (size_t i = 0u; i < skip; ++i) {
+        size_t length = tui_utf8_length((const uint8_t *)editor->text + offset, editor->length - offset);
+        if (length == 0u) return false;
+        offset += length;
+    }
+    *byte_offset = offset; *cursor_column = cursor - skip;
+    return true;
+}
+
 #include <ctype.h>
 #include <string.h>
 
