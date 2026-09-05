@@ -16,6 +16,8 @@ function(reticulum_add_test name source)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 reticulum_add_test(test_runtime_provider unit/test_runtime_provider.c)
+add_test(NAME test_heltec_boot_config COMMAND ${CMAKE_COMMAND}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/heltec_boot_config.cmake)
 
 # Explicit opt-in Python interoperability harness; not part of offline CTest.
 add_executable(lxmf_direct_live_driver interop/lxmf_direct_live_driver.c)
