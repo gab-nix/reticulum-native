@@ -71,6 +71,13 @@ static bool pending(const heltec_chat *c) {
     for (size_t i = 0; i < c->count; ++i) if (c->messages[i].state == 1 || c->messages[i].state == 2) return true;
     return false;
 }
+bool heltec_chat_can_rotate(const heltec_chat *c, size_t combined_count, bool verified) {
+    if (!verified || !c || !c->used || c->count != HELTEC_CHAT_MESSAGES ||
+        combined_count != c->count) return false;
+    for (size_t i = 0; i < c->count; ++i)
+        if (c->messages[i].state != 1 && c->messages[i].state != 2) return true;
+    return false;
+}
 rns_status_t heltec_chat_store_add(heltec_chat_store *s, const uint8_t sender[16], const heltec_chat_message *m) {
     if (!s || !sender || !m || m->length > HELTEC_CHAT_TEXT || m->state > 5) return RNS_ERROR_INVALID_ARGUMENT;
     size_t slot = HELTEC_CHAT_COUNT;

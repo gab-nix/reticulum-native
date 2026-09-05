@@ -5,6 +5,13 @@
 #include "reticulum/interface.h"
 #include "reticulum/storage.h"
 typedef struct lxmf_packet_node lxmf_packet_node_t;
+typedef struct {
+    bool delivery, has_ratchet, metadata_valid;
+    uint8_t stamp_cost;
+} lxmf_packet_peer_info;
+/* Snapshot from verified announces only. No keys or borrowed private state. */
+bool lxmf_packet_node_peer_info(const lxmf_packet_node_t *node,
+    const uint8_t destination[16], lxmf_packet_peer_info *info);
 /* Message slices are borrowed only for the callback. No plaintext is logged.
  * Single caller ownership; callbacks must not re-enter or destroy the node. */
 typedef void (*lxmf_packet_message_fn)(void *context, const lxmf_message_t *message);

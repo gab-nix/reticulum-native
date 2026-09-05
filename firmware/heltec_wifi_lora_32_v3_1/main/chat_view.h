@@ -10,6 +10,7 @@ typedef struct {
     uint8_t sender[16], message[32];
     bool selected, message_selected, back;
     rns_status_t error;
+    char reply_error[22]; /* Optional bounded application diagnostic. */
     unsigned reply;
     heltec_reply_fn send_reply;
     void *reply_context;

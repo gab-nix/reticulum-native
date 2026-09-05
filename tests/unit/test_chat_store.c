@@ -60,6 +60,14 @@ int main(void) {
     assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==5);
     assert(!heltec_chat_view_poll(&view,s,true,false,lines) && !reply_calls);
     assert(!heltec_chat_view_poll(&view,s,false,true,lines) && reply_calls==1 && view.screen==1);
+    view.error=RNS_ERROR_UNSUPPORTED;
+    memcpy(view.reply_error,"NEED RATCHET ANNOUNCE",sizeof("NEED RATCHET ANNOUNCE"));
+    assert(!heltec_chat_view_poll(&view,s,false,false,lines));
+    assert(!strcmp(lines[6],"NEED RATCHET ANNOUNCE"));
+    memcpy(view.reply_error,"STAMP COST 8 UNSUPP",sizeof("STAMP COST 8 UNSUPP"));
+    assert(!heltec_chat_view_poll(&view,s,false,false,lines));
+    assert(!strcmp(lines[6],"STAMP COST 8 UNSUPP"));
+    view.error=RNS_OK;
     uint8_t second[16]={2};
     assert(heltec_chat_store_add(s,second,&m)==RNS_OK);
     view.screen=0; memcpy(view.sender,second,16); view.selected=true;
@@ -72,6 +80,15 @@ int main(void) {
     assert(!heltec_chat_store_get(s,1) && heltec_chat_store_get(s,0));
     for(unsigned i=2;i<12;++i) { m.id[0]=(uint8_t)i; assert(heltec_chat_store_add(s,sender,&m)==RNS_OK); }
     assert(heltec_chat_store_get(s,0)->count==8);
+    assert(heltec_chat_can_rotate(heltec_chat_store_get(s,0),8,true));
+    assert(!heltec_chat_can_rotate(heltec_chat_store_get(s,0),8,false));
+    assert(!heltec_chat_can_rotate(heltec_chat_store_get(s,0),9,true));
+    heltec_chat full_pending=*heltec_chat_store_get(s,0);
+    for(size_t i=0;i<8;++i) full_pending.messages[i].state=1;
+    assert(!heltec_chat_can_rotate(&full_pending,8,true));
+    m.id[0]=99;
+    assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
+    assert(heltec_chat_store_get(s,0)->count==8 && heltec_chat_store_get(s,0)->messages[0].id[0]==99);
     assert(heltec_chat_store_delete(s,0)==RNS_OK);
     m.state=1;
     for(unsigned i=0;i<8;++i) { m.id[0]=(uint8_t)i; assert(heltec_chat_store_add(s,sender,&m)==RNS_OK); }

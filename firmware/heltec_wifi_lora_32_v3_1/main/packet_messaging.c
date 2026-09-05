@@ -68,8 +68,18 @@ static rns_status_t quick_reply(void *context,const uint8_t sender[16],const cha
             timestamp=out.timestamp+1U;
         }
     }
-    return lxmf_packet_node_send(node,sender,(const uint8_t *)text,strlen(text),
-        timestamp,id);
+    rns_status_t result=lxmf_packet_node_send(node,sender,(const uint8_t *)text,strlen(text),timestamp,id);
+    lxmf_packet_peer_info peer={0};
+    bool found=lxmf_packet_node_peer_info(node,sender,&peer);
+    if(result==RNS_ERROR_UNSUPPORTED) {
+        if(!found || !peer.delivery) (void)snprintf(chats_ui.reply_error,22,"NEED PEER ANNOUNCE");
+        else if(!peer.metadata_valid) (void)snprintf(chats_ui.reply_error,22,"ANNOUNCE FORMAT ERROR");
+        else if(peer.stamp_cost) (void)snprintf(chats_ui.reply_error,22,"STAMP COST %u UNSUPP",(unsigned)peer.stamp_cost);
+        else if(!peer.has_ratchet) (void)snprintf(chats_ui.reply_error,22,"NEED RATCHET ANNOUNCE");
+    }
+    ESP_LOGI(TAG,"Quick reply status=%d peer=%d delivery=%d ratchet=%d metadata=%d stamp_cost=%u",
+        (int)result,found,peer.delivery,peer.has_ratchet,peer.metadata_valid,(unsigned)peer.stamp_cost);
+    return result;
 }
 static rns_status_t cancel_reply(void *context,const uint8_t id[32]) {
     (void)context; return lxmf_packet_node_cancel(node,id);
@@ -113,14 +123,15 @@ static bool archive_has_id(const uint8_t id[32]) {
     }
     return false;
 }
-static bool admission_available(const lxmf_message_t *message) {
+static bool admission_available(const lxmf_message_t *message, bool verified) {
     uint8_t senders[8][16]; size_t count=0, same=0;
+    const heltec_chat *existing = NULL;
     bool known=false;
     for(size_t i=0;i<8;++i) {
         const heltec_chat *c=heltec_chat_store_get(saved_chats,i);
         if(!c) continue;
         memcpy(senders[count++],c->sender,16);
-        if(!memcmp(c->sender,message->source,16)) { known=true; same=c->count; }
+        if(!memcmp(c->sender,message->source,16)) { known=true; same=c->count; existing=c; }
         for(size_t j=0;j<c->count;++j)
             if(!memcmp(c->messages[j].id,message->message_id,32)) return true;
     }
@@ -133,7 +144,7 @@ static bool admission_available(const lxmf_message_t *message) {
         if(!found) { if(count==8) return false; memcpy(senders[count++],m->source,16); }
         if(!memcmp(m->source,message->source,16)) { known=true; ++same; }
     }
-    return same<8 && (known || count<8);
+    return (same<8 || heltec_chat_can_rotate(existing,same,verified)) && (known || count<8);
 }
 static rns_status_t persist_message(void *context, const lxmf_message_t *message,
     lxmf_signature_state_t signature, const uint8_t *packet, size_t packet_length) {
@@ -144,7 +155,7 @@ static rns_status_t persist_message(void *context, const lxmf_message_t *message
     if (message->content.len > HELTEC_CHAT_TEXT || !isfinite(message->timestamp) ||
         message->timestamp < 0 || message->timestamp >= 18446744073709551616.0)
         return chat_status = RNS_ERROR_OVERFLOW;
-    if(!admission_available(message) || !packet || !packet_length || packet_length>500)
+    if(!admission_available(message,signature==LXMF_SIGNATURE_VERIFIED) || !packet || !packet_length || packet_length>500)
         return chat_status = RNS_ERROR_OVERFLOW;
     if(signature==LXMF_SIGNATURE_UNVERIFIED || archive_has_id(message->message_id)) {
         memset(&archive_item,0,sizeof(archive_item));
@@ -229,7 +240,9 @@ static rns_status_t received(void *context, const uint8_t *packet, size_t length
     (void)context;
     heltec_radio_discovery_packet(&discovery, packet, length, clock_ms(NULL));
     /* Malformed or unsupported packets must not stop the radio poll loop. */
-    (void)lxmf_packet_node_receive(node, packet, length);
+    rns_status_t received_status=lxmf_packet_node_receive(node, packet, length);
+    if(received_status!=RNS_OK)
+        ESP_LOGW(TAG,"Packet acceptance status=%d chat_storage=%d",(int)received_status,(int)chat_status);
     return RNS_OK;
 }
 void heltec_packet_messaging_run(rns_storage_t *storage) {
