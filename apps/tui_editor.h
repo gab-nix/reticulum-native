@@ -8,7 +8,7 @@
 #define TUI_EDITOR_MAX 1024u
 
 /*
- * A bounded single-line editor shared by the composer, the search field and
+ * A bounded UTF-8 editor shared by the composer, the search field and
  * the address field. Editing is UTF-8 aware: multi-byte sequences arrive one
  * byte at a time from the terminal, are staged until complete, and are never
  * split by cursor motion or deletion. The buffer is always NUL-terminated.
@@ -44,7 +44,7 @@ size_t tui_editor_cursor(const tui_editor_t *editor);
 /* Cursor position measured in display columns rather than bytes. */
 size_t tui_editor_column(const tui_editor_t *editor);
 bool tui_editor_empty(const tui_editor_t *editor);
-/* UTF-8-safe horizontal view, using the editor's single-column text model. */
+/* UTF-8-safe horizontal view using terminal cell widths. */
 bool tui_editor_view(const tui_editor_t *editor, size_t columns,
     size_t *byte_offset, size_t *cursor_column);
 
@@ -53,5 +53,9 @@ bool tui_editor_insert_byte(tui_editor_t *editor, unsigned char byte);
 /* Inserts a complete, valid UTF-8 run at the cursor. */
 bool tui_editor_insert(tui_editor_t *editor, const char *utf8, size_t length);
 bool tui_editor_apply(tui_editor_t *editor, tui_edit_command_t command);
+/* Wrapped cursor projection and vertical movement share the render layout. */
+void tui_editor_position(const tui_editor_t *editor, size_t columns,
+                         size_t *row, size_t *column);
+bool tui_editor_move_vertical(tui_editor_t *editor, size_t columns, int delta);
 
 #endif

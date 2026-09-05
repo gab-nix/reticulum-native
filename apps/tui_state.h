@@ -205,6 +205,10 @@ typedef struct tui_state {
 
     size_t selected;
     size_t scroll;
+    size_t thread_scroll_limit; /* Wrapped-row limit supplied by the renderer. */
+    size_t thread_visible_last;
+    bool thread_layout_valid;
+    size_t composer_columns;
 
     size_t visible[TUI_MAX_CONTACTS];
     size_t visible_count;

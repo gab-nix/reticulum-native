@@ -7,14 +7,17 @@ bool tui_editor_view(const tui_editor_t *editor, size_t columns,
     if (editor == NULL || byte_offset == NULL || cursor_column == NULL || columns == 0u)
         return false;
     size_t cursor = tui_editor_column(editor);
-    size_t skip = cursor >= columns ? cursor - columns + 1u : 0u;
-    size_t offset = 0u;
-    for (size_t i = 0u; i < skip; ++i) {
+    size_t offset = 0u, skipped = 0u;
+    while (offset < editor->cursor && cursor - skipped >= columns) {
         size_t length = tui_utf8_length((const uint8_t *)editor->text + offset, editor->length - offset);
         if (length == 0u) return false;
+        skipped += tui_text_cell_width(editor->text + offset, editor->length - offset);
         offset += length;
     }
-    *byte_offset = offset; *cursor_column = cursor - skip;
+    while (offset < editor->cursor && tui_text_cell_width(editor->text + offset,
+             editor->length - offset) == 0u)
+        offset += tui_utf8_length((const uint8_t *)editor->text + offset, editor->length - offset);
+    *byte_offset = offset; *cursor_column = cursor - skipped;
     return true;
 }
 
@@ -71,7 +74,14 @@ size_t tui_editor_cursor(const tui_editor_t *editor) {
 }
 
 size_t tui_editor_column(const tui_editor_t *editor) {
-    return editor != NULL ? tui_utf8_columns(editor->text, editor->cursor) : 0u;
+    if (editor == NULL) return 0u;
+    size_t column = 0u;
+    for (size_t at = 0u; at < editor->cursor;) {
+        size_t n = tui_utf8_length((const uint8_t *)editor->text + at, editor->length - at);
+        column += tui_text_cell_width(editor->text + at, editor->length - at);
+        at += n != 0u ? n : 1u;
+    }
+    return column;
 }
 
 bool tui_editor_empty(const tui_editor_t *editor) {
@@ -165,5 +175,59 @@ bool tui_editor_apply(tui_editor_t *editor, tui_edit_command_t command) {
             return true;
         }
     }
+    return false;
+}
+
+void tui_editor_position(const tui_editor_t *editor, size_t columns,
+                         size_t *row, size_t *column) {
+    if (row == NULL || column == NULL) return;
+    *row = 0u; *column = 0u;
+    if (editor == NULL || columns == 0u) return;
+    size_t offset = 0u, start, bytes;
+    while (tui_text_wrap_next(editor->text, editor->length, columns,
+                              &offset, &start, &bytes)) {
+        bool last = offset == editor->length &&
+                    (bytes == 0u || editor->text[offset - 1u] != '\n');
+        if (editor->cursor < offset || (last && editor->cursor == offset)) {
+            for (size_t i = start; i < editor->cursor && i < start + bytes;) {
+                size_t n = tui_utf8_length((const uint8_t *)editor->text + i,
+                                           editor->length - i);
+                *column += tui_text_cell_width(editor->text + i, editor->length - i);
+                i += n != 0u ? n : 1u;
+            }
+            if (*column >= columns) { ++*row; *column = 0u; }
+            return;
+        }
+        ++*row;
+    }
+}
+
+bool tui_editor_move_vertical(tui_editor_t *editor, size_t columns, int delta) {
+    if (editor == NULL || columns == 0u || delta == 0) return false;
+    size_t row, column;
+    tui_editor_position(editor, columns, &row, &column);
+    if (delta < 0 && row == 0u) return false;
+    size_t target = delta < 0 ? row - 1u : row + 1u;
+    size_t offset = 0u, start = editor->length, bytes = 0u, current = 0u;
+    while (tui_text_wrap_next(editor->text, editor->length, columns,
+                              &offset, &start, &bytes)) {
+        if (current++ == target) {
+            size_t at = start, cells = 0u;
+            while (at < start + bytes) {
+                size_t n = tui_utf8_length((const uint8_t *)editor->text + at,
+                                           editor->length - at);
+                size_t w = tui_text_cell_width(editor->text + at, editor->length - at);
+                if (cells + w > column) break;
+                cells += w; at += n != 0u ? n : 1u;
+            }
+            editor->cursor = at; editor->pending_length = 0u;
+            size_t actual_row, actual_column;
+            tui_editor_position(editor, columns, &actual_row, &actual_column);
+            if (actual_row > target && at > start)
+                editor->cursor = sequence_start(editor, at);
+            return true;
+        }
+    }
+    if (delta > 0) { editor->cursor = editor->length; return true; }
     return false;
 }

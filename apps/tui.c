@@ -170,7 +170,14 @@ static void handle_field_key(tui_state_t *state, int key) {
         else submit_message(state);
         return;
     }
-    if (editor_command(key, &command)) (void)tui_editor_apply(editor, command);
+    if (state->field == TUI_FIELD_COMPOSE && key == 14)
+        (void)tui_editor_insert(editor, "\n", 1u); /* Ctrl-N: explicit line break. */
+    else if (state->field == TUI_FIELD_COMPOSE &&
+             (key == KEY_UP || key == KEY_DOWN))
+        (void)tui_editor_move_vertical(editor,
+            state->composer_columns != 0u ? state->composer_columns : 40u,
+            key == KEY_UP ? -1 : 1);
+    else if (editor_command(key, &command)) (void)tui_editor_apply(editor, command);
     else if (key >= 0 && key <= 0xff)
         (void)tui_editor_insert_byte(editor, (unsigned char)key);
     if (state->field == TUI_FIELD_SEARCH) state->filter_dirty = true;

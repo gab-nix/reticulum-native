@@ -74,7 +74,26 @@ static void test_utf8(void) {
     assert(tui_utf8_columns("", 0u) == 0u);
 }
 
+static void test_wrap(void) {
+    const char *text = "hello world\n\nabcdefgh";
+    const char *expected[] = {"hello ", "world", "", "abcdef", "gh"};
+    size_t at = 0u, start, bytes;
+    for (size_t i = 0u; i < sizeof expected / sizeof expected[0]; ++i) {
+        assert(tui_text_wrap_next(text, strlen(text), 6u, &at, &start, &bytes));
+        assert(bytes == strlen(expected[i]));
+        assert(memcmp(text + start, expected[i], bytes) == 0);
+    }
+    assert(at == strlen(text));
+    assert(!tui_text_wrap_next(text, strlen(text), 6u, &at, &start, &bytes));
+    at = 0u;
+    assert(!tui_text_wrap_next(text, strlen(text), 0u, &at, &start, &bytes));
+    const char invalid[] = {'a', (char)0xff, 'b'};
+    assert(tui_text_wrap_next(invalid, sizeof invalid, 2u, &at, &start, &bytes));
+    assert(bytes == 2u && at == 2u);
+}
+
 int main(void) {
+    test_wrap();
     test_hex();
     test_contains();
     test_sanitize();
