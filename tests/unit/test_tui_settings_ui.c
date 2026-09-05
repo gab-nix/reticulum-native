@@ -721,15 +721,24 @@ static void test_wrapped_chat_render(void) {
     assert(tui_editor_insert(&state->composer, draft, strlen(draft)));
     tui_render_draw(state);
     int y, x; getyx(stdscr, y, x);
-    assert(y >= 11 && y <= 13 && x >= 9 && x < 50);
+    assert(y >= 11 && y <= 13 && x >= 2 && x < 48);
     assert(tui_dispatch_key(state, 14));
     assert(strchr(state->composer.text, '\n') != NULL);
     tui_render_draw(state); getyx(stdscr, y, x);
-    assert(x == 9 && y <= 13);
+    assert(x == 2 && y <= 13);
     assert(tui_dispatch_key(state, KEY_UP));
     assert(state->composer.cursor < state->composer.length);
     assert(resizeterm(10, 38) == OK); tui_render_draw(state);
-    getyx(stdscr, y, x); assert(y >= 6 && y <= 7 && x >= 9 && x < 38);
+    getyx(stdscr, y, x); assert(y >= 6 && y <= 7 && x >= 2 && x < 36);
+    assert((mvinch(y, 0) & A_CHARTEXT) == (ACS_VLINE & A_CHARTEXT));
+    state->field = TUI_FIELD_NONE;
+    assert(tui_dispatch_key(state, ':'));
+    assert(tui_dispatch_key(state, 'h'));
+    tui_render_draw(state); getyx(stdscr, y, x);
+    assert(y == 4 && x == 3);
+    assert(mvinnstr(3, 0, line, 38) != ERR && strstr(line, "COMMAND") != NULL);
+    assert(tui_dispatch_key(state, 27));
+    assert(!state->command_active);
     destroy_state(state); (void)endwin(); delscreen(screen);
     assert(fclose(input) == 0 && fclose(output) == 0);
 }

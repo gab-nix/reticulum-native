@@ -46,6 +46,15 @@ with the cursor; Escape leaves the editor without discarding the draft.
 The top bar shows connection state, known nodes, unread messages and (on wider
 terminals) cumulative interface RX/TX totals in KiB.
 
+Press Escape to leave an editor, then `:` to open the command popup. Commands
+include `chats`, `network`, `browser`, `settings`, `interfaces`, `config`, `logs`,
+`guide`, `node`, `rrc`, `announce`, `sync`, `help` and `q`/`quit`. Enter executes,
+Escape closes, and Up recalls the previous command. Commands are an explicit
+application allowlist, not a shell. Normal-mode Ctrl-U/Ctrl-D page history;
+inside editors the existing editing shortcuts remain unchanged. The composer
+has a visible frame, delivery mode and byte counter. This is a Vim-inspired
+interface, not a complete Vim emulation.
+
 In Browser, press `i` to request identification for a restricted page, then
 Enter to confirm or Escape to cancel. Your public identity is disclosed only
 to that node for this session. Following a link to another node switches back
