@@ -1592,7 +1592,8 @@ static void poll_browser(tui_state_t *state) {
                 tui_state_set_status(state, "Remote Nomad page loaded at %s",
                                      fragment);
         } else {
-            tui_state_set_status(state, "Remote Nomad page loaded");
+            tui_state_set_status(state, rns_browser_loaded_from_cache(state->browser)
+                ? "Nomad page loaded from session cache" : "Remote Nomad page loaded");
         }
     } else if (current == RNS_BROWSER_FAILED) {
         tui_state_set_status(state, "Page load failed: %s",
@@ -2653,8 +2654,10 @@ static bool browse_request(tui_state_t *state, const char *url,
     (void)snprintf(state->url, sizeof state->url, "%s", requested);
     state->link_selected = 0u;
     state->page_scroll = 0u;
-    state->browser_state = rns_browser_state(state->browser);
-    tui_state_set_status(state, "Discovering route to Nomad page");
+    /* Force the polling presentation path even for synchronous cache hits. */
+    state->browser_state = RNS_BROWSER_IDLE;
+    tui_state_set_status(state, rns_browser_loaded_from_cache(state->browser)
+        ? "Loaded cached Nomad page" : "Discovering route to Nomad page");
     return true;
 }
 

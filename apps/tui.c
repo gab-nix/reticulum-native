@@ -284,8 +284,10 @@ static void activate(tui_state_t *state) {
 
 static void reload(tui_state_t *state) {
     if (state->screen == TUI_SCREEN_NETWORK) tui_state_request_path(state);
-    else if (state->screen == TUI_SCREEN_BROWSER)
+    else if (state->screen == TUI_SCREEN_BROWSER) {
+        rns_browser_cache_clear(state->browser);
         (void)tui_state_browse(state, state->url, false);
+    }
     else if (state->screen == TUI_SCREEN_SETTINGS)
         tui_state_set_status(state, "Select Announce Now to send an LXMF announce");
     else if (state->screen == TUI_SCREEN_RRC)

@@ -141,6 +141,16 @@ int main(int argc, char **argv) {
             if (rns_browser_state(browser) == RNS_BROWSER_FAILED) { failed = true; break; }
             if (rns_browser_state(browser) == RNS_BROWSER_COMPLETE) {
                 if (!valid_page(rns_browser_page(browser), completed)) { failed = true; break; }
+                if (completed == 0U || completed == 1U) {
+                    char revisit[RNS_BROWSER_URL_MAX + 1U];
+                    (void)snprintf(revisit, sizeof revisit, "%s", rns_browser_url(browser));
+                    if (rns_browser_open(browser, revisit, &peer.identity, NULL, 0U) != RNS_OK ||
+                        rns_browser_state(browser) != RNS_BROWSER_COMPLETE ||
+                        !rns_browser_loaded_from_cache(browser) ||
+                        !valid_page(rns_browser_page(browser), completed)) { failed = true; break; }
+                    /* Python's served-request assertion remains six: these
+                     * packet/resource page revisits must not reach the host. */
+                }
                 ++completed;
                 opened = false;
             }
