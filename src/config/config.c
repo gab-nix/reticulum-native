@@ -643,17 +643,29 @@ rns_status_t rns_config_emit(const rns_config_t *config,
         if (!item->type_set || type_name == NULL ||
             !emit(&emitter, "  [[%s]]\n    type = %s\n    enabled = %s\n",
                   item->name, type_name, item->enabled ? "Yes" : "No")) return RNS_ERROR_PROTOCOL;
-        if (item->type == RNS_CONFIG_TCP_CLIENT &&
-            !emit(&emitter, "    target_host = %s\n    target_port = %u\n", item->target_host,
-                  (unsigned int)item->target_port)) return RNS_ERROR_OVERFLOW;
-        if (item->type == RNS_CONFIG_TCP_SERVER &&
-            !emit(&emitter, "    listen_ip = %s\n    listen_port = %u\n", item->listen_ip,
-                  (unsigned int)item->listen_port)) return RNS_ERROR_OVERFLOW;
-        if (item->type == RNS_CONFIG_UDP &&
-            !emit(&emitter, "    listen_ip = %s\n    listen_port = %u\n    forward_ip = %s\n"
-                           "    forward_port = %u\n", item->listen_ip,
-                  (unsigned int)item->listen_port, item->forward_ip,
-                  (unsigned int)item->forward_port)) return RNS_ERROR_OVERFLOW;
+        /* Disabled interfaces may omit endpoints. Do not turn an absent port
+         * into an explicit zero: the input grammar deliberately rejects zero. */
+        if (item->type == RNS_CONFIG_TCP_CLIENT) {
+            if (((item->enabled || item->target_host[0] != '\0') &&
+                 !emit(&emitter, "    target_host = %s\n", item->target_host)) ||
+                ((item->enabled || item->target_port != 0U) &&
+                 !emit(&emitter, "    target_port = %u\n", (unsigned int)item->target_port)))
+                return RNS_ERROR_OVERFLOW;
+        }
+        if (item->type == RNS_CONFIG_TCP_SERVER || item->type == RNS_CONFIG_UDP) {
+            if (((item->enabled || item->listen_ip[0] != '\0') &&
+                 !emit(&emitter, "    listen_ip = %s\n", item->listen_ip)) ||
+                ((item->enabled || item->listen_port != 0U) &&
+                 !emit(&emitter, "    listen_port = %u\n", (unsigned int)item->listen_port)))
+                return RNS_ERROR_OVERFLOW;
+        }
+        if (item->type == RNS_CONFIG_UDP) {
+            if (((item->enabled || item->forward_ip[0] != '\0') &&
+                 !emit(&emitter, "    forward_ip = %s\n", item->forward_ip)) ||
+                ((item->enabled || item->forward_port != 0U) &&
+                 !emit(&emitter, "    forward_port = %u\n", (unsigned int)item->forward_port)))
+                return RNS_ERROR_OVERFLOW;
+        }
         if (item->type == RNS_CONFIG_AUTO) {
             const char *group = item->group_id[0] != '\0' ? item->group_id : "reticulum";
             const char *scope = item->discovery_scope[0] != '\0'
