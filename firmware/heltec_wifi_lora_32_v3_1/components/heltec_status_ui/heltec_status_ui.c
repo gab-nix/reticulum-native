@@ -149,6 +149,7 @@ static bool send_command(rns_heltec_oled_t *oled, uint8_t command) {
 void rns_heltec_oled_settings_default(rns_heltec_oled_settings_t *settings) {
     if (settings == NULL) return;
     settings->enabled = true;
+    settings->preview_enabled = true;
     settings->brightness = 0x7fU;
     settings->preview_timeout_ms = 10000U;
     settings->screen = RNS_HELTEC_OLED_SCREEN_STATUS;
@@ -188,6 +189,10 @@ void rns_heltec_oled_set_settings(rns_heltec_oled_t *oled,
                                   const rns_heltec_oled_settings_t *settings) {
     if (oled == NULL || settings == NULL) return;
     oled->settings = *settings;
+    if (!oled->settings.preview_enabled) {
+        memset(oled->model.preview, 0, sizeof(oled->model.preview));
+        oled->preview_deadline_ms = 0U;
+    }
     if (oled->settings.screen > RNS_HELTEC_OLED_SCREEN_ROUTES)
         oled->settings.screen = RNS_HELTEC_OLED_SCREEN_STATUS;
     oled->dirty = true;
@@ -198,6 +203,17 @@ void rns_heltec_oled_set_settings(rns_heltec_oled_t *oled,
         oled->failed = true;
         oled->ready = false;
     }
+}
+
+void rns_heltec_oled_set_preview_enabled(rns_heltec_oled_t *oled,
+                                         bool enabled) {
+    if (oled == NULL) return;
+    oled->settings.preview_enabled = enabled;
+    if (!enabled) {
+        memset(oled->model.preview, 0, sizeof(oled->model.preview));
+        oled->preview_deadline_ms = 0U;
+    }
+    oled->dirty = true;
 }
 
 void rns_heltec_oled_set_status(rns_heltec_oled_t *oled,
@@ -221,9 +237,16 @@ bool rns_heltec_oled_show_preview(rns_heltec_oled_t *oled,
                                   size_t length,
                                   uint64_t now_ms) {
     if (oled == NULL || (utf8 == NULL && length != 0U)) return false;
+    if (!oled->settings.preview_enabled) {
+        memset(oled->model.preview, 0, sizeof(oled->model.preview));
+        oled->preview_deadline_ms = 0U;
+        return false;
+    }
     bool valid = copy_utf8_preview(oled->model.preview,
                                    sizeof(oled->model.preview), utf8, length);
-    if (UINT64_MAX - now_ms < oled->settings.preview_timeout_ms)
+    if (oled->settings.preview_timeout_ms == 0U)
+        oled->preview_deadline_ms = 0U;
+    else if (UINT64_MAX - now_ms < oled->settings.preview_timeout_ms)
         oled->preview_deadline_ms = UINT64_MAX;
     else
         oled->preview_deadline_ms = now_ms + oled->settings.preview_timeout_ms;

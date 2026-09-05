@@ -28,7 +28,9 @@ typedef enum {
 
 typedef struct {
     bool enabled;
+    bool preview_enabled;
     uint8_t brightness;
+    /* Zero keeps a preview until it is replaced or previews are disabled. */
     uint32_t preview_timeout_ms;
     rns_heltec_oled_screen_t screen;
 } rns_heltec_oled_settings_t;
@@ -68,6 +70,8 @@ bool rns_heltec_oled_init(rns_heltec_oled_t *oled,
                           const rns_heltec_oled_settings_t *settings);
 void rns_heltec_oled_set_settings(rns_heltec_oled_t *oled,
                                   const rns_heltec_oled_settings_t *settings);
+void rns_heltec_oled_set_preview_enabled(rns_heltec_oled_t *oled,
+                                         bool enabled);
 void rns_heltec_oled_set_status(rns_heltec_oled_t *oled,
                                 const char *radio,
                                 const char *address_suffix,

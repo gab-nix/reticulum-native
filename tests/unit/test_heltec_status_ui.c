@@ -92,7 +92,8 @@ int main(void) {
     rns_heltec_oled_t oled;
 
     rns_heltec_oled_settings_default(&settings);
-    assert(settings.enabled && settings.brightness == 0x7fU);
+    assert(settings.enabled && settings.preview_enabled &&
+           settings.brightness == 0x7fU);
     assert(settings.preview_timeout_ms == 10000U);
     assert(rns_heltec_oled_init(&oled, &ops, &settings));
     assert(rns_heltec_oled_is_ready(&oled));
@@ -124,6 +125,27 @@ int main(void) {
     boundary[RNS_HELTEC_OLED_PREVIEW_MAX + 1U] = 0x83U;
     assert(rns_heltec_oled_show_preview(&oled, boundary, sizeof(boundary), 300U));
     assert(strlen(oled.model.preview) == RNS_HELTEC_OLED_PREVIEW_MAX - 1U);
+
+    settings.preview_timeout_ms = 0U;
+    rns_heltec_oled_set_settings(&oled, &settings);
+    assert(rns_heltec_oled_show_preview(&oled, valid, sizeof(valid), 500U));
+    rns_heltec_oled_poll(&oled, UINT64_MAX);
+    assert(strcmp(oled.model.preview, "hi \xe2\x98\x83") == 0);
+
+    rns_heltec_oled_set_preview_enabled(&oled, false);
+    assert(oled.model.preview[0] == '\0');
+    assert(oled.preview_deadline_ms == 0U);
+    assert(!rns_heltec_oled_show_preview(&oled, valid, sizeof(valid), 600U));
+    assert(oled.model.preview[0] == '\0');
+    rns_heltec_oled_set_preview_enabled(&oled, true);
+    assert(oled.model.preview[0] == '\0');
+    assert(rns_heltec_oled_show_preview(&oled, valid, sizeof(valid), 700U));
+    settings.preview_enabled = false;
+    rns_heltec_oled_set_settings(&oled, &settings);
+    assert(oled.model.preview[0] == '\0');
+    assert(oled.preview_deadline_ms == 0U);
+    settings.preview_enabled = true;
+    rns_heltec_oled_set_settings(&oled, &settings);
 
     size_t writes_before_disable = fake.data_bytes;
     settings.enabled = false;

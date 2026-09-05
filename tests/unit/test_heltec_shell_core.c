@@ -1,4 +1,5 @@
 #include "reticulum/boards/heltec_shell_core.h"
+#include "reticulum/crypto.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -20,6 +21,12 @@ static uint64_t monotonic_ms(void *context) {
 
 static uint32_t random_u32(void *context) {
     return ((fake_shell_t *)context)->random;
+}
+
+static bool sha256(void *context, const uint8_t *data, size_t length,
+                   uint8_t out[RNS_HELTEC_SHELL_CONFIRM_DIGEST_BYTES]) {
+    (void)context;
+    return rns_sha256(data, length, out) != 0;
 }
 
 static void write_line(void *context, rns_heltec_shell_status_t status,
@@ -54,6 +61,7 @@ int main(void) {
         .context = &fake,
         .monotonic_ms = monotonic_ms,
         .random_u32 = random_u32,
+        .sha256 = sha256,
         .write_line = write_line
     };
     rns_heltec_shell_t shell;
@@ -93,7 +101,8 @@ int main(void) {
     char guarded[96];
     int written = snprintf(guarded, sizeof(guarded), "identity-import %s", secret);
     assert(written > 0);
-    assert(rns_heltec_shell_execute(&shell, guarded, (size_t)written) ==
+    size_t guarded_length = (size_t)written;
+    assert(rns_heltec_shell_execute(&shell, guarded, guarded_length) ==
            RNS_HELTEC_SHELL_CONFIRMATION_REQUIRED);
     assert(fake.handler_calls == 1U);
     assert(strstr(fake.output, secret) == NULL);
@@ -104,19 +113,42 @@ int main(void) {
     assert(rns_heltec_shell_execute(&shell, "confirm 100042", 14U) ==
            RNS_HELTEC_SHELL_OK);
     assert(rns_heltec_shell_confirmation_pending(&shell));
-    assert(rns_heltec_shell_execute(&shell, guarded, (size_t)written) ==
+    const char *different_secret = "different-private-key-material";
+    char changed_guarded[96];
+    written = snprintf(changed_guarded, sizeof(changed_guarded),
+                       "identity-import %s", different_secret);
+    assert(written > 0);
+    size_t changed_guarded_length = (size_t)written;
+    assert(rns_heltec_shell_execute(&shell, changed_guarded,
+                                    changed_guarded_length) ==
+           RNS_HELTEC_SHELL_CONFIRMATION_REQUIRED);
+    assert(fake.handler_calls == 1U);
+    assert(strstr(fake.output, different_secret) == NULL);
+    assert(rns_heltec_shell_execute(&shell, "confirm 100042", 14U) ==
+           RNS_HELTEC_SHELL_OK);
+    assert(rns_heltec_shell_execute(&shell, changed_guarded,
+                                    changed_guarded_length) ==
            RNS_HELTEC_SHELL_OK);
     assert(fake.handler_calls == 2U);
+    assert(strcmp(fake.handled_argument, different_secret) == 0);
+
+    assert(rns_heltec_shell_execute(&shell, guarded, guarded_length) ==
+           RNS_HELTEC_SHELL_CONFIRMATION_REQUIRED);
+    assert(rns_heltec_shell_execute(&shell, "confirm 100042", 14U) ==
+           RNS_HELTEC_SHELL_OK);
+    assert(rns_heltec_shell_execute(&shell, guarded, guarded_length) ==
+           RNS_HELTEC_SHELL_OK);
+    assert(fake.handler_calls == 3U);
     assert(strcmp(fake.handled_argument, secret) == 0);
     assert(!rns_heltec_shell_confirmation_pending(&shell));
 
-    assert(rns_heltec_shell_execute(&shell, guarded, (size_t)written) ==
+    assert(rns_heltec_shell_execute(&shell, guarded, guarded_length) ==
            RNS_HELTEC_SHELL_CONFIRMATION_REQUIRED);
     assert(rns_heltec_shell_execute(&shell, "cancel", 6U) ==
            RNS_HELTEC_SHELL_CANCELLED);
     assert(!rns_heltec_shell_confirmation_pending(&shell));
 
-    assert(rns_heltec_shell_execute(&shell, guarded, (size_t)written) ==
+    assert(rns_heltec_shell_execute(&shell, guarded, guarded_length) ==
            RNS_HELTEC_SHELL_CONFIRMATION_REQUIRED);
     fake.now += RNS_HELTEC_SHELL_CONFIRM_MS + 1U;
     rns_heltec_shell_poll(&shell);
@@ -149,6 +181,31 @@ int main(void) {
            RNS_HELTEC_SHELL_INVALID_ARGUMENT);
     const char embedded_nul[] = {'s', 't', 'a', 't', 'u', 's', '\0', 'x'};
     assert(rns_heltec_shell_execute(&shell, embedded_nul, sizeof(embedded_nul)) ==
+           RNS_HELTEC_SHELL_INVALID_ARGUMENT);
+
+    char command_names[RNS_HELTEC_SHELL_REGISTRY_MAX - 2U][16];
+    for (size_t index = 0U; index < RNS_HELTEC_SHELL_REGISTRY_MAX - 2U;
+         index++) {
+        rns_heltec_shell_command_t command = status_command;
+        (void)snprintf(command_names[index], sizeof(command_names[index]),
+                       "test-%02u", (unsigned)index);
+        command.name = command_names[index];
+        assert(rns_heltec_shell_register(&shell, &command) ==
+               RNS_HELTEC_SHELL_OK);
+    }
+    rns_heltec_shell_command_t overflow_command = status_command;
+    overflow_command.name = "overflow";
+    assert(rns_heltec_shell_register(&shell, &overflow_command) ==
+           RNS_HELTEC_SHELL_REGISTRY_FULL);
+
+    rns_heltec_shell_t unguarded_only;
+    rns_heltec_shell_ops_t no_guard_ops = ops;
+    no_guard_ops.random_u32 = NULL;
+    no_guard_ops.sha256 = NULL;
+    assert(rns_heltec_shell_init(&unguarded_only, &no_guard_ops));
+    assert(rns_heltec_shell_register(&unguarded_only, &status_command) ==
+           RNS_HELTEC_SHELL_OK);
+    assert(rns_heltec_shell_register(&unguarded_only, &import_command) ==
            RNS_HELTEC_SHELL_INVALID_ARGUMENT);
     return 0;
 }

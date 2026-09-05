@@ -21,11 +21,71 @@ static void shell_report(rns_heltec_shell_t *shell,
 }
 
 static void clear_confirmation(rns_heltec_shell_t *shell) {
-    memset(shell->pending_command, 0, sizeof(shell->pending_command));
-    memset(shell->armed_command, 0, sizeof(shell->armed_command));
+    memset(shell->pending_digest, 0, sizeof(shell->pending_digest));
+    memset(shell->armed_digest, 0, sizeof(shell->armed_digest));
+    shell->confirmation_pending = false;
+    shell->confirmation_armed = false;
     shell->confirmation_code = 0U;
     shell->confirmation_deadline_ms = 0U;
     shell->armed_deadline_ms = 0U;
+}
+
+static void store_u16_be(uint8_t output[2], uint16_t value) {
+    output[0] = (uint8_t)(value >> 8U);
+    output[1] = (uint8_t)value;
+}
+
+static void store_u32_be(uint8_t output[4], uint32_t value) {
+    output[0] = (uint8_t)(value >> 24U);
+    output[1] = (uint8_t)(value >> 16U);
+    output[2] = (uint8_t)(value >> 8U);
+    output[3] = (uint8_t)value;
+}
+
+static void wipe_bytes(void *memory, size_t length) {
+    volatile uint8_t *bytes = memory;
+    while (length-- > 0U) *bytes++ = 0U;
+}
+
+static bool constant_time_equal(const uint8_t *left, const uint8_t *right,
+                                size_t length) {
+    uint8_t difference = 0U;
+    for (size_t index = 0U; index < length; index++)
+        difference |= (uint8_t)(left[index] ^ right[index]);
+    return difference == 0U;
+}
+
+static bool invocation_digest(
+    const rns_heltec_shell_t *shell, int argc, const char *const *argv,
+    uint8_t digest[RNS_HELTEC_SHELL_CONFIRM_DIGEST_BYTES]) {
+    static const uint8_t domain[] = "rns-shell-guard-v1";
+    uint8_t material[4U + sizeof(domain) - 1U + 2U +
+                     RNS_HELTEC_SHELL_TOKEN_MAX * 2U +
+                     RNS_HELTEC_SHELL_LINE_MAX];
+    size_t offset = 4U;
+    bool ok = false;
+    if (shell->ops.sha256 == NULL || argc <= 0 ||
+        argc > RNS_HELTEC_SHELL_TOKEN_MAX || argv == NULL) return false;
+    memcpy(material + offset, domain, sizeof(domain) - 1U);
+    offset += sizeof(domain) - 1U;
+    store_u16_be(material + offset, (uint16_t)argc);
+    offset += 2U;
+    for (int index = 0; index < argc; index++) {
+        size_t argument_length;
+        if (argv[index] == NULL) goto done;
+        argument_length = strlen(argv[index]);
+        if (argument_length > UINT16_MAX ||
+            offset + 2U + argument_length > sizeof(material)) goto done;
+        store_u16_be(material + offset, (uint16_t)argument_length);
+        offset += 2U;
+        memcpy(material + offset, argv[index], argument_length);
+        offset += argument_length;
+    }
+    store_u32_be(material, (uint32_t)offset);
+    ok = shell->ops.sha256(shell->ops.context, material, offset, digest);
+done:
+    wipe_bytes(material, sizeof(material));
+    return ok;
 }
 
 static bool name_valid(const char *name) {
@@ -57,19 +117,18 @@ static const rns_heltec_shell_command_t *find_command(
 }
 
 static uint32_t next_confirmation_code(rns_heltec_shell_t *shell) {
-    uint32_t random_value;
-    if (shell->ops.random_u32 != NULL)
-        random_value = shell->ops.random_u32(shell->ops.context);
-    else
-        random_value = ++shell->fallback_nonce * 2654435761U;
+    uint32_t random_value = shell->ops.random_u32(shell->ops.context);
     return 100000U + random_value % 900000U;
 }
 
 static rns_heltec_shell_status_t request_confirmation(
-    rns_heltec_shell_t *shell, const char *name, uint64_t now) {
+    rns_heltec_shell_t *shell,
+    const uint8_t digest[RNS_HELTEC_SHELL_CONFIRM_DIGEST_BYTES],
+    uint64_t now) {
     char message[96];
     clear_confirmation(shell);
-    (void)snprintf(shell->pending_command, sizeof(shell->pending_command), "%s", name);
+    memcpy(shell->pending_digest, digest, sizeof(shell->pending_digest));
+    shell->confirmation_pending = true;
     shell->confirmation_code = next_confirmation_code(shell);
     shell->confirmation_deadline_ms = deadline_after(now, RNS_HELTEC_SHELL_CONFIRM_MS);
     (void)snprintf(message, sizeof(message),
@@ -91,7 +150,7 @@ static rns_heltec_shell_status_t execute_confirm(rns_heltec_shell_t *shell,
                      "confirmation rejected");
         return RNS_HELTEC_SHELL_CONFIRMATION_INVALID;
     }
-    if (shell->pending_command[0] == '\0') {
+    if (!shell->confirmation_pending) {
         shell_report(shell, RNS_HELTEC_SHELL_CONFIRMATION_INVALID,
                      "no guarded command is pending");
         return RNS_HELTEC_SHELL_CONFIRMATION_INVALID;
@@ -107,9 +166,11 @@ static rns_heltec_shell_status_t execute_confirm(rns_heltec_shell_t *shell,
                      "confirmation rejected");
         return RNS_HELTEC_SHELL_CONFIRMATION_INVALID;
     }
-    memcpy(shell->armed_command, shell->pending_command,
-           sizeof(shell->armed_command));
-    memset(shell->pending_command, 0, sizeof(shell->pending_command));
+    memcpy(shell->armed_digest, shell->pending_digest,
+           sizeof(shell->armed_digest));
+    memset(shell->pending_digest, 0, sizeof(shell->pending_digest));
+    shell->confirmation_pending = false;
+    shell->confirmation_armed = true;
     shell->confirmation_code = 0U;
     shell->confirmation_deadline_ms = 0U;
     shell->armed_deadline_ms = deadline_after(now, RNS_HELTEC_SHELL_CONFIRM_MS);
@@ -123,7 +184,6 @@ bool rns_heltec_shell_init(rns_heltec_shell_t *shell,
     if (shell == NULL || ops == NULL || ops->monotonic_ms == NULL) return false;
     memset(shell, 0, sizeof(*shell));
     shell->ops = *ops;
-    shell->fallback_nonce = 1U;
     return true;
 }
 
@@ -135,6 +195,9 @@ rns_heltec_shell_status_t rns_heltec_shell_register(
         return RNS_HELTEC_SHELL_INVALID_ARGUMENT;
     if (standard_guarded_name(command->name) &&
         command->policy != RNS_HELTEC_SHELL_COMMAND_GUARDED)
+        return RNS_HELTEC_SHELL_INVALID_ARGUMENT;
+    if (command->policy == RNS_HELTEC_SHELL_COMMAND_GUARDED &&
+        (shell->ops.random_u32 == NULL || shell->ops.sha256 == NULL))
         return RNS_HELTEC_SHELL_INVALID_ARGUMENT;
     if (find_command(shell, command->name) != NULL)
         return RNS_HELTEC_SHELL_INVALID_ARGUMENT;
@@ -195,9 +258,25 @@ rns_heltec_shell_status_t rns_heltec_shell_execute(rns_heltec_shell_t *shell,
         return RNS_HELTEC_SHELL_UNKNOWN_COMMAND;
     }
     if (command->policy == RNS_HELTEC_SHELL_COMMAND_GUARDED) {
-        bool armed = strcmp(shell->armed_command, command->name) == 0 &&
-                     now <= shell->armed_deadline_ms;
-        if (!armed) return request_confirmation(shell, command->name, now);
+        uint8_t digest[RNS_HELTEC_SHELL_CONFIRM_DIGEST_BYTES];
+        bool digest_ok = invocation_digest(shell, argc, argv, digest);
+        bool armed = digest_ok && shell->confirmation_armed &&
+                     now <= shell->armed_deadline_ms &&
+                     constant_time_equal(shell->armed_digest, digest,
+                                         sizeof(digest));
+        if (!digest_ok) {
+            wipe_bytes(digest, sizeof(digest));
+            shell_report(shell, RNS_HELTEC_SHELL_HANDLER_FAILED,
+                         "guard digest failed");
+            return RNS_HELTEC_SHELL_HANDLER_FAILED;
+        }
+        if (!armed) {
+            rns_heltec_shell_status_t status =
+                request_confirmation(shell, digest, now);
+            wipe_bytes(digest, sizeof(digest));
+            return status;
+        }
+        wipe_bytes(digest, sizeof(digest));
         clear_confirmation(shell);
     }
     rns_heltec_shell_args_t args = {.argc = argc, .argv = argv};
@@ -255,9 +334,9 @@ void rns_heltec_shell_poll(rns_heltec_shell_t *shell) {
     uint64_t now;
     if (shell == NULL) return;
     now = shell_now(shell);
-    if ((shell->pending_command[0] != '\0' &&
+    if ((shell->confirmation_pending &&
          now > shell->confirmation_deadline_ms) ||
-        (shell->armed_command[0] != '\0' && now > shell->armed_deadline_ms)) {
+        (shell->confirmation_armed && now > shell->armed_deadline_ms)) {
         clear_confirmation(shell);
         shell_report(shell, RNS_HELTEC_SHELL_CONFIRMATION_EXPIRED,
                      "confirmation expired");
@@ -265,6 +344,6 @@ void rns_heltec_shell_poll(rns_heltec_shell_t *shell) {
 }
 
 bool rns_heltec_shell_confirmation_pending(const rns_heltec_shell_t *shell) {
-    return shell != NULL && (shell->pending_command[0] != '\0' ||
-                             shell->armed_command[0] != '\0');
+    return shell != NULL &&
+           (shell->confirmation_pending || shell->confirmation_armed);
 }

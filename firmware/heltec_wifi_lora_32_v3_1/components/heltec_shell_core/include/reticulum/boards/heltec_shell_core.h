@@ -15,6 +15,7 @@ enum {
     RNS_HELTEC_SHELL_TOKEN_MAX = 12,
     RNS_HELTEC_SHELL_COMMAND_MAX = 24,
     RNS_HELTEC_SHELL_REGISTRY_MAX = 32,
+    RNS_HELTEC_SHELL_CONFIRM_DIGEST_BYTES = 32,
     RNS_HELTEC_SHELL_CONFIRM_MS = 30000
 };
 
@@ -38,6 +39,8 @@ typedef enum {
 } rns_heltec_shell_command_policy_t;
 
 typedef struct {
+    /* argc/argv and every pointed-to token remain valid only for the duration
+     * of the handler call. A handler retaining values must copy them. */
     int argc;
     const char *const *argv;
 } rns_heltec_shell_args_t;
@@ -58,7 +61,12 @@ typedef struct {
 typedef struct {
     void *context;
     uint64_t (*monotonic_ms)(void *context);
+    /* Guarded commands are unavailable unless both random_u32 and sha256 are
+     * supplied. The digest callback must accept the bounded invocation
+     * serialization only for the duration of this call. */
     uint32_t (*random_u32)(void *context);
+    bool (*sha256)(void *context, const uint8_t *data, size_t length,
+                   uint8_t out[RNS_HELTEC_SHELL_CONFIRM_DIGEST_BYTES]);
     void (*write_line)(void *context, rns_heltec_shell_status_t status,
                        const char *message);
 } rns_heltec_shell_ops_t;
@@ -71,12 +79,13 @@ typedef struct {
     size_t line_length;
     bool discarding_overflow;
     bool last_was_cr;
-    char pending_command[RNS_HELTEC_SHELL_COMMAND_MAX + 1];
-    char armed_command[RNS_HELTEC_SHELL_COMMAND_MAX + 1];
+    uint8_t pending_digest[RNS_HELTEC_SHELL_CONFIRM_DIGEST_BYTES];
+    uint8_t armed_digest[RNS_HELTEC_SHELL_CONFIRM_DIGEST_BYTES];
+    bool confirmation_pending;
+    bool confirmation_armed;
     uint32_t confirmation_code;
     uint64_t confirmation_deadline_ms;
     uint64_t armed_deadline_ms;
-    uint32_t fallback_nonce;
 } rns_heltec_shell_t;
 
 bool rns_heltec_shell_init(rns_heltec_shell_t *shell,

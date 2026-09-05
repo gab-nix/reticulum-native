@@ -143,6 +143,7 @@ add_executable(test_heltec_shell_core
     ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_shell_core/heltec_shell_core.c)
 target_include_directories(test_heltec_shell_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../firmware/heltec_wifi_lora_32_v3_1/components/heltec_shell_core/include)
+target_link_libraries(test_heltec_shell_core PRIVATE reticulum::reticulum)
 target_compile_features(test_heltec_shell_core PRIVATE c_std_17)
 reticulum_set_project_warnings(test_heltec_shell_core)
 add_test(NAME test_heltec_shell_core COMMAND test_heltec_shell_core)

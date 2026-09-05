@@ -56,7 +56,10 @@ Vext and reset through the immutable V3.1 BSP, configures the 17/18 I2C pins
 through a caller-supplied adapter, and fails independently of networking. The
 shell requires explicit confirmation before standard identity import/export,
 identity erase, or configuration reset commands and never echoes command
-arguments in its own diagnostics.
+arguments in its own diagnostics. Confirmation is bound to a SHA-256 digest of
+the complete invocation, and guarded commands are unavailable unless the
+adapter supplies secure randomness and SHA-256. OLED message previews have a
+separate enable setting; disabling previews immediately clears retained text.
 
 These cores are intentionally not connected in `app_main.c` yet. A later
 integration change must supply the ESP-IDF I2C/UART0 adapters and register
