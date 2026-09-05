@@ -1,8 +1,8 @@
 #include "reticulum/identity.h"
 #include "reticulum/crypto.h"
+#include "reticulum/hal.h"
 
 #include <string.h>
-#include <openssl/crypto.h>
 
 static int update_hash(rns_identity *identity) {
     uint8_t pub[64], digest[32];
@@ -87,9 +87,9 @@ int rns_identity_encrypt(const rns_identity *identity, const uint8_t ratchet_pub
     *out_length = 32u + token_length;
     ok = 1;
 done:
-    OPENSSL_cleanse(ephemeral_private, sizeof(ephemeral_private));
-    OPENSSL_cleanse(shared, sizeof(shared));
-    OPENSSL_cleanse(derived, sizeof(derived));
+    rns_hal_secure_zero(ephemeral_private, sizeof(ephemeral_private));
+    rns_hal_secure_zero(shared, sizeof(shared));
+    rns_hal_secure_zero(derived, sizeof(derived));
     return ok;
 }
 
@@ -107,7 +107,7 @@ void rns_identity_ratchet_id(const uint8_t public_key[32],
     if (public_key == NULL || ratchet_id == NULL) return;
     memset(ratchet_id, 0, 16u);
     if (rns_sha256(public_key, 32u, digest)) memcpy(ratchet_id, digest, 16u);
-    OPENSSL_cleanse(digest, sizeof digest);
+    rns_hal_secure_zero(digest, sizeof digest);
 }
 
 int rns_identity_ratchet_generate(uint8_t private_key[32],
@@ -133,8 +133,8 @@ static int decrypt_with_private(const rns_identity *identity,
     ok = rns_token_decrypt(derived, ciphertext + 32u, ciphertext_length - 32u,
                            out, out_capacity, out_length);
 done:
-    OPENSSL_cleanse(shared, sizeof(shared));
-    OPENSSL_cleanse(derived, sizeof(derived));
+    rns_hal_secure_zero(shared, sizeof(shared));
+    rns_hal_secure_zero(derived, sizeof(derived));
     return ok;
 }
 
@@ -162,11 +162,11 @@ int rns_identity_decrypt_with_ratchets(
                 uint8_t public_key[32];
                 if (!rns_x25519_public_from_private(private_key, public_key)) {
                     *out_length = 0u;
-                    OPENSSL_cleanse(out, out_capacity);
+                    rns_hal_secure_zero(out, out_capacity);
                     return 0;
                 }
                 rns_identity_ratchet_id(public_key, ratchet_id);
-                OPENSSL_cleanse(public_key, sizeof public_key);
+                rns_hal_secure_zero(public_key, sizeof public_key);
             }
             return 1;
         }

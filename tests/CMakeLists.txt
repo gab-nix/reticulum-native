@@ -261,6 +261,8 @@ endif()
 # an embedded crypto backend is installed.
 add_executable(test_crypto_no_default
     unit/test_crypto_no_default.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/identity/identity.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/platform/platform.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/crypto/provider.c)
 target_include_directories(test_crypto_no_default PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include)

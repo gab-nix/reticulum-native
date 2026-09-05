@@ -6,6 +6,7 @@ set(RETICULUM_PORTABLE_SOURCES
     src/announce/announce.c
     src/crypto/provider.c
     src/destination/destination.c
+    src/identity/identity.c
     src/interfaces/auto.c
     src/interfaces/framing.c
     src/interfaces/radio_framing.c
@@ -62,11 +63,9 @@ set(RETICULUM_POSIX_INTERFACE_SOURCES
     src/platform/posix_hal.c
     src/runtime/runtime.c)
 
-# The existing identity module still uses OpenSSL for secure cleansing. It is
-# grouped with the host crypto backend until crypto-provider dispatch lands.
+# Only the host crypto provider depends on OpenSSL.
 set(RETICULUM_OPENSSL_SOURCES
-    src/crypto/crypto.c
-    src/identity/identity.c)
+    src/crypto/crypto.c)
 
 set(RETICULUM_HOST_SOURCES
     ${RETICULUM_PORTABLE_SOURCES}

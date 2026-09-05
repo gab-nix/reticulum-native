@@ -7,6 +7,7 @@ idf_component_register(
         "esp_crypto.c"
         "nvs_storage.c"
         "${RETICULUM_ROOT}/src/crypto/provider.c"
+        "${RETICULUM_ROOT}/src/identity/identity.c"
         "${RETICULUM_ROOT}/src/platform/platform.c"
         "${RETICULUM_ROOT}/src/platform/status.c"
         "${RETICULUM_ROOT}/src/platform/storage.c"
