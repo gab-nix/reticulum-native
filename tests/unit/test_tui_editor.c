@@ -89,7 +89,22 @@ static void test_invalid_utf8(void) {
     assert(tui_editor_empty(&editor));
 }
 
+static void test_horizontal_view(void) {
+    tui_editor_t editor; tui_editor_init(&editor, 1024u);
+    insert_text(&editor, "abcdef\xc3\xa9ghijkl");
+    size_t offset, cursor;
+    assert(tui_editor_view(&editor, 5u, &offset, &cursor));
+    assert(strcmp(tui_editor_text(&editor) + offset, "ijkl") == 0 && cursor == 4u);
+    assert(tui_editor_apply(&editor, TUI_EDIT_HOME));
+    assert(tui_editor_view(&editor, 5u, &offset, &cursor) && offset == 0u && cursor == 0u);
+    assert(!tui_editor_view(&editor, 0u, &offset, &cursor));
+    assert(tui_editor_apply(&editor, TUI_EDIT_END));
+    assert(tui_editor_view(&editor, 8u, &offset, &cursor));
+    assert(tui_editor_text(&editor)[offset] == '\xc3' && cursor == 7u);
+}
+
 int main(void) {
+    test_horizontal_view();
     test_ascii_editing();
     test_capacity_and_control();
     test_utf8_editing();

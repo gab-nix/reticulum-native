@@ -319,6 +319,7 @@ target_include_directories(test_tui_paths PRIVATE
 reticulum_add_test(test_tui_state unit/test_tui_state.c)
 target_sources(test_tui_state PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_host.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_interfaces.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
@@ -387,6 +388,7 @@ if(TARGET nomad-chat)
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_host.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
@@ -420,6 +422,7 @@ if(TARGET nomad-chat)
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_host.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)
@@ -439,6 +442,7 @@ if(TARGET nomad-chat)
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_paths.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_rrc.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_state.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_host.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_settings.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_editor.c
         ${CMAKE_CURRENT_SOURCE_DIR}/../apps/tui_text.c)

@@ -92,7 +92,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Settings and self-announcement | WIP | Complete runtime apply and scheduling behavior |
 | Interfaces screen | IMPLEMENTED | More detailed runtime controls |
 | Configuration screen | IMPLEMENTED | Complete safe live reconfiguration |
-| Disabled incomplete-interface configuration round trips | WIP | A disabled TCP interface may parse without an endpoint, but emission currently writes port zero, which reparse rejects; add omission-preserving serialization and recovery tests |
+| Disabled TCP/UDP endpoint configuration round trips | IMPLEMENTED | `test_config` covers absent and partial TCP client/server and UDP endpoints through parse/emit/reparse, preserving disabled state and specified ports; explicit zero ports remain rejected and bounded emission failure is tested. Incomplete serial/radio settings are outside this row |
 | Upstream interface enable-key compatibility | IMPLEMENTED | `test_config` covers `enabled` and legacy `interface_enabled`, either-true precedence in both orders, per-interface isolation, invalid boolean rejection and emitted-config round trips; semantics checked against pinned Reticulum interface creation |
 | Guide screen | IMPLEMENTED | Expanded contextual help |
 | Event log screen | IMPLEMENTED | Filtering and persistent diagnostics |
@@ -100,7 +100,7 @@ and does not certify complete Reticulum, LXMF or Nomad Network parity.
 | Directory screen | PLANNED | Match upstream 1.2.0 placeholder; contact-directory behavior is covered by Network/contact workflows |
 | Map screen | PLANNED | Match upstream 1.2.0 placeholder; a full mapping system is outside this parity baseline |
 | Hosted propagation-node controls | PLANNED | Full implementation |
-| Hosted Node TUI screen | PLANNED | Replace unavailable action with hosting controls and headless acceptance tests |
+| Hosted Node TUI static-service controls | IMPLEMENTED | `test_tui_settings_ui` covers explicit enable/stop, root/page/access persistence, startup recovery, announce scheduling/offline retry, rollback on invalid publication/save failure and 38x10 curses rendering. Long-value editor viewport has UTF-8 boundary tests. File hosting, OS executable pages, propagation hosting and integrated stock TUI acceptance remain separate |
 | Terminal QR address display | IMPLEMENTED | Bounded public-address QR, four-module quiet zone and half-block rendering; `test_tui_qr` checks bounds/rows/layout, headless dispatcher checks modal keys, `tools/test_tui_qr_decode.py` independently decodes synthetic output with pinned zxing-cpp; physical phone scan and paper-message QR remain |
 | RRC persistent room history | PLANNED | Bounded persistence, restart recovery and history UI tests |
 | RRC Resource envelopes | PLANNED | Oversized channel envelope exchange and upstream acceptance |
