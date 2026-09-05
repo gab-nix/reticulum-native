@@ -5,8 +5,9 @@
 #include "message_archive.h"
 #include <string.h>
 /* Shared by firmware and host tests; never mutates either store. */
-static inline bool heltec_chat_admission_available(const heltec_chat_store *chats,
-    const heltec_message_archive *archive, const lxmf_message_t *message, bool verified) {
+static inline bool heltec_chat_admission_check(const heltec_chat_store *chats,
+    const heltec_message_archive *archive, const lxmf_message_t *message, bool verified,
+    bool allow_duplicates) {
     if(!chats || !archive || !message) return false;
     uint8_t senders[8][16]; size_t count=0,same=0;
     bool known=false,evictable_chat=false,archived=false,rotate=false;
@@ -17,7 +18,7 @@ static inline bool heltec_chat_admission_available(const heltec_chat_store *chat
         memcpy(senders[count++],c->sender,16);
         bool pending=false,completed=false,matching=!memcmp(c->sender,message->source,16);
         for(size_t j=0;j<c->count;++j) {
-            if(!memcmp(c->messages[j].id,message->message_id,32)) return true;
+            if(allow_duplicates && !memcmp(c->messages[j].id,message->message_id,32)) return true;
             if(c->messages[j].state==1 || c->messages[j].state==2) pending=true;
             else completed=true;
         }
@@ -28,7 +29,7 @@ static inline bool heltec_chat_admission_available(const heltec_chat_store *chat
         const heltec_archived_message *m=heltec_message_archive_get(archive,i);
         if(!m || m->signature==LXMF_SIGNATURE_VERIFIED) continue;
         archived=true;
-        if(!memcmp(m->id,message->message_id,32)) return true;
+        if(allow_duplicates && !memcmp(m->id,message->message_id,32)) return true;
         bool found=false;
         for(size_t j=0;j<count;++j) if(!memcmp(senders[j],m->source,16)) found=true;
         if(!found) { if(count==8) return false; memcpy(senders[count++],m->source,16); }
@@ -40,5 +41,15 @@ static inline bool heltec_chat_admission_available(const heltec_chat_store *chat
     /* Only the chat store can evict here. With archive-only identities mixed
      * in, replacing its oldest chat may not free a combined sender slot. */
     return !known && count==8 && !archived && evictable_chat;
+}
+static inline bool heltec_chat_admission_available(const heltec_chat_store *chats,
+    const heltec_message_archive *archive, const lxmf_message_t *message, bool verified) {
+    return heltec_chat_admission_check(chats,archive,message,verified,true);
+}
+static inline bool heltec_chat_reply_available(const heltec_chat_store *chats,
+    const heltec_message_archive *archive, const uint8_t destination[16]) {
+    if(!destination) return false;
+    lxmf_message_t message={0}; memcpy(message.source,destination,16);
+    return heltec_chat_admission_check(chats,archive,&message,true,false);
 }
 #endif

@@ -133,9 +133,25 @@ History is **unencrypted on flash** in this development profile. Deletion is
 logical journal deletion, not guaranteed forensic erasure. Clear View does not
 delete saved chats. Packet contents are never logged. Compact OLED previews
 substitute unsupported Unicode glyphs and label shortened text with an ellipsis.
-Quick replies, transport forwarding, direct links/resources, large messages,
-durable replay protection, ratchet rotation and stamp enforcement remain
-unfinished. The full UART shell and full Reticulum runtime are not yet connected.
+From a verified conversation, hold to open actions, choose **Quick Reply**, then
+choose a phrase. Sending requires a separate confirmation, defaulting to Cancel.
+The choices are "I'm okay", "SOS", "I'll be there", "Almost there", "Yes", "No"
+and "Thank you". SOS is an ordinary message, not an emergency-service connection.
+The peer must announce its LXMF delivery identity and ratchet first; peers
+requiring stamps are explicitly unsupported by this short-reply profile.
+
+Four pending replies are saved before transmission. The message view shows
+queued/transmitting/awaiting-proof/delivered/failed/cancelled state and active
+attempt counts. Replies use at most three attempts; the acknowledgement timeout
+starts after RF completion, not while waiting for airtime. Only a valid proof
+establishes delivery. **Cancel Reply** stops future retries, but an already queued
+radio frame may still transmit. Outbox recovery preserves packets and attempts
+across reboot; completed replies are not automatically resent. Local tests and
+the ESP-IDF build pass; physical acknowledgement and restart testing remain.
+
+Transport forwarding, direct links/resources, large messages, durable inbound
+replay protection, ratchet rotation and stamp enforcement remain unfinished.
+The full UART shell and full Reticulum runtime are not yet connected.
 Announce time starts at firmware build time, with a persisted increasing floor
 across restart; this is not a synchronized real-time clock.
 

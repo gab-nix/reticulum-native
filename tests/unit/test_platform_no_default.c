@@ -109,7 +109,7 @@ int main(void) {
     };
     static const rns_interface_ops_t interface_ops = {
         interface_start, interface_poll, interface_send, interface_stats,
-        interface_stop, NULL
+        interface_stop, NULL, NULL
     };
     static const rns_storage_ops_t storage_ops = {
         storage_read, storage_write, storage_remove, NULL

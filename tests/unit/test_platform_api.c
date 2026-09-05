@@ -120,7 +120,7 @@ int main(void) {
     };
     const rns_interface_ops_t interface_ops = {
         interface_start, interface_poll, interface_send, interface_stats,
-        interface_stop, interface_destroy
+        interface_stop, interface_destroy, NULL
     };
     fake_store_t store_state = {{0}, 0U, 0U};
     fake_interface_t interface_state = {0};

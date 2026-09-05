@@ -46,6 +46,71 @@ static heltec_archived_message archive_item;
 static size_t archive_cursor = 64;
 static uint64_t archive_generation, archive_next;
 static bool archive_rescan;
+static bool outbox_ready;
+static rns_status_t quick_reply(void *context,const uint8_t sender[16],const char *text) {
+    (void)context;
+    if(!heltec_chat_reply_available(saved_chats,archive,sender)) return RNS_ERROR_OVERFLOW;
+    uint8_t id[32]; uint64_t now=(uint64_t)esp_timer_get_time()/1000000U;
+    uint64_t timestamp=(uint64_t)HELTEC_BUILD_EPOCH+now;
+    /* Avoid identical reply IDs when uptime restarts without a wall clock.
+     * Only local outgoing timestamps are trusted to advance this floor. */
+    for(size_t i=0;i<8;++i) {
+        const heltec_chat *chat=heltec_chat_store_get(saved_chats,i);
+        if(!chat) continue;
+        for(size_t j=0;j<chat->count;++j) if(chat->messages[j].state && chat->messages[j].timestamp>=timestamp) {
+            if(chat->messages[j].timestamp==UINT64_MAX) return RNS_ERROR_OVERFLOW;
+            timestamp=chat->messages[j].timestamp+1U;
+        }
+    }
+    for(size_t i=0;i<4;++i) {
+        lxmf_packet_outgoing out;
+        if(lxmf_packet_node_outgoing(node,i,&out) && out.timestamp>=timestamp) {
+            if(out.timestamp==UINT64_MAX) return RNS_ERROR_OVERFLOW;
+            timestamp=out.timestamp+1U;
+        }
+    }
+    return lxmf_packet_node_send(node,sender,(const uint8_t *)text,strlen(text),
+        timestamp,id);
+}
+static rns_status_t cancel_reply(void *context,const uint8_t id[32]) {
+    (void)context; return lxmf_packet_node_cancel(node,id);
+}
+static bool reply_delivery_line(void *context,const uint8_t id[32],char line[22]) {
+    (void)context;
+    static const char *names[]={"", "QUEUED", "TRANSMITTING", "AWAITING PROOF", "DELIVERED", "FAILED", "CANCELLED"};
+    for(size_t i=0;i<4;++i) {
+        lxmf_packet_outgoing out;
+        if(lxmf_packet_node_outgoing(node,i,&out) && !memcmp(out.id,id,32)) {
+            (void)snprintf(line,22,"%s %u/3",out.durable?names[out.state]:"SAVING STATE",out.attempts);
+            return true;
+        }
+    }
+    return false;
+}
+static uint8_t save_outgoing_history(void) {
+    uint8_t ready=0;
+    if(!saved_chats || !outbox_ready) return ready;
+    for(size_t i=0;i<4;++i) {
+        lxmf_packet_outgoing out;
+        if(!lxmf_packet_node_outgoing(node,i,&out)) continue;
+        /* Do not present unpersisted terminal transitions as durable delivery. */
+        if(!out.durable) continue;
+        uint8_t state=out.state==LXMF_PACKET_DELIVERED?3:
+            out.state==LXMF_PACKET_FAILED?4:out.state==LXMF_PACKET_CANCELLED?5:
+            out.state==LXMF_PACKET_AWAITING_PROOF?2:1;
+        heltec_chat_message m={.timestamp=out.timestamp,.length=(uint16_t)out.text_length,.state=state};
+        memcpy(m.id,out.id,32); memcpy(m.text,out.text,out.text_length);
+        lxmf_message_t admission={0}; memcpy(admission.source,out.destination,16); memcpy(admission.message_id,out.id,32);
+        rns_status_t status=heltec_chat_admission_available(saved_chats,archive,&admission,true)?
+            heltec_chat_store_add(saved_chats,out.destination,&m):RNS_ERROR_OVERFLOW;
+        if(status==RNS_OK) status=heltec_chat_store_set_state(saved_chats,out.destination,out.id,state);
+        if(status==RNS_OK && out.state>=LXMF_PACKET_DELIVERED) status=lxmf_packet_node_release(node,i);
+        rns_hal_secure_zero(&m,sizeof(m)); rns_hal_secure_zero(&out,sizeof(out));
+        if(status!=RNS_OK) { chat_status=status; continue; }
+        ready|=(uint8_t)(1U<<i);
+    }
+    return ready;
+}
 static bool archive_has_id(const uint8_t id[32]) {
     for(size_t i=0;i<64;++i) {
         const heltec_archived_message *m=heltec_message_archive_get(archive,i);
@@ -120,7 +185,9 @@ static rns_status_t entropy(void *context, uint8_t *out, size_t size) {
     (void)context; return rns_hal_random_bytes(out, size);
 }
 static void tx_result(void *context, uint32_t id, rns_sx1262_packet_outcome_t outcome, rns_status_t status) {
-    (void)context; (void)id;
+    (void)context;
+    lxmf_packet_node_tx_complete(node,id,outcome==RNS_SX1262_PACKET_SENT?RNS_OK:
+        status==RNS_OK?RNS_ERROR_IO:status,clock_ms(NULL));
     if (outcome == RNS_SX1262_PACKET_SENT) ++tx_done; else ++tx_failed;
     ESP_LOGI(TAG, "RF completion outcome=%d status=%d (not a message delivery receipt)", (int)outcome, (int)status);
 }
@@ -170,6 +237,14 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         if (chat_status == RNS_OK) chat_status = heltec_chat_store_open(chat_storage, &saved_chats);
         if (chat_status == RNS_OK) chat_status = heltec_message_archive_open(chat_storage, &archive);
         if (chat_status == RNS_OK) {
+            chat_status=lxmf_packet_node_open_outbox(node,chat_storage);
+            outbox_ready=chat_status==RNS_OK;
+            if(outbox_ready) {
+                chats_ui.send_reply=quick_reply; chats_ui.cancel_reply=cancel_reply;
+                chats_ui.delivery_line=reply_delivery_line;
+            }
+        }
+        if (chat_status == RNS_OK) {
             for (size_t slot = 0; slot < HELTEC_CHAT_COUNT; ++slot) {
                 const heltec_chat *chat = heltec_chat_store_get(saved_chats, slot);
                 if (!chat) continue;
@@ -209,6 +284,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         uint64_t now = clock_ms(NULL);
         if (now >= next_cpu) { sample_cpu(); next_cpu = now+1000U; }
         status = rns_interface_poll(radio, received, NULL, 4U);
+        lxmf_packet_node_poll_ready(node,now,save_outgoing_history());
         lxmf_packet_node_stats_t archive_stats;
         lxmf_packet_node_stats(node,&archive_stats);
         if(archive_generation!=archive_stats.learned_announces) {

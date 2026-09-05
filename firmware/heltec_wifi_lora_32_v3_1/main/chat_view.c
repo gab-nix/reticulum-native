@@ -2,11 +2,12 @@
 #include "chat_view.h"
 #include <stdio.h>
 #include <string.h>
+static const char *replies[]={"I'm okay","SOS","I'll be there","Almost there","Yes","No","Thank you","Cancel"};
 bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
                           bool next,bool select,char lines[8][22]) {
     size_t slots[8],count=0,index=0,mi=0;
     memset(lines,0,8U*22U);
-    if(next) v->error=RNS_OK;
+    if(next) { v->error=RNS_OK; v->reply_queued=false; }
     for(size_t i=0;i<8;++i) if(heltec_chat_store_get(store,i)) slots[count++]=i;
     bool found=false;
     for(size_t i=0;i<count;++i) if(v->selected && !memcmp(v->sender,heltec_chat_store_get(store,slots[i])->sender,16)) { index=i; found=true; }
@@ -23,16 +24,25 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
     if(chat && v->message_selected)
         for(size_t i=0;i<chat->count;++i) if(!memcmp(v->message,chat->messages[i].id,32)) mi=i;
     if(v->screen==1 && next && chat && chat->count) mi=(mi+1U)%chat->count;
-    if(v->screen==2 && next) v->action=(v->action+1U)%4U;
+    if(v->screen==2 && next) v->action=(v->action+1U)%5U;
     if(v->screen==3 && next) v->action=1U-v->action;
+    if(v->screen==4 && next) v->reply=(v->reply+1U)%8U;
+    if(v->screen==5 && next) v->action=1U-v->action;
+    if(v->screen==6 && next) v->action=1U-v->action;
     if(select) {
         if(v->screen==0) { if(v->back || !chat) return true; v->screen=1; }
         else if(v->screen==1) { v->screen=2; v->action=0; }
         else if(v->screen==2) {
             if(v->action==0) { v->screen=0; v->back=false; }
             else if(v->action==1) v->screen=1;
-            else if(v->action==2) v->error=RNS_ERROR_UNSUPPORTED;
-            else { v->screen=3; v->action=0; }
+            else if(v->action==2) {
+                if(v->send_reply) { v->screen=4; v->reply=0; }
+                else v->error=RNS_ERROR_UNSUPPORTED;
+            }
+            else if(v->action==3) { v->screen=3; v->action=0; }
+            else if(v->cancel_reply && chat && chat->count &&
+                (chat->messages[mi].state==1 || chat->messages[mi].state==2)) { v->screen=6; v->action=0; }
+            else v->error=RNS_ERROR_INVALID_STATE;
         } else if(v->screen==3) {
             if(v->action && chat) {
                 v->error=heltec_chat_store_delete(store,slots[index]);
@@ -40,6 +50,18 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
                 return heltec_chat_view_poll(v,store,false,false,lines);
             }
             v->screen=2; v->action=0;
+        } else if(v->screen==4) {
+            if(v->reply==7) v->screen=2;
+            else { v->screen=5; v->action=0; }
+        } else if(v->screen==5) {
+            if(v->action && chat && v->send_reply) {
+                v->error=v->send_reply(v->reply_context,v->sender,replies[v->reply]);
+                v->reply_queued=v->error==RNS_OK;
+                v->screen=1;
+            } else v->screen=4;
+        } else if(v->screen==6) {
+            if(v->action && v->cancel_reply) v->error=v->cancel_reply(v->reply_context,v->message);
+            v->screen=1;
         }
     }
     if(v->screen==0) {
@@ -57,7 +79,9 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
         if(chat->count) {
             const heltec_chat_message *m=&chat->messages[mi];
             memcpy(v->message,m->id,32); v->message_selected=true;
-            (void)snprintf(lines[1],22,"%s",m->state==0?"VERIFIED INBOUND":"OUTGOING");
+            static const char *states[]={"VERIFIED INBOUND","QUEUED","AWAITING PROOF","DELIVERED","FAILED","CANCELLED"};
+            (void)snprintf(lines[1],22,"%s",m->state<6?states[m->state]:"UNKNOWN STATE");
+            if(v->delivery_line) (void)v->delivery_line(v->reply_context,m->id,lines[1]);
             size_t out=0;
             for(size_t i=0;i<m->length && out<105U;++i) {
                 uint8_t c=m->text[i]; if((c&0xc0U)==0x80U) continue;
@@ -66,15 +90,34 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
             if(m->length>105U) memcpy(lines[6]+18,"...",3);
         }
     } else if(v->screen==2) {
-        static const char *actions[]={"CHAT LIST","READ MESSAGES","REPLY UNAVAILABLE","DELETE CHAT"};
+        const char *actions[]={"CHAT LIST","READ MESSAGES",v->send_reply?"QUICK REPLY":"REPLY UNAVAILABLE","DELETE CHAT","CANCEL REPLY"};
         memcpy(lines[0],"CHAT ACTIONS",13);
-        for(size_t i=0;i<4;++i) (void)snprintf(lines[i+2],22,"%c %s",v->action==i?'*':' ',actions[i]);
+        for(size_t i=0;i<5;++i) (void)snprintf(lines[i+1],22,"%c %s",v->action==i?'*':' ',actions[i]);
+    } else if(v->screen==4) {
+        (void)snprintf(lines[0],22,"QUICK REPLIES");
+        size_t first=v->reply/5U*5U;
+        for(size_t i=first;i<8 && i<first+5U;++i)
+            (void)snprintf(lines[1+i-first],22,"%c %s",i==v->reply?'*':' ',replies[i]);
+    } else if(v->screen==5) {
+        (void)snprintf(lines[0],22,"SEND THIS REPLY?");
+        (void)snprintf(lines[1],22,"%s",replies[v->reply]);
+        (void)snprintf(lines[3],22,"%c CANCEL",v->action?' ':'*');
+        (void)snprintf(lines[4],22,"%c SEND",v->action?'*':' ');
+        if(v->reply==1) (void)snprintf(lines[5],22,"NOT EMERGENCY SERVICE");
+    } else if(v->screen==6) {
+        (void)snprintf(lines[0],22,"CANCEL THIS REPLY?");
+        (void)snprintf(lines[2],22,"%c KEEP SENDING",v->action?' ':'*');
+        (void)snprintf(lines[3],22,"%c CANCEL RETRIES",v->action?'*':' ');
+        (void)snprintf(lines[5],22,"QUEUED RF MAY SEND");
     } else {
-        memcpy(lines[0],"DELETE THIS CHAT?",18);
+        (void)snprintf(lines[0],22,"DELETE THIS CHAT?");
         (void)snprintf(lines[2],22,"%c CANCEL",v->action==0?'*':' ');
         (void)snprintf(lines[3],22,"%c DELETE",v->action==1?'*':' ');
     }
-    if(v->error!=RNS_OK) (void)snprintf(lines[6],22,"ACTION ERROR %d",(int)v->error);
+    if(v->reply_queued) (void)snprintf(lines[6],22,"REPLY QUEUED");
+    if(v->error==RNS_ERROR_NOT_FOUND) (void)snprintf(lines[6],22,"PEER MUST ANNOUNCE");
+    else if(v->error==RNS_ERROR_UNSUPPORTED) (void)snprintf(lines[6],22,"RATCHET/STAMP UNSUPP");
+    else if(v->error!=RNS_OK) (void)snprintf(lines[6],22,"ACTION ERROR %d",(int)v->error);
     memcpy(lines[7],"TAP NEXT HOLD OPEN",19);
     return false;
 }

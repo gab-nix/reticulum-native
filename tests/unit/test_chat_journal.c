@@ -84,6 +84,14 @@ static void admission_rotation(const heltec_chat_flash_ops *ops) {
         assert(heltec_message_archive_put(archive,&unknown)==RNS_OK);
         incoming.source[0]=9;
         assert(!heltec_chat_admission_available(chats,archive,&incoming,true));
+        /* Seven verified records plus one unverified record fill this chat.
+         * Preflight must not accept a reply, even if its placeholder ID matches. */
+        incoming.source[0]=2;
+        for(unsigned i=0;i<6;++i) { m.id[0]=(uint8_t)(50+i);
+            assert(heltec_chat_store_add(chats,incoming.source,&m)==RNS_OK); }
+        memcpy(incoming.message_id,m.id,32);
+        assert(heltec_chat_admission_available(chats,archive,&incoming,true));
+        assert(!heltec_chat_reply_available(chats,archive,incoming.source));
         heltec_message_archive_close(archive); heltec_chat_store_close(chats); rns_storage_destroy(s);
     }
 }

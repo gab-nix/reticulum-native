@@ -295,6 +295,11 @@ static rns_status_t interface_send(void *context, const uint8_t *packet,
                                      &ignored_id);
 }
 
+static rns_status_t interface_send_with_id(void *context, const uint8_t *packet,
+    size_t length, uint32_t *id) {
+    heltec_radio_adapter_t *adapter=context;
+    return rns_sx1262_interface_send(adapter->scheduler,packet,length,id);
+}
 static rns_status_t interface_get_stats(void *context,
                                         rns_interface_stats_t *stats) {
     heltec_radio_adapter_t *adapter = context;
@@ -344,6 +349,7 @@ static const rns_interface_ops_t INTERFACE_OPS = {
     .start = interface_start,
     .poll = interface_poll,
     .send = interface_send,
+    .send_with_id = interface_send_with_id,
     .get_stats = interface_get_stats,
     .stop = interface_stop,
     .destroy = interface_destroy};
