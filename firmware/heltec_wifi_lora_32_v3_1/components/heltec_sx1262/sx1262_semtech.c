@@ -160,12 +160,32 @@ static rns_status_t configure(void *c, const rns_sx1262_config_t *cfg) {
   if (s == SX126X_STATUS_OK) {
     const uint16_t irq = SX126X_IRQ_TX_DONE | SX126X_IRQ_RX_DONE |
                          SX126X_IRQ_HEADER_ERROR | SX126X_IRQ_CRC_ERROR |
+                         SX126X_IRQ_CAD_DONE | SX126X_IRQ_CAD_DETECTED |
                          SX126X_IRQ_TIMEOUT;
     s = sx126x_set_dio_irq_params(c, irq, irq, SX126X_IRQ_NONE,
                                   SX126X_IRQ_NONE);
   }
   if (s == SX126X_STATUS_OK)
     s = sx126x_clear_irq_status(c, SX126X_IRQ_ALL);
+  return mapped(s);
+}
+static rns_status_t start_cad(void *c, const rns_sx1262_config_t *cfg) {
+  sx126x_cad_params_t params;
+  sx126x_status_t s;
+  if (!c || !cfg || cfg->spreading_factor < 5U ||
+      cfg->spreading_factor > 12U)
+    return RNS_ERROR_INVALID_ARGUMENT;
+  params = (sx126x_cad_params_t){.cad_symb_nb = SX126X_CAD_04_SYMB,
+                                 .cad_detect_peak =
+                                     (uint8_t)(cfg->spreading_factor + 13U),
+                                 .cad_detect_min = 10U,
+                                 .cad_exit_mode = SX126X_CAD_ONLY,
+                                 .cad_timeout = 0U};
+  s = sx126x_set_standby(c, SX126X_STANDBY_CFG_XOSC);
+  if (s == SX126X_STATUS_OK)
+    s = sx126x_set_cad_params(c, &params);
+  if (s == SX126X_STATUS_OK)
+    s = sx126x_set_cad(c);
   return mapped(s);
 }
 static rns_status_t start_rx(void *c, const rns_sx1262_config_t *cfg) {
@@ -227,6 +247,13 @@ static rns_status_t standby(void *c) {
 }
 const rns_sx1262_chip_ops_t *rns_sx1262_semtech_chip_ops(void) {
   static const rns_sx1262_chip_ops_t ops = {
-      reset, configure, start_rx, start_tx, irq, read_packet, standby};
+      .reset = reset,
+      .configure = configure,
+      .start_rx = start_rx,
+      .start_cad = start_cad,
+      .start_tx = start_tx,
+      .get_and_clear_irq = irq,
+      .read_packet = read_packet,
+      .standby = standby};
   return &ops;
 }
