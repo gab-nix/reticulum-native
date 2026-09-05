@@ -48,6 +48,7 @@ typedef struct {
     int16_t rssi_dbm;
     int16_t snr_db;
     bool signal_valid;
+    bool discovery_active;
 } rns_heltec_oled_model_t;
 
 typedef struct {
@@ -96,6 +97,7 @@ void rns_heltec_oled_set_diagnostics(rns_heltec_oled_t *oled,
                                      int16_t snr_db,
                                      bool signal_valid);
 void rns_heltec_oled_poll(rns_heltec_oled_t *oled, uint64_t now_ms);
+void rns_heltec_oled_set_discovery_count(rns_heltec_oled_t *oled, uint16_t peers);
 bool rns_heltec_oled_render(rns_heltec_oled_t *oled);
 bool rns_heltec_oled_is_ready(const rns_heltec_oled_t *oled);
 bool rns_heltec_oled_has_failed(const rns_heltec_oled_t *oled);

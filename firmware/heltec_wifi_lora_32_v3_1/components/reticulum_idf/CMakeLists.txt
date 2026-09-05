@@ -8,6 +8,8 @@ idf_component_register(
         "nvs_storage.c"
         "${RETICULUM_ROOT}/src/crypto/provider.c"
         "${RETICULUM_ROOT}/src/identity/identity.c"
+        "${RETICULUM_ROOT}/src/announce/announce.c"
+        "${RETICULUM_ROOT}/src/packet/packet.c"
         "${RETICULUM_ROOT}/src/platform/platform.c"
         "${RETICULUM_ROOT}/src/platform/status.c"
         "${RETICULUM_ROOT}/src/platform/storage.c"

@@ -284,6 +284,13 @@ void rns_heltec_oled_set_status(rns_heltec_oled_t *oled,
     oled->dirty = true;
 }
 
+void rns_heltec_oled_set_discovery_count(rns_heltec_oled_t *oled, uint16_t peers) {
+    if (oled == NULL) return;
+    oled->model.discovery_active = true;
+    oled->model.peer_count = peers;
+    oled->dirty = true;
+}
+
 void rns_heltec_oled_set_diagnostics(rns_heltec_oled_t *oled,
                                      const char *radio,
                                      uint32_t heap_free_bytes,
@@ -358,6 +365,8 @@ bool rns_heltec_oled_render(rns_heltec_oled_t *oled) {
         uint32_t kib = oled->model.heap_free_bytes / 1024U;
         if (kib > 99999U) kib = 99999U;
         (void)snprintf(line, sizeof(line), "HEAP%" PRIu32 "K", kib);
+        if (oled->model.discovery_active)
+            (void)snprintf(line, sizeof(line), "PEERS%u", (unsigned)oled->model.peer_count);
         draw_large_line(oled->frame, 3U, line);
     } else if (oled->settings.screen == RNS_HELTEC_OLED_SCREEN_ROUTES) {
         draw_line(oled->frame, 1U, "NETWORK");

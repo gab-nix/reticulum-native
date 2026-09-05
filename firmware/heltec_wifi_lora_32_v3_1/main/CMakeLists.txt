@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "app_main.c" "bringup.c"
+    SRCS "app_main.c" "bringup.c" "radio_discovery.c"
     INCLUDE_DIRS "."
     REQUIRES heltec_reticulum_radio heltec_v3_1_bsp heltec_status_ui heltec_sx1262 nvs_flash reticulum_idf
 )
