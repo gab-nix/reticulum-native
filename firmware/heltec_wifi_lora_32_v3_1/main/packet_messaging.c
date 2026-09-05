@@ -2,6 +2,7 @@
 #include "packet_messaging.h"
 #include "button_menu.h"
 #include "live_view.h"
+#include "home_view.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -131,9 +132,13 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
             }
             else if (now >= preview_until) {
-                rns_heltec_oled_set_discovery_count(oled, (uint16_t)discovery.identity_count);
-                rns_heltec_oled_set_diagnostics(oled, status == RNS_OK ? "RX/TX 868.100 SF11" : "RADIO ERROR",
-                    (uint32_t)heap_caps_get_free_size(MALLOC_CAP_8BIT), discovery.packets, 0, 0, false);
+                heltec_home_snapshot snapshot = {.rx_packets = discovery.packets, .tx_packets = tx_done,
+                    .heap_free = heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                    .heap_minimum = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)};
+                snapshot.radio_valid = rns_interface_get_stats(radio, &snapshot.radio) == RNS_OK;
+                char lines[8][22];
+                heltec_home_lines(&snapshot, lines);
+                rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
             }
             if (!rns_heltec_oled_render(oled)) {
                 rns_heltec_oled_esp_close(display); display = NULL;

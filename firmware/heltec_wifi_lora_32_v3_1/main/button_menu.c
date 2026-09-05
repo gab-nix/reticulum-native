@@ -11,7 +11,7 @@ heltec_menu_action heltec_button_menu_poll(heltec_button_menu *m, bool pressed, 
     if (!pressed && !m->stable) { m->armed = true; return HELTEC_MENU_NONE; }
     if (m->stable == pressed) {
         if (!pressed || !m->armed || m->consumed || now < m->pressed_at ||
-            now - m->pressed_at < 700U) return HELTEC_MENU_NONE;
+            now - m->pressed_at < 500U) return HELTEC_MENU_NONE;
         m->consumed = true;
         if (!m->open) { m->open = true; m->selected = 0; return HELTEC_MENU_NONE; }
         goto select_item;
@@ -21,10 +21,10 @@ heltec_menu_action heltec_button_menu_poll(heltec_button_menu *m, bool pressed, 
     if (!m->armed) { m->armed = true; return HELTEC_MENU_NONE; }
     if (m->consumed) return HELTEC_MENU_NONE;
     if (!m->open) {
-        if (m->browsing && now >= m->pressed_at && now-m->pressed_at < 700U) return HELTEC_MENU_NEXT;
+        if (m->browsing && now >= m->pressed_at && now-m->pressed_at < 500U) return HELTEC_MENU_NEXT;
         m->open = true; m->selected = 0; return HELTEC_MENU_NONE;
     }
-    if (now < m->pressed_at || now - m->pressed_at < 700U) {
+    if (now < m->pressed_at || now - m->pressed_at < 500U) {
         m->selected = (uint8_t)((m->selected + 1U) % 5U); return HELTEC_MENU_NONE;
     }
 select_item:
