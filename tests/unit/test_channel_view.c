@@ -12,6 +12,16 @@ int main(void) {
     s.radio_tx_frames = 1; s.radio_cad_busy = 1;
     heltec_channel_sample(&v, 2000, &s); assert(v.samples[59] == 6);
     heltec_channel_lines(&v, &s, lines);
+    assert(!strcmp(lines[4], "AIR 0/36000MS"));
+    s.radio_airtime_us = 999999000ULL;
+    heltec_channel_lines(&v, &s, lines);
+    assert(!strcmp(lines[4], "AIR 999999/36000MS"));
+    s.radio_airtime_us = UINT64_MAX;
+    s.pending_tx = 1000;
+    s.radio_duty_deferrals = UINT64_MAX;
+    heltec_channel_lines(&v, &s, lines);
+    assert(!strcmp(lines[4], "AIR 999999/36000MS"));
+    assert(!strcmp(lines[5], "QUEUE 999 DEF 999"));
     assert(!strcmp(lines[6], "LAST SIGNAL UNKNOWN"));
     s.radio_signal_valid = 1; s.radio_last_rssi_dbm = -112; s.radio_last_snr_db = -7;
     heltec_channel_lines(&v, &s, lines);

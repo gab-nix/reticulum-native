@@ -38,9 +38,16 @@ void heltec_channel_lines(const heltec_channel_view *v,
     }
     if (s->radio_telemetry_valid) {
         /* Firmware profile is fixed to 1% of a rolling hour: 36000 ms. */
-        (void)snprintf(lines[4], 22, "AIR %lu/36000MS", (unsigned long)(s->radio_airtime_us/1000U > 999999U ? 999999U : s->radio_airtime_us/1000U));
-        (void)snprintf(lines[5], 22, "QUEUE %u DEF %u", (unsigned)(s->pending_tx > 999U ? 999U : s->pending_tx),
-            (unsigned)(s->radio_duty_deferrals > 999U ? 999U : s->radio_duty_deferrals));
+        char airtime[21];
+        uint64_t milliseconds = s->radio_airtime_us / 1000U;
+        if (milliseconds > 999999U) milliseconds = 999999U;
+        (void)snprintf(airtime, sizeof(airtime), "%llu", (unsigned long long)milliseconds);
+        /* Bound the screen field independently of host integer widths. */
+        (void)snprintf(lines[4], 22, "AIR %.6s/36000MS", airtime);
+        char queue[11], deferrals[11];
+        (void)snprintf(queue, sizeof(queue), "%u", (unsigned)(s->pending_tx > 999U ? 999U : s->pending_tx));
+        (void)snprintf(deferrals, sizeof(deferrals), "%u", (unsigned)(s->radio_duty_deferrals > 999U ? 999U : s->radio_duty_deferrals));
+        (void)snprintf(lines[5], 22, "QUEUE %.3s DEF %.3s", queue, deferrals);
     } else memcpy(lines[4], "RADIO UNAVAILABLE", 18U);
     if (s->radio_telemetry_valid && s->radio_signal_valid)
         (void)snprintf(lines[6], 22, "R%d S%d LAST", (int)s->radio_last_rssi_dbm, (int)s->radio_last_snr_db);
