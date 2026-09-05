@@ -66,6 +66,8 @@ typedef struct {
     rns_heltec_oled_model_t model;
     uint8_t frame[RNS_HELTEC_OLED_FRAME_BYTES];
     uint64_t preview_deadline_ms;
+    uint64_t preview_started_ms;
+    size_t preview_page;
     bool ready;
     bool failed;
     bool dirty;

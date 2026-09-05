@@ -9,6 +9,7 @@
 #include "reticulum/boards/heltec_wifi_lora_32_v3_1.h"
 #include "reticulum/esp_idf.h"
 #include "bringup.h"
+#include "packet_messaging.h"
 
 static const char *TAG = "reticulum";
 static rns_storage_t *storage;
@@ -70,6 +71,6 @@ void app_main(void) {
              board->console_uart, (unsigned long)board->console_baud,
              board->uart_tx, board->uart_rx);
     ESP_LOGI(TAG, "ESP-IDF platform, crypto and bounded NVS storage providers are ready");
-    ESP_LOGW(TAG, "Identity and LXMF services remain disabled; starting receive-only hardware diagnostics");
-    heltec_bringup_run();
+    ESP_LOGW(TAG, "Starting packet LXMF; PRG queues announce; direct links/resources unsupported");
+    heltec_packet_messaging_run(storage);
 }

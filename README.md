@@ -96,7 +96,7 @@ adapter supplies secure randomness and SHA-256. OLED message previews have a
 separate enable setting; disabling previews immediately clears retained text.
 
 The firmware now starts the SSD1306 through an ESP-IDF I2C adapter and opens
-the SX1262 in receive-only mode after its crypto/storage boot checks. The
+the SX1262 through its airtime-limited packet scheduler after crypto/storage boot checks. The
 large-text diagnostic display shows radio state, RX count and unique verified
 identity count (`IDS`). Identities are not physical device counts: one identity
 can advertise multiple services, and one device can host multiple identities.
@@ -104,17 +104,31 @@ Display failures do not stop radio receive. The USB console
 reports health counters without packet contents. RNode frames are reassembled
 and announces are signature-verified before entering a bounded 32-destination
 diagnostic table. Duplicate and older announces do not refresh entries; entries
-expire after an hour. This is not yet a routing or messaging service. IFAC-protected
-packets are rejected until interface credentials are supported. No RF transmission is queued.
-The receive-only profile uses 868.100 MHz, 250 kHz bandwidth, SF11, CR4/5 and an 18-symbol
+expire after an hour. IFAC-protected packets are rejected until interface credentials are supported.
+The profile uses 868.100 MHz, 250 kHz bandwidth, SF11, CR4/5 and an 18-symbol
 preamble. Raw over-air reception has been observed with a matching external peer;
 incoming announces have also passed signature verification on the board, with
 stable heap and more than 2 KiB stack headroom. Outbound interoperability remains unverified.
 
-The UART command shell, persistent identity, Reticulum runtime and LXMF
-services are not yet connected. The shell core only dispatches application
-handlers; it cannot construct Reticulum packets or access private identity
-material by itself.
+Packet-mode LXMF now uses a persistent NVS identity and ratchet. Briefly press
+and release PRG to queue a signed `Heltec` delivery announce (50 ms debounce,
+60-second cooldown). Keep PRG released during reset: it is also the GPIO0 boot
+strap. There is no automatic startup announcement. All TX, including message
+proofs, uses CAD and a 1% rolling airtime budget; queue acceptance is not RF completion.
+The airtime history is volatile and must not be bypassed by repeated rebooting.
+
+For the first message test, announce the sender first, then send a short
+**opportunistic** LXMF message to the discovered Heltec. Valid messages receive
+an explicit proof and a 30-second plaintext OLED preview in large 10x14-pixel
+letters. Longer previews cycle through 40-character pages every four seconds;
+unsupported Unicode glyphs display as `?`. Packet contents are
+never logged. Unknown senders are rejected until their verified delivery
+announce arrives. Direct links/resources, large messages, persistent inbox,
+durable replay protection, ratchet rotation and stamp enforcement are not
+supported by this basic firmware profile. Physical TX/LXMF verification remains
+pending. The full UART shell and full Reticulum runtime are not yet connected.
+Announce time starts at firmware build time, with a persisted increasing floor
+across restart; this is not a synchronized real-time clock.
 
 The descriptor follows Heltec's official V3 board pin definition and the
 upstream RNode `BOARD_HELTEC32_V3` mapping. V3.1 keeps the V3 radio/display

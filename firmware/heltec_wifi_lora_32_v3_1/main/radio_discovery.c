@@ -78,6 +78,12 @@ void heltec_radio_discovery_init(heltec_radio_discovery *s) {
     memset(s, 0, sizeof(*s));
     (void)rns_radio_reassembler_init(&s->frames, s->storage, sizeof(s->storage), 10000U, 10000U);
 }
+void heltec_radio_discovery_packet(heltec_radio_discovery *s,
+    const uint8_t *packet, size_t length, uint64_t now_ms) {
+    if (!s || !packet) return;
+    heltec_radio_discovery_poll(s, now_ms);
+    (void)packet_received(packet, length, s);
+}
 void heltec_radio_discovery_poll(heltec_radio_discovery *s, uint64_t now_ms) {
     if (s == NULL) return;
     s->now_ms = now_ms;

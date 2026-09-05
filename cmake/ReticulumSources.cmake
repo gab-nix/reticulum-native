@@ -18,6 +18,7 @@ set(RETICULUM_PORTABLE_SOURCES
     src/lxmf/delivery.c
     src/lxmf/fields.c
     src/lxmf/lxmf.c
+    src/lxmf/packet_node.c
     src/lxmf/micron.c
     src/lxmf/paper.c
     src/lxmf/propagation.c
