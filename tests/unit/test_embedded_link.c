@@ -54,6 +54,9 @@ int main(void) {
     rns_identity peer;assert(rns_embedded_link_authenticated_peer(mb,id,&peer)==RNS_OK);
     assert(memcmp(peer.hash,ia.hash,16)==0&&!peer.has_private);
     assert(rns_embedded_link_authenticated_peer(ma,id,&peer)==RNS_OK&&!peer.has_private);
+    uint8_t reused[16];
+    assert(rns_embedded_link_connect(mb,da,&ia,130031,reused)==RNS_OK);
+    assert(!memcmp(reused,id,16));
     assert(rns_embedded_link_send(ma,id,(const uint8_t *)"hi",2,130040,hash)==RNS_OK);
     transfer(&a,ma,mb,130050);transfer(&b,mb,ma,130060);
     assert(a.complete==1&&a.proof==1&&b.data==1);

@@ -453,7 +453,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 char lines[8][22];
                 heltec_home_lines(&snapshot, lines);
                 size_t unread=heltec_chat_store_unread(saved_chats);
-                if(unread) (void)snprintf(lines[7],22,"%u UNREAD HOLD TO OPEN",(unsigned)unread);
+                if(unread) (void)snprintf(lines[7],22,"%u UNREAD: HOLD OPEN",(unsigned)(unread%100U));
                 char sender[22],preview[22];
                 if(oled->settings.preview_enabled && heltec_live_notification(&live,now,sender,preview)) {
                     (void)snprintf(lines[5],22,"NEW %.17s",sender); memcpy(lines[6],preview,22);

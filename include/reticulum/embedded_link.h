@@ -24,6 +24,8 @@ typedef struct {
 rns_status_t rns_embedded_link_create(const rns_identity *, const uint8_t[16],
     rns_interface_t *, const rns_embedded_link_callbacks *, void *, rns_embedded_link_manager **);
 void rns_embedded_link_destroy(rns_embedded_link_manager *);
+/* One manager serves one application protocol; connect may reuse an identified
+ * inbound backchannel matching the complete peer identity within that service. */
 rns_status_t rns_embedded_link_connect(rns_embedded_link_manager *, const uint8_t[16],
     const rns_identity *, uint64_t, uint8_t[16]);
 rns_status_t rns_embedded_link_receive(rns_embedded_link_manager *, const uint8_t *, size_t, uint64_t);

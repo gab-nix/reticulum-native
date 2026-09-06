@@ -105,7 +105,15 @@ rns_status_t rns_embedded_link_connect(rns_embedded_link_manager *m,const uint8_
     if(!m||!destination||!identity||!id)return RNS_ERROR_INVALID_ARGUMENT;
     if(!set_now(m,now))return RNS_ERROR_TIMEOUT;
     slot *s=NULL;
+    uint8_t wanted_public[64]; rns_identity_export_public(identity,wanted_public);
     for(size_t i=0;i<RNS_EMBEDDED_LINK_CAPACITY;i++) {
+        if(m->slots[i].used && m->slots[i].ready && m->slots[i].identified &&
+            m->slots[i].link.role==RNS_LINK_RESPONDER) {
+            uint8_t actual_public[64]; rns_identity_export_public(&m->slots[i].link.remote_identity,actual_public);
+            if(!memcmp(wanted_public,actual_public,sizeof(actual_public))) {
+                memcpy(id,m->slots[i].link.link_id,16); return RNS_OK;
+            }
+        }
         if(m->slots[i].used && m->slots[i].link.role==RNS_LINK_INITIATOR && memcmp(m->slots[i].destination,destination,16)==0) {
             memcpy(id,m->slots[i].link.link_id,16);return RNS_OK;
         }

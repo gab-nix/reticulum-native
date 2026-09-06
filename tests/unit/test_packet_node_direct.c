@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "reticulum/lxmf_packet_node.h"
 #include "reticulum/hal.h"
+#include "reticulum/packet.h"
+#include "reticulum/proof.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -123,6 +125,24 @@ int main(void) {
     lxmf_packet_node_destroy(a->node); boot(a); run(a,b);
     assert(lxmf_packet_node_outgoing(a->node,0,&out) && out.state==LXMF_PACKET_DELIVERED);
     assert(b->received==3);
+    assert(lxmf_packet_node_release(a->node,0)==RNS_OK);
+    assert(lxmf_packet_node_send(a->node,address,(const uint8_t *)"hello",5,1004,id)==RNS_OK);
+    lxmf_packet_node_poll(a->node,now);
+    assert(lxmf_packet_node_outgoing(a->node,0,&out) && out.state==LXMF_PACKET_TRANSMITTING);
+    frame *queued=&a->queue[(a->tail-1U)%64];
+    uint8_t hash[32],proof_data[96],proof_raw[500]; size_t proof_length;
+    rns_identity remote;
+    assert(rns_identity_from_private(&remote,b->identity.data+1));
+    assert(rns_packet_hash(queued->data,queued->length,hash));
+    assert(rns_proof_generate_explicit(&remote,hash,proof_data));
+    rns_packet proof={.packet_type=3,.data=proof_data,.data_length=sizeof(proof_data)};
+    memcpy(proof.destination_hash,hash,16);
+    assert(rns_packet_encode(&proof,proof_raw,sizeof(proof_raw),&proof_length));
+    assert(lxmf_packet_node_receive(a->node,proof_raw,proof_length)==RNS_OK);
+    assert(lxmf_packet_node_outgoing(a->node,0,&out) && out.state==LXMF_PACKET_TRANSMITTING);
+    run(a,b);
+    assert(lxmf_packet_node_outgoing(a->node,0,&out) && out.state==LXMF_PACKET_DELIVERED);
+    assert(b->received==4);
     lxmf_packet_node_destroy(a->node); lxmf_packet_node_destroy(b->node);
     rns_interface_destroy(a->radio); rns_interface_destroy(b->radio);
     rns_storage_destroy(a->storage); rns_storage_destroy(b->storage); free(a); free(b);

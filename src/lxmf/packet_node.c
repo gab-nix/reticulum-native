@@ -306,7 +306,7 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
         if(handled!=RNS_ERROR_NOT_FOUND) return handled;
     }
     if(p.packet_type==3 && p.header_type==0 && p.destination_type==0 && p.context==0) {
-        for(size_t i=0;i<4;++i) if(n->outgoing[i].used && n->outgoing[i].view.attempts &&
+        for(size_t i=0;i<4;++i) if(n->outgoing[i].used && !n->outgoing[i].view.direct && n->outgoing[i].view.attempts &&
             n->outgoing[i].view.state<LXMF_PACKET_DELIVERED &&
             !memcmp(p.destination_hash,n->outgoing[i].hash,16) &&
             rns_proof_validate(&n->outgoing[i].recipient,n->outgoing[i].hash,p.data,p.data_length)) {
