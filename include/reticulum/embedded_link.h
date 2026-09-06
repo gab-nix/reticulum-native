@@ -17,7 +17,10 @@ typedef struct {
  * mutations/destruction are forbidden. Close reclaims its slot after callback;
  * state query subsequently returns NOT_FOUND. Queued control packets cannot be
  * retracted from providers without cancellation support, but stale completions
- * are ignored. No transit routing or Resource support is provided. */
+ * are ignored. Backwards monotonic time closes existing links with TIMEOUT;
+ * the next operation may establish a new link on the corrected clock.
+ * IFAC-wrapped input must be authenticated/stripped before receive.
+ * No transit routing or Resource support is provided. */
 rns_status_t rns_embedded_link_create(const rns_identity *, const uint8_t[16],
     rns_interface_t *, const rns_embedded_link_callbacks *, void *, rns_embedded_link_manager **);
 void rns_embedded_link_destroy(rns_embedded_link_manager *);

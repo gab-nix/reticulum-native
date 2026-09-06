@@ -9,12 +9,12 @@
 #define QUEUE_MS UINT64_C(3600000)
 #define KEEP_MS UINT64_C(360000)
 #define TX_COUNT 16u
-enum { TX_CONTROL, TX_REQUEST, TX_PROOF, TX_RTT, TX_DATA };
+enum { TX_CONTROL, TX_REQUEST, TX_PROOF, TX_RTT, TX_DATA, TX_IDENTIFY };
 typedef struct {
     rns_link link;
     bool used, identified, ready;
     uint8_t destination[16];
-    uint64_t deadline, last_rx, last_tx;
+    uint64_t deadline, last_rx, last_tx, created;
 } slot;
 typedef struct {
     bool used, sent, proved;
@@ -54,7 +54,14 @@ static void finish(rns_embedded_link_manager *m,slot *s,rns_status_t status) {
         memset(t,0,sizeof *t);
     }
     notify(m,s,status);
-    memset(s,0,sizeof *s);
+    rns_hal_secure_zero(s,sizeof *s);
+}
+static bool set_now(rns_embedded_link_manager *m,uint64_t now) {
+    if(now<m->now) {
+        for(size_t i=0;i<RNS_EMBEDDED_LINK_CAPACITY;i++)if(m->slots[i].used)finish(m,&m->slots[i],RNS_ERROR_TIMEOUT);
+        m->now=now;return false;
+    }
+    m->now=now;return true;
 }
 static rns_status_t wire(rns_embedded_link_manager *m,slot *s,uint8_t type,uint8_t context,
     const uint8_t *data,size_t length,unsigned kind,uint8_t hash[32]) {
@@ -91,12 +98,13 @@ rns_status_t rns_embedded_link_create(const rns_identity *identity,const uint8_t
     memcpy((*out)->destination,destination,16);if(callbacks)(*out)->callbacks=*callbacks;return RNS_OK;
 }
 void rns_embedded_link_destroy(rns_embedded_link_manager *m) {
-    if(m){const rns_platform_ops_t *platform=m->platform;memset(m,0,sizeof *m);platform->deallocate(platform->context,m);}
+    if(m){const rns_platform_ops_t *platform=m->platform;rns_hal_secure_zero(m,sizeof *m);platform->deallocate(platform->context,m);}
 }
 rns_status_t rns_embedded_link_connect(rns_embedded_link_manager *m,const uint8_t destination[16],
     const rns_identity *identity,uint64_t now,uint8_t id[16]) {
     if(!m||!destination||!identity||!id)return RNS_ERROR_INVALID_ARGUMENT;
-    m->now=now;slot *s=NULL;
+    if(!set_now(m,now))return RNS_ERROR_TIMEOUT;
+    slot *s=NULL;
     for(size_t i=0;i<RNS_EMBEDDED_LINK_CAPACITY;i++) {
         if(m->slots[i].used && m->slots[i].link.role==RNS_LINK_INITIATOR && memcmp(m->slots[i].destination,destination,16)==0) {
             memcpy(id,m->slots[i].link.link_id,16);return RNS_OK;
@@ -107,11 +115,11 @@ rns_status_t rns_embedded_link_connect(rns_embedded_link_manager *m,const uint8_
     rns_identity public_identity;uint8_t public_bytes[64];
     rns_identity_export_public(identity,public_bytes);
     if(!rns_identity_from_public(&public_identity,public_bytes)||
-       !rns_link_initiator_init(&s->link,&public_identity,RNS_MTU,120,clock_now,m))return RNS_ERROR_CRYPTO;
-    s->used=true;s->identified=true;s->deadline=now+QUEUE_MS;memcpy(s->destination,destination,16);
+       !rns_link_initiator_init(&s->link,&public_identity,RNS_MTU,120,clock_now,m)){rns_hal_secure_zero(s,sizeof *s);return RNS_ERROR_CRYPTO;}
+    s->used=true;s->identified=true;s->created=now;s->deadline=now+QUEUE_MS;memcpy(s->destination,destination,16);
     uint8_t payload[67];rns_link_build_request_payload(&s->link,payload);
     rns_status_t status=wire(m,s,2,0,payload,sizeof payload,TX_REQUEST,NULL);
-    if(status!=RNS_OK){memset(s,0,sizeof *s);return status;}
+    if(status!=RNS_OK){rns_hal_secure_zero(s,sizeof *s);return status;}
     memcpy(id,s->link.link_id,16);notify(m,s,RNS_OK);return RNS_OK;
 }
 rns_status_t rns_embedded_link_state(const rns_embedded_link_manager *m,const uint8_t id[16],rns_link_state *state) {
@@ -127,18 +135,20 @@ rns_status_t rns_embedded_link_authenticated_peer(const rns_embedded_link_manage
 rns_status_t rns_embedded_link_send(rns_embedded_link_manager *m,const uint8_t id[16],const uint8_t *data,
     size_t length,uint64_t now,uint8_t hash[32]) {
     if(!m||!id||(!data&&length)||!hash)return RNS_ERROR_INVALID_ARGUMENT;
-    m->now=now;slot *s=find(m,id);if(!s||!s->ready)return RNS_ERROR_INVALID_STATE;
+    if(!set_now(m,now))return RNS_ERROR_TIMEOUT;
+    slot *s=find(m,id);if(!s||!s->ready)return RNS_ERROR_INVALID_STATE;
     return encrypted(m,s,0,data,length,TX_DATA,hash);
 }
 rns_status_t rns_embedded_link_close(rns_embedded_link_manager *m,const uint8_t id[16],uint64_t now) {
     if(!m||!id)return RNS_ERROR_INVALID_ARGUMENT;
-    m->now=now;slot *s=find(m,id);if(!s)return RNS_ERROR_NOT_FOUND;
+    if(!set_now(m,now))return RNS_ERROR_TIMEOUT;
+    slot *s=find(m,id);if(!s)return RNS_ERROR_NOT_FOUND;
     rns_status_t status=s->ready?encrypted(m,s,0xfc,s->link.link_id,16,TX_CONTROL,NULL):RNS_OK;
     finish(m,s,RNS_OK);return status;
 }
 void rns_embedded_link_tx_complete(rns_embedded_link_manager *m,uint32_t id,rns_status_t status,uint64_t now) {
     if(!m)return;
-    m->now=now;
+    if(!set_now(m,now))return;
     for(size_t i=0;i<TX_COUNT;i++) {
         tx *t=&m->transmissions[i];if(!t->used||t->sent||t->id!=id)continue;
         slot *s=&m->slots[t->slot];s->last_tx=now;
@@ -147,13 +157,17 @@ void rns_embedded_link_tx_complete(rns_embedded_link_manager *m,uint32_t id,rns_
         if(t->kind==TX_REQUEST||t->kind==TX_PROOF){s->deadline=now+WAIT_MS;s->link.request_time=clock_now(m);}
         if(t->kind==TX_RTT){
             uint8_t identify[128], signed_data[80];
-            s->ready=true;s->last_rx=now;
             rns_identity_export_public(m->identity,identify);
             memcpy(signed_data,s->link.link_id,16);memcpy(signed_data+16,identify,64);
+            t->used=false;
+            rns_status_t identify_status=RNS_ERROR_CRYPTO;
             if(rns_identity_sign(m->identity,signed_data,sizeof signed_data,identify+64))
-                (void)encrypted(m,s,0xfb,identify,sizeof identify,TX_CONTROL,NULL);
-            notify(m,s,RNS_OK);
+                identify_status=encrypted(m,s,0xfb,identify,sizeof identify,TX_IDENTIFY,NULL);
+            rns_hal_secure_zero(identify,sizeof identify);
+            if(identify_status!=RNS_OK){finish(m,s,identify_status);return;}
+            s->deadline=now+QUEUE_MS;return;
         }
+        if(t->kind==TX_IDENTIFY){s->ready=true;s->last_rx=now;notify(m,s,RNS_OK);}
         if(t->kind==TX_DATA){
             t->sent=true;t->deadline=now+WAIT_MS;s->deadline=t->deadline;
             if(t->proved){t->used=false;if(m->callbacks.proof)m->callbacks.proof(m->context,s->link.link_id,t->hash);}
@@ -163,13 +177,13 @@ void rns_embedded_link_tx_complete(rns_embedded_link_manager *m,uint32_t id,rns_
 }
 void rns_embedded_link_poll(rns_embedded_link_manager *m,uint64_t now) {
     if(!m)return;
-    m->now=now;
+    if(!set_now(m,now))return;
     for(size_t i=0;i<TX_COUNT;i++)if(m->transmissions[i].used&&now>=m->transmissions[i].deadline) {
         slot *s=&m->slots[m->transmissions[i].slot];finish(m,s,RNS_ERROR_TIMEOUT);
     }
     for(size_t i=0;i<RNS_EMBEDDED_LINK_CAPACITY;i++) {
         slot *s=&m->slots[i];if(!s->used)continue;
-        if(!s->ready){if(now>=s->deadline)finish(m,s,RNS_ERROR_TIMEOUT);continue;}
+        if(!s->ready){if(now>=s->deadline||now-s->created>=QUEUE_MS)finish(m,s,RNS_ERROR_TIMEOUT);continue;}
         bool queued=false;
         for(size_t j=0;j<TX_COUNT;j++)if(m->transmissions[j].used&&!m->transmissions[j].sent&&m->transmissions[j].slot==i)queued=true;
         if(!queued&&now-s->last_rx>=KEEP_MS+WAIT_MS&&now>=s->deadline){finish(m,s,RNS_ERROR_TIMEOUT);continue;}
@@ -179,17 +193,49 @@ void rns_embedded_link_poll(rns_embedded_link_manager *m,uint64_t now) {
         }
     }
 }
+static rns_status_t plaintext_receive(rns_embedded_link_manager *m,slot *s,uint8_t context,
+    const uint8_t *plain,size_t n,const uint8_t *raw,size_t length) {
+    if(context==0xfc) {
+        if(n!=16||memcmp(plain,s->link.link_id,16)!=0)return RNS_ERROR_PROTOCOL;
+        finish(m,s,RNS_OK);return RNS_OK;
+    }
+    if(context==0xfb) {
+        rns_identity identity;uint8_t signed_data[80];
+        if(s->link.role!=RNS_LINK_RESPONDER||n!=128||!rns_identity_from_public(&identity,plain))return RNS_ERROR_PROTOCOL;
+        memcpy(signed_data,s->link.link_id,16);memcpy(signed_data+16,plain,64);
+        if(!rns_identity_verify(&identity,signed_data,sizeof signed_data,plain+64))return RNS_ERROR_CRYPTO;
+        if(s->identified && memcmp(identity.signing_public,s->link.remote_identity.signing_public,32)!=0)return RNS_ERROR_CRYPTO;
+        s->link.remote_identity=identity;s->identified=true;notify(m,s,RNS_OK);return RNS_OK;
+    }
+    if(context!=0)return RNS_ERROR_UNSUPPORTED;
+    if(!m->callbacks.data)return RNS_ERROR_UNSUPPORTED;
+    rns_status_t accepted=m->callbacks.data(m->context,s->link.link_id,plain,n);
+    if(accepted!=RNS_OK)return accepted;
+    uint8_t proof[96];
+    if(!rns_packet_hash(raw,length,proof)||!rns_ed25519_sign(s->link.signing_private,proof,32,proof+32))return RNS_ERROR_CRYPTO;
+    return wire(m,s,3,0,proof,sizeof proof,TX_CONTROL,NULL);
+}
 rns_status_t rns_embedded_link_receive(rns_embedded_link_manager *m,const uint8_t *raw,size_t length,uint64_t now) {
     if(!m||!raw)return RNS_ERROR_INVALID_ARGUMENT;
-    m->now=now;rns_packet p;if(!rns_packet_decode(&p,raw,length))return RNS_ERROR_PROTOCOL;
+    if(!set_now(m,now))return RNS_ERROR_TIMEOUT;
+    rns_packet p;if(!length||(raw[0]&0x80u)||!rns_packet_decode(&p,raw,length))return RNS_ERROR_PROTOCOL;
     if(p.packet_type==2 && p.destination_type==0 && memcmp(p.destination_hash,m->destination,16)==0) {
         uint8_t id[16];if(!rns_link_id_from_request_packet(raw,length,id))return RNS_ERROR_PROTOCOL;
-        if(find(m,id))return RNS_OK;
+        slot *existing=find(m,id);
+        if(existing) {
+            if(existing->link.state!=RNS_LINK_HANDSHAKE)return RNS_OK;
+            for(size_t i=0;i<TX_COUNT;i++)
+                if(m->transmissions[i].used&&m->transmissions[i].slot==(unsigned)(existing-m->slots)&&m->transmissions[i].kind==TX_PROOF)
+                    return RNS_OK;
+            uint8_t repeated[99];
+            if(!rns_link_build_proof(&existing->link,repeated))return RNS_ERROR_CRYPTO;
+            return wire(m,existing,3,0xff,repeated,sizeof repeated,TX_PROOF,NULL);
+        }
         slot *s=NULL;for(size_t i=0;i<RNS_EMBEDDED_LINK_CAPACITY;i++)if(!m->slots[i].used){s=&m->slots[i];break;}
         if(!s)return RNS_ERROR_OVERFLOW;
-        if(!rns_link_responder_accept(&s->link,m->identity,raw,length,120,clock_now,m))return RNS_ERROR_CRYPTO;
-        s->used=true;s->deadline=now+QUEUE_MS;
-        uint8_t proof[99];if(!rns_link_build_proof(&s->link,proof)){memset(s,0,sizeof *s);return RNS_ERROR_CRYPTO;}
+        if(!rns_link_responder_accept(&s->link,m->identity,raw,length,120,clock_now,m)){rns_hal_secure_zero(s,sizeof *s);return RNS_ERROR_CRYPTO;}
+        s->used=true;s->created=now;s->deadline=now+QUEUE_MS;
+        uint8_t proof[99];if(!rns_link_build_proof(&s->link,proof)){rns_hal_secure_zero(s,sizeof *s);return RNS_ERROR_CRYPTO;}
         rns_status_t status=wire(m,s,3,0xff,proof,sizeof proof,TX_PROOF,NULL);
         if(status!=RNS_OK){finish(m,s,status);return status;}notify(m,s,RNS_OK);return RNS_OK;
     }
@@ -232,25 +278,8 @@ rns_status_t rns_embedded_link_receive(rns_embedded_link_manager *m,const uint8_
     }
     if(p.context>=1&&p.context<=8)return RNS_ERROR_UNSUPPORTED;
     uint8_t plain[RNS_MTU];size_t n;
-    if(!rns_link_decrypt(&s->link,p.data,p.data_length,plain,sizeof plain,&n))return RNS_ERROR_CRYPTO;
+    if(!rns_link_decrypt(&s->link,p.data,p.data_length,plain,sizeof plain,&n)){rns_hal_secure_zero(plain,sizeof plain);return RNS_ERROR_CRYPTO;}
     s->last_rx=now;
-    if(p.context==0xfc) {
-        if(n!=16||memcmp(plain,s->link.link_id,16)!=0)return RNS_ERROR_PROTOCOL;
-        finish(m,s,RNS_OK);return RNS_OK;
-    }
-    if(p.context==0xfb) {
-        rns_identity identity;uint8_t signed_data[80];
-        if(s->link.role!=RNS_LINK_RESPONDER||n!=128||!rns_identity_from_public(&identity,plain))return RNS_ERROR_PROTOCOL;
-        memcpy(signed_data,s->link.link_id,16);memcpy(signed_data+16,plain,64);
-        if(!rns_identity_verify(&identity,signed_data,sizeof signed_data,plain+64))return RNS_ERROR_CRYPTO;
-        if(s->identified && memcmp(identity.signing_public,s->link.remote_identity.signing_public,32)!=0)return RNS_ERROR_CRYPTO;
-        s->link.remote_identity=identity;s->identified=true;notify(m,s,RNS_OK);return RNS_OK;
-    }
-    if(p.context!=0)return RNS_ERROR_UNSUPPORTED;
-    if(!m->callbacks.data)return RNS_ERROR_UNSUPPORTED;
-    rns_status_t accepted=m->callbacks.data(m->context,s->link.link_id,plain,n);
-    if(accepted!=RNS_OK)return accepted;
-    uint8_t proof[96];
-    if(!rns_packet_hash(raw,length,proof)||!rns_ed25519_sign(s->link.signing_private,proof,32,proof+32))return RNS_ERROR_CRYPTO;
-    return wire(m,s,3,0,proof,sizeof proof,TX_CONTROL,NULL);
+    rns_status_t status=plaintext_receive(m,s,p.context,plain,n,raw,length);
+    rns_hal_secure_zero(plain,sizeof plain);return status;
 }
