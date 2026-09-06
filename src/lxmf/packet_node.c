@@ -19,8 +19,19 @@ struct lxmf_packet_node {
     rns_interface_t *interface_value;
     rns_identity identity;
     uint8_t ratchet_private[32], ratchet_public[32], address[16], name_hash[10];
-    struct { bool used, delivery, has_ratchet, requires_stamp, metadata_valid; uint8_t stamp_cost, address[16], ratchet[32]; rns_identity identity; uint64_t timestamp, delivery_timestamp; } peers[PEERS];
-    size_t next_peer, next_replay;
+    struct { bool used, delivery, has_ratchet, requires_stamp, metadata_valid, observed;
+        uint8_t stamp_cost, address[16], ratchet[32]; rns_identity identity;
+        uint64_t timestamp, delivery_timestamp; char display_name[128]; } peers[PEERS];
+    rns_storage_t *peer_storage;
+    lxmf_packet_peer_protected_fn protected_peer;
+    void *peer_context;
+    rns_status_t peer_storage_status;
+    bool peer_blocked[PEERS], peer_dirty[PEERS], restoring;
+    size_t restore_slot;
+    size_t peer_write_cursor;
+    uint64_t peer_write_after;
+    struct { uint8_t raw[RNS_MTU+1U]; size_t length; } peer_records[PEERS];
+    size_t next_replay;
     uint64_t last_announce;
     uint8_t replay[REPLAYS][32];
     bool replay_used[REPLAYS];
@@ -120,6 +131,11 @@ rns_status_t lxmf_packet_node_announce(lxmf_packet_node_t *n, uint64_t timestamp
     n->last_announce = timestamp;
     return n->stats.last_send_status = rns_interface_send(n->interface_value, n->raw, length);
 }
+static bool peer_protected(lxmf_packet_node_t *n,size_t slot) {
+    for(size_t i=0;i<4;++i) if(n->outgoing[i].used &&
+        !memcmp(n->outgoing[i].view.destination,n->peers[slot].address,16)) return true;
+    return n->protected_peer && n->protected_peer(n->peer_context,n->peers[slot].address);
+}
 static void learn(lxmf_packet_node_t *n, const rns_packet *p) {
     rns_announce a;
     if (p->destination_type != 0 || !rns_announce_parse(&a, p->data, p->data_length, p->context_flag) ||
@@ -133,7 +149,29 @@ static void learn(lxmf_packet_node_t *n, const rns_packet *p) {
         if (n->peers[i].used && memcmp(n->peers[i].address, delivery, 16) == 0) {
             slot = i; break;
         }
-    if (slot == PEERS) { slot = n->next_peer; n->next_peer = (slot + 1) % PEERS; memset(&n->peers[slot],0,sizeof(n->peers[slot])); }
+    bool is_delivery=!memcmp(p->destination_hash,delivery,16);
+    if(n->restoring) {
+        if(slot!=PEERS || !is_delivery) return;
+        slot=n->restore_slot;
+    }
+    if(slot==PEERS) {
+        for(size_t i=0;i<PEERS;++i) if(!n->peer_blocked[i] && !n->peers[i].used) { slot=i; break; }
+        if(slot==PEERS && is_delivery) for(size_t i=0;i<PEERS;++i)
+            if(!n->peer_blocked[i] && !n->peer_dirty[i] && !peer_protected(n,i) &&
+                (slot==PEERS || n->peers[i].timestamp<n->peers[slot].timestamp)) slot=i;
+        if(slot==PEERS) return;
+        memset(&n->peers[slot],0,sizeof(n->peers[slot]));
+    }
+    if(is_delivery && n->peers[slot].delivery) {
+        if(a.timestamp<n->peers[slot].delivery_timestamp) return;
+        rns_packet previous;
+        if(n->peer_records[slot].length>1 &&
+            rns_packet_decode(&previous,n->peer_records[slot].raw+1,n->peer_records[slot].length-1) &&
+            previous.data_length==p->data_length && !memcmp(previous.data,p->data,p->data_length)) {
+            if(!n->restoring) n->peers[slot].observed=true;
+            return;
+        }
+    }
     if(a.timestamp<n->peers[slot].timestamp && memcmp(p->destination_hash,delivery,16)) return;
     if (!rns_identity_from_public(&n->peers[slot].identity, a.public_key)) return;
     memcpy(n->peers[slot].address, delivery, 16);
@@ -149,7 +187,17 @@ static void learn(lxmf_packet_node_t *n, const rns_packet *p) {
             lxmf_announce_parse(a.app_data,a.app_data_length,&data)==LXMF_OK;
         n->peers[slot].stamp_cost=n->peers[slot].metadata_valid && data.has_stamp_cost ? data.stamp_cost : 0;
         n->peers[slot].requires_stamp=!n->peers[slot].metadata_valid || n->peers[slot].stamp_cost;
+        memset(n->peers[slot].display_name,0,sizeof(n->peers[slot].display_name));
+        if(n->peers[slot].metadata_valid) memcpy(n->peers[slot].display_name,data.display_name,data.display_name_len);
+        n->peers[slot].observed=!n->restoring;
+        if(!n->restoring) {
+            size_t length=0; n->peer_records[slot].raw[0]=1;
+            if(rns_packet_encode(p,n->peer_records[slot].raw+1,RNS_MTU,&length)) {
+                n->peer_records[slot].length=length+1; n->peer_dirty[slot]=n->peer_storage!=NULL;
+            }
+        }
     }
+    if(n->restoring) return;
     ++n->stats.learned_announces;
     for (size_t i = 0; i < PENDING; ++i) {
         if (!n->pending[i].used || memcmp(n->pending[i].source, delivery, 16)) continue;
@@ -157,6 +205,33 @@ static void learn(lxmf_packet_node_t *n, const rns_packet *p) {
         (void)lxmf_packet_node_receive(n, n->pending[i].raw, n->pending[i].length);
         rns_hal_secure_zero(&n->pending[i], sizeof(n->pending[i]));
     }
+}
+rns_status_t lxmf_packet_node_open_peers(lxmf_packet_node_t *n,rns_storage_t *storage,
+    lxmf_packet_peer_protected_fn protected_peer_fn,void *context) {
+    if(!n || !storage) return RNS_ERROR_INVALID_ARGUMENT;
+    if(n->peer_storage) return RNS_ERROR_INVALID_STATE;
+    for(size_t i=0;i<PEERS;++i) if(n->peers[i].used) return RNS_ERROR_INVALID_STATE;
+    n->peer_storage=storage; n->protected_peer=protected_peer_fn; n->peer_context=context;
+    n->restoring=true;
+    for(size_t i=0;i<PEERS;++i) {
+        char key[8]; (void)snprintf(key,sizeof(key),"peer%02u",(unsigned)i);
+        size_t length=0; rns_packet p;
+        rns_status_t status=rns_storage_read(storage,key,n->peer_records[i].raw,sizeof(n->peer_records[i].raw),&length);
+        if(status==RNS_ERROR_NOT_FOUND) continue;
+        if(status==RNS_OK && length>1 && n->peer_records[i].raw[0]==1 &&
+            rns_packet_decode(&p,n->peer_records[i].raw+1,length-1) && p.packet_type==1 &&
+            !(n->peer_records[i].raw[1]&0x80U)) {
+            n->restore_slot=i; learn(n,&p);
+            if(n->peers[i].used) { n->peer_records[i].length=length; continue; }
+        }
+        n->peer_blocked[i]=true;
+        n->peer_storage_status=status==RNS_OK?RNS_ERROR_PROTOCOL:status;
+    }
+    n->restoring=false;
+    return RNS_OK;
+}
+rns_status_t lxmf_packet_node_peer_storage_status(const lxmf_packet_node_t *n) {
+    return n?n->peer_storage_status:RNS_ERROR_INVALID_ARGUMENT;
 }
 rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw, size_t length) {
     rns_packet p;
@@ -369,6 +444,8 @@ bool lxmf_packet_node_peer_info(const lxmf_packet_node_t *n,
     for (size_t i=0;i<PEERS;++i) if(n->peers[i].used && !memcmp(n->peers[i].address,destination,16)) {
         info->delivery=n->peers[i].delivery; info->has_ratchet=n->peers[i].has_ratchet;
         info->metadata_valid=n->peers[i].metadata_valid; info->stamp_cost=n->peers[i].stamp_cost;
+        memcpy(info->display_name,n->peers[i].display_name,sizeof(info->display_name));
+        info->observed_this_boot=n->peers[i].observed;
         return true;
     }
     return false;
@@ -417,7 +494,19 @@ void lxmf_packet_node_poll(lxmf_packet_node_t *n,uint64_t now) {
     lxmf_packet_node_poll_ready(n,now,0x0fU);
 }
 void lxmf_packet_node_poll_ready(lxmf_packet_node_t *n,uint64_t now,uint8_t ready_mask) {
-    if(!n || !n->outbox) return;
+    if(!n) return;
+    if(n->peer_storage && now>=n->peer_write_after) for(size_t step=0;step<PEERS;++step) {
+        size_t i=(n->peer_write_cursor+step)%PEERS;
+        if(!n->peer_dirty[i]) continue;
+        char key[8]; (void)snprintf(key,sizeof(key),"peer%02u",(unsigned)i);
+        rns_status_t status=rns_storage_write_atomic(n->peer_storage,key,n->peer_records[i].raw,n->peer_records[i].length);
+        if(status==RNS_OK) n->peer_dirty[i]=false;
+        else n->peer_storage_status=status;
+        n->peer_write_cursor=(i+1U)%PEERS;
+        n->peer_write_after=now>UINT64_MAX-1000U?UINT64_MAX:now+1000U;
+        break;
+    }
+    if(!n->outbox) return;
     for(size_t i=0;i<4;++i) {
         if(!n->outgoing[i].used) continue;
         if(n->outgoing[i].dirty && save_out(n,i)!=RNS_OK) continue;

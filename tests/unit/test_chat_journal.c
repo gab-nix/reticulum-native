@@ -106,6 +106,10 @@ int main(void) {
     assert(rns_storage_write_atomic(s,"msg63",(const uint8_t *)"last",4)==RNS_OK);
     assert(rns_storage_write_atomic(s,"out3",(const uint8_t *)"queued",6)==RNS_OK);
     assert(rns_storage_write_atomic(s,"prefs",(const uint8_t *)"off",3)==RNS_OK);
+    assert(rns_storage_write_atomic(s,"peer00",(const uint8_t *)"signed",6)==RNS_OK);
+    assert(rns_storage_write_atomic(s,"peer31",(const uint8_t *)"last",4)==RNS_OK);
+    assert(rns_storage_write_atomic(s,"peer32",(const uint8_t *)"bad",3)==RNS_ERROR_INVALID_ARGUMENT);
+    assert(rns_storage_read(s,"peer00",out,sizeof(out),&n)==RNS_OK && n==6 && !memcmp(out,"signed",6));
     assert(rns_storage_write_atomic(s,"msg64",(const uint8_t *)"x",1)==RNS_ERROR_INVALID_ARGUMENT);
     assert(rns_storage_write_atomic(s,"out4",(const uint8_t *)"x",1)==RNS_ERROR_INVALID_ARGUMENT);
     torn=true; assert(rns_storage_write_atomic(s,"chat0",(const uint8_t *)"new",3)==RNS_ERROR_IO);

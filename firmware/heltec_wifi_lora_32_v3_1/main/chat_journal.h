@@ -5,7 +5,7 @@
 /* Legacy chats occupy the first 64 KiB unchanged. New message/outbox/settings
  * records extend the region; offsets are relative
  * to an exclusively owned region, never the identity/NVS partition. */
-#define HELTEC_CHAT_JOURNAL_RECORDS 77U
+#define HELTEC_CHAT_JOURNAL_RECORDS 109U
 #define HELTEC_CHAT_JOURNAL_BYTES (HELTEC_CHAT_JOURNAL_RECORDS*8192U)
 typedef struct {
     void *context;

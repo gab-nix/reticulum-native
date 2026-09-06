@@ -48,6 +48,18 @@ static size_t archive_cursor = 64;
 static uint64_t archive_generation, archive_next;
 static bool archive_rescan;
 static bool outbox_ready;
+static bool peer_in_history(void *context,const uint8_t destination[16]) {
+    (void)context;
+    for(size_t i=0;i<8;++i) {
+        const heltec_chat *chat=heltec_chat_store_get(saved_chats,i);
+        if(chat && !memcmp(chat->sender,destination,16)) return true;
+    }
+    for(size_t i=0;i<64;++i) {
+        const heltec_archived_message *message=heltec_message_archive_get(archive,i);
+        if(message && !memcmp(message->source,destination,16)) return true;
+    }
+    return false;
+}
 static rns_status_t quick_reply(void *context,const uint8_t sender[16],const char *text) {
     (void)context;
     if(!heltec_chat_reply_available(saved_chats,archive,sender)) return RNS_ERROR_OVERFLOW;
@@ -274,6 +286,14 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
             }
         }
         lxmf_packet_node_set_accept(node, persist_message, NULL);
+        if(chat_storage) {
+            rns_status_t peers=lxmf_packet_node_open_peers(node,chat_storage,peer_in_history,NULL);
+            ESP_LOGI(TAG,"Peer cache opening: %d health=%d",(int)peers,
+                (int)lxmf_packet_node_peer_storage_status(node));
+            /* Restored identities are not RF observations, but can validate
+             * archived signatures immediately using the bounded poll scan. */
+            if(peers==RNS_OK && archive) archive_cursor=0;
+        }
         ESP_LOGI(TAG, "Chat storage opening: %d; identity storage unchanged", (int)chat_status);
         if(heltec_chat_flash_quarantined()) ESP_LOGW(TAG,"Storage degraded: quarantined records preserved");
     }

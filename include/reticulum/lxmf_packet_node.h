@@ -8,7 +8,16 @@ typedef struct lxmf_packet_node lxmf_packet_node_t;
 typedef struct {
     bool delivery, has_ratchet, metadata_valid;
     uint8_t stamp_cost;
+    char display_name[128];
+    bool observed_this_boot;
 } lxmf_packet_peer_info;
+typedef bool (*lxmf_packet_peer_protected_fn)(void *context, const uint8_t destination[16]);
+/* Borrowed peer00..peer31 store; open before packet reception. Bad records are
+ * reserved, not erased. Restored signed announces are reverified, not live paths. */
+rns_status_t lxmf_packet_node_open_peers(lxmf_packet_node_t *node, rns_storage_t *storage,
+    lxmf_packet_peer_protected_fn protected_peer, void *context);
+/* Snapshot of peer-cache storage health; not message delivery status. */
+rns_status_t lxmf_packet_node_peer_storage_status(const lxmf_packet_node_t *node);
 /* Snapshot from verified announces only. No keys or borrowed private state. */
 bool lxmf_packet_node_peer_info(const lxmf_packet_node_t *node,
     const uint8_t destination[16], lxmf_packet_peer_info *info);
