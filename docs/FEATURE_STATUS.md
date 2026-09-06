@@ -136,6 +136,8 @@ The opt-in CTest `interop` label runs existing Python drivers using the exact
 revisions documented in README. Each driver validates its source provenance.
 Successful fixture tests alone do not verify an entire screen or subsystem.
 
+The embedded live-test driver uses explicit bounds-check statement separation for GCC warnings-as-errors; the same pinned-Python exchange is its behavioral regression gate.
+
 | Acceptance behavior | Status | Evidence and remaining work |
 | --- | --- | --- |
 | Repeatable pinned Python acceptance entry point | IMPLEMENTED | Twelve opt-in CTest cases, including the explicitly delayed-worker regression; explicit checkout paths, serial execution and bounded timeouts |

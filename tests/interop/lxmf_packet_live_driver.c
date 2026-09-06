@@ -31,7 +31,8 @@ static record *lookup(endpoint *e,const char *key) {
 }
 static rns_status_t read_record(void *ctx,const char *key,uint8_t *out,size_t cap,size_t *length) {
     record *r=lookup(ctx,key);if(!r)return RNS_ERROR_INVALID_ARGUMENT;if(!r->length)return RNS_ERROR_NOT_FOUND;
-    if(r->length>cap)return RNS_ERROR_OVERFLOW;memcpy(out,r->data,r->length);*length=r->length;return RNS_OK;
+    if(r->length>cap)return RNS_ERROR_OVERFLOW;
+    memcpy(out,r->data,r->length);*length=r->length;return RNS_OK;
 }
 static rns_status_t write_record(void *ctx,const char *key,const uint8_t *data,size_t length) {
     record *r=lookup(ctx,key);if(!r||length>sizeof r->data)return RNS_ERROR_OVERFLOW;
