@@ -14,14 +14,14 @@ struct heltec_chat_store {
 static void key_for(size_t slot, char key[8]) { (void)snprintf(key, 8, "chat%u", (unsigned)slot); }
 static rns_status_t save(heltec_chat_store *s, size_t slot, const heltec_chat *c) {
     memset(s->record, 0, sizeof(s->record));
-    s->record[0] = 1; s->record[1] = c->count;
+    s->record[0] = 2; s->record[1] = c->count;
     memcpy(s->record+2, c->sender, 16);
     size_t p = 18;
     for (size_t i = 0; i < c->count; ++i) {
         const heltec_chat_message *m = &c->messages[i];
         memcpy(s->record+p, m->id, 32); p += 32;
         for (unsigned b = 0; b < 8; ++b) s->record[p++] = (uint8_t)(m->timestamp >> (56U-b*8U));
-        s->record[p++] = m->state;
+        s->record[p++] = (uint8_t)(m->state | (m->unread ? 0x80U : 0U));
         s->record[p++] = (uint8_t)(m->length >> 8); s->record[p++] = (uint8_t)m->length;
         memcpy(s->record+p, m->text, m->length); p += HELTEC_CHAT_TEXT;
     }
@@ -29,7 +29,7 @@ static rns_status_t save(heltec_chat_store *s, size_t slot, const heltec_chat *c
     return rns_storage_write_atomic(s->storage, key, s->record, sizeof(s->record));
 }
 static bool decode(heltec_chat_store *s, heltec_chat *c) {
-    if (s->record[0] != 1 || s->record[1] > HELTEC_CHAT_MESSAGES) return false;
+    if ((s->record[0] != 1 && s->record[0] != 2) || s->record[1] > HELTEC_CHAT_MESSAGES) return false;
     c->used = true; c->count = s->record[1]; memcpy(c->sender, s->record+2, 16);
     size_t p = 18;
     for (size_t i = 0; i < c->count; ++i) {
@@ -37,8 +37,9 @@ static bool decode(heltec_chat_store *s, heltec_chat *c) {
         memcpy(m->id, s->record+p, 32); p += 32;
         for (unsigned b = 0; b < 8; ++b) m->timestamp = (m->timestamp << 8)|s->record[p++];
         m->state = s->record[p++];
+        if (s->record[0] == 2) { m->unread=(m->state&0x80U)!=0; m->state&=0x7fU; }
         m->length = (uint16_t)((unsigned)s->record[p]*256U+s->record[p+1]); p += 2;
-        if (m->length > HELTEC_CHAT_TEXT || m->state > 5) return false;
+        if (m->length > HELTEC_CHAT_TEXT || m->state > 5 || (m->unread && m->state)) return false;
         memcpy(m->text, s->record+p, m->length); p += HELTEC_CHAT_TEXT;
     }
     return true;
@@ -81,7 +82,7 @@ bool heltec_chat_can_rotate(const heltec_chat *c, size_t combined_count, bool ve
     return false;
 }
 rns_status_t heltec_chat_store_add(heltec_chat_store *s, const uint8_t sender[16], const heltec_chat_message *m) {
-    if (!s || !sender || !m || m->length > HELTEC_CHAT_TEXT || m->state > 5) return RNS_ERROR_INVALID_ARGUMENT;
+    if (!s || !sender || !m || m->length > HELTEC_CHAT_TEXT || m->state > 5 || (m->unread && m->state)) return RNS_ERROR_INVALID_ARGUMENT;
     size_t slot = HELTEC_CHAT_COUNT;
     for (size_t i = 0; i < HELTEC_CHAT_COUNT; ++i) if (s->chats[i].used && !memcmp(s->chats[i].sender, sender, 16)) { slot = i; break; }
     if (slot == HELTEC_CHAT_COUNT) {
@@ -123,6 +124,27 @@ rns_status_t heltec_chat_store_set_state(heltec_chat_store *s, const uint8_t sen
             rns_status_t result = save(s, slot, &s->scratch);
             if (result == RNS_OK) s->chats[slot] = s->scratch;
             return result;
+        }
+    }
+    return RNS_ERROR_NOT_FOUND;
+}
+size_t heltec_chat_store_unread(const heltec_chat_store *s) {
+    size_t count=0;
+    if(s) for(size_t i=0;i<HELTEC_CHAT_COUNT;++i) if(s->chats[i].used)
+        for(size_t j=0;j<s->chats[i].count;++j) count+=s->chats[i].messages[j].unread?1U:0U;
+    return count;
+}
+rns_status_t heltec_chat_store_mark_read(heltec_chat_store *s,const uint8_t sender[16],const uint8_t id[32]) {
+    if(!s || !sender || !id) return RNS_ERROR_INVALID_ARGUMENT;
+    for(size_t slot=0;slot<HELTEC_CHAT_COUNT;++slot) {
+        const heltec_chat *c=&s->chats[slot];
+        if(!c->used || memcmp(c->sender,sender,16)) continue;
+        for(size_t i=0;i<c->count;++i) if(!memcmp(c->messages[i].id,id,32)) {
+            if(!c->messages[i].unread) return RNS_OK;
+            s->scratch=*c; s->scratch.messages[i].unread=false;
+            rns_status_t status=save(s,slot,&s->scratch);
+            if(status==RNS_OK) s->chats[slot]=s->scratch;
+            return status;
         }
     }
     return RNS_ERROR_NOT_FOUND;

@@ -3,6 +3,41 @@
 #include <stdio.h>
 #include <string.h>
 static const char *replies[]={"I'm okay","SOS","I'll be there","Almost there","Yes","No","Thank you","Cancel"};
+/* Bounded ASCII display projection. Every retained byte is visited; UTF-8
+ * continuation bytes are consumed and unsupported glyphs become '?'. */
+static size_t wrapped(const heltec_chat_message *m,unsigned page,char rows[4][22]) {
+    char text[HELTEC_CHAT_TEXT+1]; size_t n=0,row=0,pos=0;
+    memset(rows,0,4U*22U);
+    for(size_t i=0;i<m->length;++i) {
+        uint8_t c=m->text[i]; if((c&0xc0U)==0x80U) continue;
+        text[n++]=c>=32U && c<127U?(char)c:c=='\n'?'\n':c<32U?' ':'?';
+    }
+    text[n]=0;
+    while(pos<n && row<HELTEC_CHAT_TEXT) {
+        size_t end=pos; while(end<n && end-pos<21U && text[end]!='\n') ++end;
+        size_t take=end-pos,next=end;
+        if(end<n && text[end]=='\n') next=end+1U;
+        else if(end<n && take==21U) {
+            size_t space=end; while(space>pos && text[space-1U]!=' ') --space;
+            if(space>pos) { take=space-pos-1U; next=space; }
+        }
+        if(row/4U==page) memcpy(rows[row%4U],text+pos,take);
+        ++row; pos=next;
+    }
+    return row?row:1U;
+}
+bool heltec_chat_view_open_unread(heltec_chat_view *v,const heltec_chat_store *s) {
+    const heltec_chat_message *latest=NULL; const heltec_chat *owner=NULL;
+    for(size_t i=0;i<HELTEC_CHAT_COUNT;++i) {
+        const heltec_chat *c=heltec_chat_store_get(s,i); if(!c) continue;
+        for(size_t j=0;j<c->count;++j) if(c->messages[j].unread &&
+            (!latest || c->messages[j].timestamp>latest->timestamp)) { latest=&c->messages[j]; owner=c; }
+    }
+    if(!latest) return false;
+    memcpy(v->sender,owner->sender,16); memcpy(v->message,latest->id,32);
+    v->selected=true; v->message_selected=true; v->back=false; v->screen=1; v->page=0;
+    return true;
+}
 bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
                           bool next,bool select,char lines[8][22]) {
     size_t slots[8],count=0,index=0,mi=0;
@@ -23,14 +58,19 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
     if(chat) { memcpy(v->sender,chat->sender,16); v->selected=true; }
     if(chat && v->message_selected)
         for(size_t i=0;i<chat->count;++i) if(!memcmp(v->message,chat->messages[i].id,32)) mi=i;
-    if(v->screen==1 && next && chat && chat->count) mi=(mi+1U)%chat->count;
+    char rows[4][22];
+    if(v->screen==1 && next && chat && chat->count) {
+        size_t pages=(wrapped(&chat->messages[mi],v->page,rows)+3U)/4U;
+        if(v->page+1U<pages) ++v->page;
+        else { mi=(mi+1U)%chat->count; v->page=0; }
+    }
     if(v->screen==2 && next) v->action=(v->action+1U)%5U;
     if(v->screen==3 && next) v->action=1U-v->action;
     if(v->screen==4 && next) v->reply=(v->reply+1U)%8U;
     if(v->screen==5 && next) v->action=1U-v->action;
     if(v->screen==6 && next) v->action=1U-v->action;
     if(select) {
-        if(v->screen==0) { if(v->back || !chat) return true; v->screen=1; }
+        if(v->screen==0) { if(v->back || !chat) return true; v->screen=1; v->page=0; }
         else if(v->screen==1) { v->screen=2; v->action=0; }
         else if(v->screen==2) {
             if(v->action==0) { v->screen=0; v->back=false; }
@@ -71,29 +111,32 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
         for(size_t i=first;i<=count && i<first+5U;++i) {
             if(i==count) (void)snprintf(lines[1U+i-first],22,"%c BACK",selected==i?'*':' ');
             else {
-                const uint8_t *a=heltec_chat_store_get(store,slots[i])->sender;
-                (void)snprintf(lines[1U+i-first],22,"%c %02X%02X%02X%02X",selected==i?'*':' ',a[12],a[13],a[14],a[15]);
+                const heltec_chat *c=heltec_chat_store_get(store,slots[i]); bool unread=false;
+                for(size_t j=0;j<c->count;++j) unread|=c->messages[j].unread;
+                char label[22]; heltec_peer_label(v->peer_name,v->reply_context,c->sender,label);
+                (void)snprintf(lines[1U+i-first],22,"%c%c%.19s",selected==i?'*':' ',unread?'!':' ',label);
             }
         }
     } else if(v->screen==1 && chat) {
-        (void)snprintf(lines[0],22,"MESSAGE %u OF %u",(unsigned)(chat->count?mi+1U:0U),chat->count);
+        heltec_peer_label(v->peer_name,v->reply_context,chat->sender,lines[0]);
         if(chat->count) {
             const heltec_chat_message *m=&chat->messages[mi];
             memcpy(v->message,m->id,32); v->message_selected=true;
             static const char *states[]={"VERIFIED INBOUND","QUEUED","AWAITING PROOF","DELIVERED","FAILED","CANCELLED"};
             (void)snprintf(lines[1],22,"%s",m->state<6?states[m->state]:"UNKNOWN STATE");
             if(v->delivery_line) (void)v->delivery_line(v->reply_context,m->id,lines[1]);
-            size_t out=0;
-            for(size_t i=0;i<m->length && out<105U;++i) {
-                uint8_t c=m->text[i]; if((c&0xc0U)==0x80U) continue;
-                lines[2U+out/21U][out%21U]=c>=32 && c<127?(char)c:c<32?' ':'?'; ++out;
-            }
-            if(m->length>105U) memcpy(lines[6]+18,"...",3);
+            size_t count_rows=wrapped(m,v->page,rows), pages=(count_rows+3U)/4U;
+            if(v->page>=pages) { v->page=0; (void)wrapped(m,0,rows); }
+            for(size_t i=0;i<4;++i) memcpy(lines[2+i],rows[i],22);
+            (void)snprintf(lines[6],22,"MSG %u/%u PAGE %u/%u",(unsigned)mi+1U,chat->count,v->page+1U,(unsigned)pages);
+            rns_status_t read_status=heltec_chat_store_mark_read(store,chat->sender,m->id);
+            if(read_status!=RNS_OK) v->error=read_status;
         }
     } else if(v->screen==2) {
         const char *actions[]={"CHAT LIST","READ MESSAGES",v->send_reply?"QUICK REPLY":"REPLY UNAVAILABLE","DELETE CHAT","CANCEL REPLY"};
         memcpy(lines[0],"CHAT ACTIONS",13);
         for(size_t i=0;i<5;++i) (void)snprintf(lines[i+1],22,"%c %s",v->action==i?'*':' ',actions[i]);
+        (void)snprintf(lines[6],22,"ID %02X%02X%02X%02X",v->sender[12],v->sender[13],v->sender[14],v->sender[15]);
     } else if(v->screen==4) {
         (void)snprintf(lines[0],22,"QUICK REPLIES");
         size_t first=v->reply/5U*5U;

@@ -6,6 +6,9 @@
 static uint8_t records[8][4096]; static size_t lengths[8]; static bool fail;
 static unsigned reply_calls;
 static unsigned cancel_calls;
+static bool named(void *context,const uint8_t sender[16],char name[128]) {
+    (void)context; (void)sender; memcpy(name,"Rei\nPeer",9); return true;
+}
 static rns_status_t reply_cancel(void *context,const uint8_t id[32]) {
     (void)context; assert(id[0]==7); ++cancel_calls; return RNS_OK;
 }
@@ -32,7 +35,7 @@ int main(void) {
     rns_storage_ops_t ops={.read=read_record,.write_atomic=write_record,.remove=remove_record};
     rns_storage_t *storage=NULL; assert(rns_storage_create(&ops,NULL,&storage)==RNS_OK);
     heltec_chat_store *s=NULL; assert(heltec_chat_store_open(storage,&s)==RNS_OK);
-    uint8_t sender[16]={1}; heltec_chat_message m={.length=5,.timestamp=42};
+    uint8_t sender[16]={1}; heltec_chat_message m={.length=5,.timestamp=42,.unread=true};
     memcpy(m.text,"hello",5); m.id[0]=1;
     assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
     assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
@@ -43,11 +46,19 @@ int main(void) {
     heltec_chat_store_close(s); assert(heltec_chat_store_open(storage,&s)==RNS_OK);
     assert(heltec_chat_store_get(s,0)->messages[0].timestamp==42);
     assert(!memcmp(heltec_chat_store_get(s,0)->messages[0].text,"hello",5));
+    assert(heltec_chat_store_unread(s)==1);
+    fail=true; assert(heltec_chat_store_mark_read(s,sender,m.id)==RNS_ERROR_NOT_FOUND);
+    uint8_t first_id[32]={1};
+    assert(heltec_chat_store_mark_read(s,sender,first_id)==RNS_ERROR_IO);
+    assert(heltec_chat_store_unread(s)==1); fail=false;
     heltec_chat_view view={0}; char lines[8][22];
     assert(!heltec_chat_view_poll(&view,s,false,false,lines));
     assert(!strcmp(lines[0],"CHATS 1"));
     assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==1);
     assert(!strcmp(lines[2],"hello"));
+    assert(heltec_chat_store_unread(s)==0);
+    heltec_chat_store_close(s); assert(heltec_chat_store_open(storage,&s)==RNS_OK);
+    assert(heltec_chat_store_unread(s)==0);
     assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==2);
     view.action=3;
     assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==3 && view.action==0);
@@ -90,7 +101,7 @@ int main(void) {
     assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
     assert(heltec_chat_store_get(s,0)->count==8 && heltec_chat_store_get(s,0)->messages[0].id[0]==99);
     assert(heltec_chat_store_delete(s,0)==RNS_OK);
-    m.state=1;
+    m.state=1; m.unread=false;
     for(unsigned i=0;i<8;++i) { m.id[0]=(uint8_t)i; assert(heltec_chat_store_add(s,sender,&m)==RNS_OK); }
     view.screen=1; view.selected=true; view.message_selected=true;
     memcpy(view.sender,sender,16); memcpy(view.message,m.id,32); view.cancel_reply=reply_cancel;
@@ -121,6 +132,36 @@ int main(void) {
     assert(heltec_chat_store_set_state(s,sender,m.id,1)==RNS_ERROR_INVALID_STATE);
     heltec_chat_store_close(s); assert(heltec_chat_store_open(storage,&s)==RNS_OK);
     assert(heltec_chat_store_get(s,2)->messages[0].state==5);
+    heltec_chat_store_close(s);
+    /* V1 records migrate in place: old inbound messages start read. */
+    memset(lengths,0,sizeof(lengths));
+    assert(heltec_chat_store_open(storage,&s)==RNS_OK);
+    memset(&m,0,sizeof(m)); m.length=5; memcpy(m.text,"hello",5); m.id[0]=1;
+    assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
+    heltec_chat_store_close(s); records[0][0]=1;
+    assert(heltec_chat_store_open(storage,&s)==RNS_OK && !heltec_chat_store_unread(s));
+    m.id[0]=2; m.unread=true; m.timestamp=100;
+    memset(m.text,'x',sizeof(m.text)); m.length=sizeof(m.text);
+    memcpy(m.text+sizeof(m.text)-4,"TAIL",4);
+    assert(heltec_chat_store_add(s,sender,&m)==RNS_OK && records[0][0]==2);
+    memset(&view,0,sizeof(view)); view.peer_name=named;
+    assert(heltec_chat_view_open_unread(&view,s));
+    assert(heltec_chat_view_poll(&view,s,false,false,lines)==false);
+    assert(!strcmp(lines[0],"Rei Peer") && !heltec_chat_store_unread(s));
+    assert(strstr(lines[6],"PAGE 1/5"));
+    for(unsigned i=0;i<4;++i) assert(!heltec_chat_view_poll(&view,s,true,false,lines));
+    assert(strstr(lines[6],"PAGE 5/5") && strstr(lines[4],"TAIL"));
+    uint8_t selected_id[32]; memcpy(selected_id,view.message,32);
+    m.id[0]=3; m.timestamp=101;
+    assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
+    assert(!heltec_chat_view_poll(&view,s,false,false,lines));
+    assert(!memcmp(selected_id,view.message,32) && view.page==4 && heltec_chat_store_unread(s)==1);
+    /* Live insertion cannot replace a send confirmation or selected message. */
+    view.screen=5; view.action=0; view.reply=1;
+    m.id[0]=4; assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
+    assert(!heltec_chat_view_poll(&view,s,false,false,lines));
+    assert(view.screen==5 && !view.action && !strcmp(lines[0],"SEND THIS REPLY?"));
+    assert(heltec_chat_store_unread(s)==2);
     heltec_chat_store_close(s);
     records[0][0]=99; assert(heltec_chat_store_open(storage,&s)==RNS_ERROR_PROTOCOL && !s);
     rns_storage_destroy(storage); return 0;
