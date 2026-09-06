@@ -78,6 +78,9 @@ int main(void) {
     memcpy(view.reply_error,"STAMP COST 8 UNSUPP",sizeof("STAMP COST 8 UNSUPP"));
     assert(!heltec_chat_view_poll(&view,s,false,false,lines));
     assert(!strcmp(lines[6],"STAMP COST 8 UNSUPP"));
+    view.error=RNS_ERROR_NOT_FOUND;
+    assert(!heltec_chat_view_poll(&view,s,false,false,lines));
+    assert(!strcmp(lines[6],"PEER INFO NEEDED"));
     view.error=RNS_OK;
     uint8_t second[16]={2};
     assert(heltec_chat_store_add(s,second,&m)==RNS_OK);

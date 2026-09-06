@@ -163,7 +163,7 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
         (void)snprintf(lines[3],22,"%c DELETE",v->action==1?'*':' ');
     }
     if(v->reply_queued) (void)snprintf(lines[6],22,"REPLY QUEUED");
-    if(v->error==RNS_ERROR_NOT_FOUND) (void)snprintf(lines[6],22,"PEER MUST ANNOUNCE");
+    if(v->error==RNS_ERROR_NOT_FOUND) (void)snprintf(lines[6],22,"PEER INFO NEEDED");
     else if(v->error==RNS_ERROR_UNSUPPORTED) (void)snprintf(lines[6],22,"%.21s",v->reply_error[0]?v->reply_error:"REPLY UNSUPPORTED");
     else if(v->error!=RNS_OK) (void)snprintf(lines[6],22,"ACTION ERROR %d",(int)v->error);
     memcpy(lines[7],"TAP NEXT HOLD OPEN",19);
