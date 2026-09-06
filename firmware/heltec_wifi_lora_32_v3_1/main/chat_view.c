@@ -128,7 +128,11 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
             size_t count_rows=wrapped(m,v->page,rows), pages=(count_rows+3U)/4U;
             if(v->page>=pages) { v->page=0; (void)wrapped(m,0,rows); }
             for(size_t i=0;i<4;++i) memcpy(lines[2+i],rows[i],22);
-            (void)snprintf(lines[6],22,"MSG %u/%u PAGE %u/%u",(unsigned)mi+1U,chat->count,v->page+1U,(unsigned)pages);
+            /* All real counts fit two digits (at most 8 messages and 96
+             * pages). Explicit ranges also let GCC prove the OLED bound. */
+            (void)snprintf(lines[6],22,"MSG %u/%u PAGE %u/%u",
+                ((unsigned)mi+1U)%100U,(unsigned)chat->count%100U,
+                (v->page+1U)%100U,(unsigned)pages%100U);
             rns_status_t read_status=heltec_chat_store_mark_read(store,chat->sender,m->id);
             if(read_status!=RNS_OK) v->error=read_status;
         }

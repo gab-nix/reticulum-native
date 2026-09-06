@@ -162,6 +162,11 @@ int main(void) {
     assert(!heltec_chat_view_poll(&view,s,false,false,lines));
     assert(view.screen==5 && !view.action && !strcmp(lines[0],"SEND THIS REPLY?"));
     assert(heltec_chat_store_unread(s)==2);
+    memset(m.text,'\n',sizeof(m.text)); m.id[0]=5; m.timestamp=102;
+    assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
+    assert(heltec_chat_view_open_unread(&view,s));
+    for(unsigned i=0;i<95;++i) assert(!heltec_chat_view_poll(&view,s,true,false,lines));
+    assert(strstr(lines[6],"PAGE 96/96") && strlen(lines[6])<22);
     heltec_chat_store_close(s);
     records[0][0]=99; assert(heltec_chat_store_open(storage,&s)==RNS_ERROR_PROTOCOL && !s);
     rns_storage_destroy(storage); return 0;
