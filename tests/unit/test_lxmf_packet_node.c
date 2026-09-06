@@ -26,9 +26,20 @@ static rns_status_t test_clock(void *context, uint64_t *now) { (void)context; *n
 static rns_status_t write_status = RNS_OK;
 static uint8_t out_records[4][680]; static size_t out_lengths[4];
 static bool quarantined[4];
+static uint8_t peer_records[32][501]; static size_t peer_lengths[32];
+static unsigned peer_writes;
+static bool protect_peers;
+static bool protect_peer(void *context,const uint8_t destination[16]) {
+    (void)context; (void)destination; return protect_peers;
+}
 static uint32_t tx_id; static unsigned tracked_sends;
 static rns_status_t read_record(void *c, const char *key, uint8_t *out, size_t cap, size_t *len) {
     (void)c;
+    if(!strncmp(key,"peer",4)) {
+        unsigned i=(unsigned)(key[4]-'0')*10U+(unsigned)(key[5]-'0'); assert(i<32);
+        if(!peer_lengths[i]) return RNS_ERROR_NOT_FOUND;
+        assert(cap>=peer_lengths[i]); memcpy(out,peer_records[i],peer_lengths[i]); *len=peer_lengths[i]; return RNS_OK;
+    }
     if(!strncmp(key,"out",3)) {
         unsigned i=(unsigned)(key[3]-'0'); assert(i<4 && !key[4]);
         if(quarantined[i]) return RNS_ERROR_QUARANTINED;
@@ -41,6 +52,10 @@ static rns_status_t read_record(void *c, const char *key, uint8_t *out, size_t c
 }
 static rns_status_t write_record(void *c, const char *key, const uint8_t *data, size_t len) {
     (void)c; (void)key; if (write_status != RNS_OK) return write_status;
+    if(!strncmp(key,"peer",4)) {
+        unsigned i=(unsigned)(key[4]-'0')*10U+(unsigned)(key[5]-'0'); assert(i<32 && len<=501);
+        memcpy(peer_records[i],data,len); peer_lengths[i]=len; ++peer_writes; return RNS_OK;
+    }
     if(!strncmp(key,"out",3)) {
         unsigned i=(unsigned)(key[3]-'0'); assert(i<4 && len==680);
         assert(!quarantined[i]);
@@ -380,6 +395,75 @@ int main(void) {
     assert(lxmf_packet_node_create(storage,radio,NULL,NULL,&n)==RNS_OK);
     out_records[1][0]=2;
     assert(lxmf_packet_node_open_outbox(n,storage)==RNS_ERROR_PROTOCOL);
+    lxmf_packet_node_destroy(n);
+    /* Reboot restores signed peer capabilities without a new RF announce. */
+    memset(out_lengths,0,sizeof(out_lengths));
+    assert(lxmf_packet_node_create(storage,radio,NULL,NULL,&n)==RNS_OK);
+    assert(lxmf_packet_node_open_peers(n,storage,NULL,NULL)==RNS_OK);
+    assert(lxmf_packet_node_open_outbox(n,storage)==RNS_OK);
+    lxmf_announce_data_t named={0}; memcpy(named.display_name,"Alice",5); named.display_name_len=5;
+    assert(lxmf_announce_encode(&named,app_data,sizeof(app_data),&app_length)==LXMF_OK);
+    assert(rns_announce_build(&sender,p.destination_hash,name,prefix,7000,recipient_ratchet,app_data,app_length,
+        body,sizeof(body),&p.data_length,&p.context_flag));
+    assert(rns_packet_encode(&p,ann,sizeof(ann),&ann_length));
+    assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+    lxmf_packet_node_poll(n,0); assert(peer_writes==1);
+    lxmf_packet_peer_info saved_peer;
+    assert(lxmf_packet_node_peer_info(n,m.source,&saved_peer) && saved_peer.observed_this_boot);
+    assert(!strcmp(saved_peer.display_name,"Alice"));
+    assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+    lxmf_packet_node_poll(n,1000); assert(peer_writes==1);
+    assert(rns_announce_build(&sender,p.destination_hash,name,prefix,6999,NULL,NULL,0,
+        body,sizeof(body),&p.data_length,&p.context_flag));
+    assert(rns_packet_encode(&p,ann,sizeof(ann),&ann_length));
+    assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+    lxmf_packet_node_poll(n,2000); assert(peer_writes==1);
+    assert(lxmf_packet_node_peer_info(n,m.source,&saved_peer) && saved_peer.has_ratchet && !strcmp(saved_peer.display_name,"Alice"));
+    lxmf_packet_node_destroy(n);
+    assert(lxmf_packet_node_create(storage,radio,NULL,NULL,&n)==RNS_OK);
+    assert(lxmf_packet_node_open_peers(n,storage,NULL,NULL)==RNS_OK);
+    assert(lxmf_packet_node_peer_info(n,m.source,&saved_peer) && !saved_peer.observed_this_boot);
+    assert(saved_peer.has_ratchet && !strcmp(saved_peer.display_name,"Alice"));
+    assert(lxmf_packet_node_open_outbox(n,storage)==RNS_OK);
+    assert(lxmf_packet_node_send(n,m.source,(const uint8_t *)"Yes",3,7001,reply_id)==RNS_OK);
+    before=tracked_sends; lxmf_packet_node_poll(n,0); assert(tracked_sends==before+1);
+    lxmf_packet_node_destroy(n);
+    peer_records[0][peer_lengths[0]-1]^=1;
+    assert(lxmf_packet_node_create(storage,radio,NULL,NULL,&n)==RNS_OK);
+    assert(lxmf_packet_node_open_peers(n,storage,NULL,NULL)==RNS_OK);
+    assert(lxmf_packet_node_peer_storage_status(n)==RNS_ERROR_PROTOCOL);
+    assert(!lxmf_packet_node_peer_info(n,m.source,&saved_peer));
+    lxmf_packet_node_poll(n,1000); assert(peer_writes==1);
+    lxmf_packet_node_destroy(n);
+    memset(peer_lengths,0,sizeof(peer_lengths));
+    assert(lxmf_packet_node_create(storage,radio,NULL,NULL,&n)==RNS_OK);
+    assert(lxmf_packet_node_open_peers(n,storage,protect_peer,NULL)==RNS_OK);
+    uint8_t first_peer[16];
+    unsigned writes_before=peer_writes;
+    for(unsigned i=0;i<33;++i) {
+        rns_identity other; assert(rns_identity_generate(&other));
+        assert(rns_destination_hash(&other,"lxmf",aspects,1,p.destination_hash));
+        if(!i) memcpy(first_peer,p.destination_hash,16);
+        assert(rns_announce_build(&other,p.destination_hash,name,prefix,8000+i,NULL,NULL,0,
+            body,sizeof(body),&p.data_length,&p.context_flag));
+        assert(rns_packet_encode(&p,ann,sizeof(ann),&ann_length));
+        protect_peers=i==32;
+        assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+        lxmf_packet_node_poll(n,(uint64_t)i*1000U);
+    }
+    assert(peer_writes==writes_before+32);
+    assert(lxmf_packet_node_peer_info(n,first_peer,&saved_peer));
+    assert(!lxmf_packet_node_peer_info(n,p.destination_hash,&saved_peer));
+    protect_peers=false;
+    write_status=RNS_ERROR_IO;
+    assert(lxmf_packet_node_receive(n,ann,ann_length)==RNS_OK);
+    lxmf_packet_node_poll(n,33000);
+    assert(lxmf_packet_node_peer_storage_status(n)==RNS_ERROR_IO);
+    assert(lxmf_packet_node_peer_info(n,p.destination_hash,&saved_peer));
+    write_status=RNS_OK;
+    lxmf_packet_node_poll(n,33001); assert(peer_writes==writes_before+32);
+    lxmf_packet_node_poll(n,34000); assert(peer_writes==writes_before+33);
+    assert(!lxmf_packet_node_peer_info(n,first_peer,&saved_peer));
     lxmf_packet_node_destroy(n);
     record[0] = 2;
     assert(lxmf_packet_node_create(storage, radio, message, NULL, &n) == RNS_ERROR_PROTOCOL && n == NULL);

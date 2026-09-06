@@ -27,6 +27,11 @@ static bool key_slot(const char *key, size_t *slot) {
         *slot=72U+(size_t)(key[3]-'0'); return true;
     }
     if (!strcmp(key,"prefs")) { *slot=76U; return true; }
+    if(!strncmp(key,"peer",4) && key[4]>='0' && key[4]<='3' &&
+       key[5]>='0' && key[5]<='9' && !key[6]) {
+        size_t index=(size_t)(key[4]-'0')*10U+(size_t)(key[5]-'0');
+        if(index<32U) { *slot=77U+index; return true; }
+    }
     return false;
 }
 static rns_status_t inspect(journal *j,const char *key,size_t slot,int valid[2],uint32_t gen[2]) {
@@ -93,7 +98,8 @@ rns_status_t heltec_chat_journal_open_report(const heltec_chat_flash_ops *ops,rn
         if(i<8U) (void)snprintf(key,sizeof(key),"chat%u",i);
         else if(i<72U) (void)snprintf(key,sizeof(key),"msg%02u",i-8U);
         else if(i<76U) (void)snprintf(key,sizeof(key),"out%u",i-72U);
-        else memcpy(key,"prefs",6);
+        else if(i==76U) memcpy(key,"prefs",6);
+        else (void)snprintf(key,sizeof(key),"peer%02u",i-77U);
         rns_status_t st=inspect(j,key,i,valid,gen);
         if(st==RNS_ERROR_PROTOCOL) { j->quarantined[i]=true; ++damaged; }
         else if(st!=RNS_OK) { destroy(j); return st; }
