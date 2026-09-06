@@ -11,6 +11,7 @@
 #include "chat_journal.h"
 #include "chat_view.h"
 #include "archive_view.h"
+#include "archive_scan.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -30,7 +31,7 @@ static const char *TAG = "messaging";
 static heltec_radio_discovery discovery;
 static lxmf_packet_node_t *node;
 static rns_heltec_oled_esp_t *display;
-static uint64_t tx_done, tx_failed, preview_until;
+static uint64_t tx_done, tx_failed;
 static heltec_button_menu menu;
 static heltec_live_view live;
 static heltec_menu_action active_view;
@@ -40,13 +41,22 @@ static heltec_chat_store *saved_chats;
 static rns_storage_t *chat_storage;
 static rns_status_t chat_status = RNS_ERROR_INVALID_STATE;
 static heltec_chat_view chats_ui;
+static bool peer_name(void *context,const uint8_t address[16],char name[128]) {
+    (void)context; lxmf_packet_peer_info info;
+    if(!lxmf_packet_node_peer_info(node,address,&info) || !info.metadata_valid) return false;
+    memcpy(name,info.display_name,128); return true;
+}
+static bool peer_snapshot(void *context,size_t slot,uint8_t address[16],unsigned *state) {
+    (void)context; lxmf_packet_peer_info info;
+    if(!lxmf_packet_node_peer_at(node,slot,address,&info)) return false;
+    *state=(unsigned)info.state; return true;
+}
 static heltec_message_archive *archive;
 static heltec_archive_view archive_ui;
 /* Shared scratch belongs to the single polling task, never an ISR. */
 static heltec_archived_message archive_item;
-static size_t archive_cursor = 64;
-static uint64_t archive_generation, archive_next;
-static bool archive_rescan;
+static heltec_archive_scan archive_scan={.cursor=64};
+static uint64_t archive_generation;
 static bool outbox_ready;
 static bool peer_in_history(void *context,const uint8_t destination[16]) {
     (void)context;
@@ -89,7 +99,6 @@ static rns_status_t quick_reply(void *context,const uint8_t sender[16],const cha
         if(!found || !peer.delivery) (void)snprintf(chats_ui.reply_error,22,"NEED PEER ANNOUNCE");
         else if(!peer.metadata_valid) (void)snprintf(chats_ui.reply_error,22,"ANNOUNCE FORMAT ERROR");
         else if(peer.stamp_cost) (void)snprintf(chats_ui.reply_error,22,"STAMP COST %u UNSUPP",(unsigned)peer.stamp_cost);
-        else if(!peer.has_ratchet) (void)snprintf(chats_ui.reply_error,22,"NEED RATCHET ANNOUNCE");
     }
     ESP_LOGI(TAG,"Quick reply status=%d peer=%d delivery=%d ratchet=%d metadata=%d stamp_cost=%u",
         (int)result,found,peer.delivery,peer.has_ratchet,peer.metadata_valid,(unsigned)peer.stamp_cost);
@@ -167,7 +176,7 @@ static rns_status_t persist_message(void *context, const lxmf_message_t *message
             return chat_status;
         }
     }
-    heltec_chat_message item = {.timestamp = (uint64_t)message->timestamp,
+    heltec_chat_message item = {.timestamp = (uint64_t)message->timestamp, .unread=true,
         .length = (uint16_t)message->content.len, .state = 0};
     memcpy(item.id, message->message_id, 32);
     if (item.length) memcpy(item.text, message->content.data, item.length);
@@ -218,18 +227,7 @@ static void incoming_message(void *context, const lxmf_message_t *message) {
     (void)context;
     ESP_LOGI(TAG, "Verified short LXMF received; content bytes=%u", (unsigned)message->content.len);
     heltec_live_message(&live, message->content.data, message->content.len);
-    if (display) {
-        rns_heltec_oled_t *oled = rns_heltec_oled_esp_core(display);
-        rns_heltec_oled_settings_t settings = oled->settings;
-        settings.preview_timeout_ms = 30000U;
-        rns_heltec_oled_set_settings(oled, &settings);
-        (void)rns_heltec_oled_show_preview(oled, message->content.data, message->content.len, clock_ms(NULL));
-        if (oled->settings.preview_enabled) {
-            settings.screen = RNS_HELTEC_OLED_SCREEN_MESSAGE;
-            rns_heltec_oled_set_settings(oled, &settings);
-            preview_until = clock_ms(NULL) + 30000U;
-        }
-    }
+    heltec_live_notify(&live,message->source,message->content.data,message->content.len,clock_ms(NULL));
 }
 static rns_status_t received(void *context, const uint8_t *packet, size_t length) {
     (void)context;
@@ -258,6 +256,10 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
     if (status == RNS_OK) status = lxmf_packet_node_create(storage, radio, incoming_message, NULL, &node);
     ESP_LOGI(TAG, "Packet identity opening: %d", (int)status);
     if (status == RNS_OK) {
+        chats_ui.peer_name=peer_name;
+        live.peer_name=peer_name; live.peer_snapshot=peer_snapshot;
+        rns_status_t links=lxmf_packet_node_enable_links(node);
+        ESP_LOGI(TAG,"Direct link service: %d; packet receive remains available",(int)links);
         chat_status = heltec_chat_flash_open(&chat_storage);
         ESP_LOGI(TAG, "Chat journal opening: %d", (int)chat_status);
         if (chat_status == RNS_OK) {
@@ -292,7 +294,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 (int)lxmf_packet_node_peer_storage_status(node));
             /* Restored identities are not RF observations, but can validate
              * archived signatures immediately using the bounded poll scan. */
-            if(peers==RNS_OK && archive) archive_cursor=0;
+            if(peers==RNS_OK && archive) heltec_archive_scan_request(&archive_scan);
         }
         ESP_LOGI(TAG, "Chat storage opening: %d; identity storage unchanged", (int)chat_status);
         if(heltec_chat_flash_quarantined()) ESP_LOGW(TAG,"Storage degraded: quarantined records preserved");
@@ -338,13 +340,13 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         lxmf_packet_node_stats(node,&archive_stats);
         if(archive_generation!=archive_stats.learned_announces) {
             archive_generation=archive_stats.learned_announces;
-            if(archive_cursor==64) archive_cursor=0;
-            else archive_rescan=true;
+            heltec_archive_scan_request(&archive_scan);
         }
         /* At most one archived packet per interval; no unbounded crypto scan. */
-        if(archive && archive_cursor<64 && now>=archive_next) {
-            const heltec_archived_message *m=heltec_message_archive_get(archive,archive_cursor++);
-            archive_next=now+250U;
+        size_t archive_slot;
+        if(archive && heltec_archive_scan_next(&archive_scan,now,&archive_slot)) {
+            const heltec_archived_message *m=heltec_message_archive_get(archive,archive_slot);
+            bool retry=false;
             if(m && m->signature==LXMF_SIGNATURE_UNVERIFIED) {
                 lxmf_signature_state_t signature=LXMF_SIGNATURE_UNVERIFIED;
                 if(lxmf_packet_node_check_archive(node,m->packet,m->packet_length,m->source,m->id,&signature)==RNS_OK) {
@@ -352,16 +354,17 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                         /* Copy: the acceptance callback can replace this record. */
                         uint8_t raw[500]; size_t length=m->packet_length;
                         memcpy(raw,m->packet,length);
-                        (void)lxmf_packet_node_receive(node,raw,length);
+                        retry=lxmf_packet_node_replay_archive(node,raw,length)!=RNS_OK;
                         rns_hal_secure_zero(raw,sizeof(raw));
                     } else if(signature==LXMF_SIGNATURE_FAILED) {
                         archive_item=*m; archive_item.signature=signature;
                         chat_status=heltec_message_archive_put(archive,&archive_item);
+                        retry=chat_status!=RNS_OK;
                         rns_hal_secure_zero(&archive_item,sizeof(archive_item));
                     }
                 }
             }
-            if(archive_cursor==64 && archive_rescan) { archive_cursor=0; archive_rescan=false; }
+            heltec_archive_scan_complete(&archive_scan,now,retry);
         }
         rns_interface_stats_t radio_stats = {0};
         (void)rns_interface_get_stats(radio, &radio_stats);
@@ -377,11 +380,19 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         heltec_radio_discovery_poll(&discovery, now);
         bool was_open = menu.open;
         uint8_t was_selected = menu.selected;
+        bool home_unread=!menu.open && active_view==HELTEC_MENU_NONE && heltec_chat_store_unread(saved_chats)>0;
+        /* A notification arriving mid-hold must not change that gesture. */
+        if(!menu.open && active_view==HELTEC_MENU_NONE && !menu.raw && !menu.stable)
+            menu.hold_action=home_unread;
         heltec_menu_action action = button_ready ? heltec_button_menu_poll(&menu,
             gpio_get_level(RNS_HELTEC_V3_1_GPIO_PRG) == 0, now) : HELTEC_MENU_NONE;
         if (menu.open != was_open || menu.selected != was_selected || action != HELTEC_MENU_NONE)
             next_display = 0;
-        if (menu.open) { preview_until = 0U; active_view = HELTEC_MENU_NONE; menu.browsing = false; menu.hold_action = false; }
+        if (menu.open) { active_view = HELTEC_MENU_NONE; menu.browsing = false; menu.hold_action = false; }
+        if(home_unread && action==HELTEC_MENU_SELECT && heltec_chat_view_open_unread(&chats_ui,saved_chats)) {
+            active_view=HELTEC_MENU_MESSAGE; menu.browsing=true; menu.hold_action=true;
+            action=HELTEC_MENU_NONE; next_display=0; /* Consume the opening hold. */
+        }
         if (action == HELTEC_MENU_ANNOUNCE) {
             rns_status_t announced = lxmf_packet_node_announce(node, (uint64_t)HELTEC_BUILD_EPOCH + now / 1000U);
             ESP_LOGI(TAG, "PRG announce queue status=%d; airtime/CAD scheduling applies", (int)announced);
@@ -392,7 +403,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         }
         if (action == HELTEC_MENU_CLEAR) {
             rns_hal_secure_zero(&live, sizeof(live));
-            preview_until = 0U;
+            live.peer_name=peer_name; live.peer_snapshot=peer_snapshot;
             if (display) {
                 rns_heltec_oled_t *oled = rns_heltec_oled_esp_core(display);
                 rns_hal_secure_zero(oled->model.preview, sizeof(oled->model.preview));
@@ -434,7 +445,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 if (menu.open) rns_heltec_oled_set_menu(oled, heltec_button_menu_label(&menu));
                 else rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
             }
-            else if (now >= preview_until) {
+            else {
                 heltec_home_snapshot snapshot = {.rx_packets = discovery.packets, .tx_packets = tx_done,
                     .heap_free = heap_caps_get_free_size(MALLOC_CAP_8BIT),
                     .heap_minimum = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
@@ -442,6 +453,12 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 snapshot.radio_valid = rns_interface_get_stats(radio, &snapshot.radio) == RNS_OK;
                 char lines[8][22];
                 heltec_home_lines(&snapshot, lines);
+                size_t unread=heltec_chat_store_unread(saved_chats);
+                if(unread) (void)snprintf(lines[7],22,"%u UNREAD: HOLD OPEN",(unsigned)(unread%100U));
+                char sender[22],preview[22];
+                if(oled->settings.preview_enabled && heltec_live_notification(&live,now,sender,preview)) {
+                    (void)snprintf(lines[5],22,"NEW %.17s",sender); memcpy(lines[6],preview,22);
+                }
                 if (chat_status != RNS_OK) (void)snprintf(lines[7], 22, "STORAGE ERROR %d", (int)chat_status);
                 rns_heltec_oled_set_lines(oled, (const char (*)[22])lines);
             }

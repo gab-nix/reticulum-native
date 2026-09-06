@@ -13,6 +13,7 @@ set(RETICULUM_PORTABLE_SOURCES
     src/interfaces/sx1262_interface.c
     src/link/channel.c
     src/link/link.c
+    src/link/embedded_link.c
     src/link/request.c
     src/link/resource.c
     src/lxmf/delivery.c

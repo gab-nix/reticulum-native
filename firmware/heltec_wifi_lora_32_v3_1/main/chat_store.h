@@ -11,6 +11,7 @@ typedef struct {
     uint64_t timestamp;
     uint16_t length;
     uint8_t state; /* 0 verified inbound; 1 queued; 2 awaiting proof; 3 delivered; 4 failed; 5 cancelled. */
+    bool unread;
     uint8_t text[HELTEC_CHAT_TEXT];
 } heltec_chat_message;
 typedef struct {
@@ -30,6 +31,8 @@ bool heltec_chat_can_rotate(const heltec_chat *chat, size_t combined_count, bool
 rns_status_t heltec_chat_store_add(heltec_chat_store *store, const uint8_t sender[16],
                                   const heltec_chat_message *message);
 rns_status_t heltec_chat_store_delete(heltec_chat_store *store, size_t slot);
+size_t heltec_chat_store_unread(const heltec_chat_store *store);
+rns_status_t heltec_chat_store_mark_read(heltec_chat_store *store, const uint8_t sender[16], const uint8_t id[32]);
 /* Caller must supply receipt-validated transitions; this store does not
  * establish delivery authenticity. Inbound records cannot be changed. */
 rns_status_t heltec_chat_store_set_state(heltec_chat_store *store, const uint8_t sender[16],

@@ -5,11 +5,13 @@
 #include "reticulum/interface.h"
 #include "reticulum/storage.h"
 typedef struct lxmf_packet_node lxmf_packet_node_t;
+typedef enum { LXMF_PEER_KNOWN, LXMF_PEER_CONNECTING, LXMF_PEER_LINKED, LXMF_PEER_UNREACHABLE } lxmf_packet_peer_state;
 typedef struct {
     bool delivery, has_ratchet, metadata_valid;
     uint8_t stamp_cost;
     char display_name[128];
     bool observed_this_boot;
+    lxmf_packet_peer_state state;
 } lxmf_packet_peer_info;
 typedef bool (*lxmf_packet_peer_protected_fn)(void *context, const uint8_t destination[16]);
 /* Borrowed peer00..peer31 store; open before packet reception. Bad records are
@@ -21,6 +23,15 @@ rns_status_t lxmf_packet_node_peer_storage_status(const lxmf_packet_node_t *node
 /* Snapshot from verified announces only. No keys or borrowed private state. */
 bool lxmf_packet_node_peer_info(const lxmf_packet_node_t *node,
     const uint8_t destination[16], lxmf_packet_peer_info *info);
+bool lxmf_packet_node_peer_at(const lxmf_packet_node_t *node, size_t slot,
+    uint8_t destination[16], lxmf_packet_peer_info *info);
+/* Enable caller-polled direct links before reception/sending. Existing saved
+ * opportunistic outbox records retain their original delivery representation. */
+rns_status_t lxmf_packet_node_enable_links(lxmf_packet_node_t *node);
+rns_status_t lxmf_packet_node_request_peer(lxmf_packet_node_t *node,const uint8_t destination[16],uint64_t now_ms);
+/* Local archive replay only. Direct archives are reverified without trying to
+ * prove a defunct link; a sender retransmission obtains its normal proof. */
+rns_status_t lxmf_packet_node_replay_archive(lxmf_packet_node_t *node,const uint8_t *record,size_t length);
 /* Message slices are borrowed only for the callback. No plaintext is logged.
  * Single caller ownership; callbacks must not re-enter or destroy the node. */
 typedef void (*lxmf_packet_message_fn)(void *context, const lxmf_message_t *message);
@@ -81,11 +92,17 @@ typedef struct {
     lxmf_packet_send_state state;
     rns_status_t error;
     bool durable;
+    bool direct;
 } lxmf_packet_outgoing;
 /* Four transactional out0..out3 records; separate from identity storage.
  * Open before sending. All calls use the endpoint's single owner task.
  * Poll persists transitions before sending. Pending attempts survive reboot.
- * Quick text is bounded to 32 bytes; stamps/resources are not generated. */
+ * Quick text is bounded to 32 bytes; stamps/resources are not generated.
+ * Direct records v3 retain anti-downgrade flags (v1/v2 remain readable).
+ * Handshake-only IO/timeout may fall back to a verified zero-cost ratchet
+ * peer before DATA ever queues. Invalid authentication, prior DATA, cancelled
+ * sends and interrupted direct attempts restored after reboot cannot fall
+ * back. Conversion preserves signed bytes/ID and persists before RF. */
 rns_status_t lxmf_packet_node_open_outbox(lxmf_packet_node_t *node, rns_storage_t *storage);
 rns_status_t lxmf_packet_node_send(lxmf_packet_node_t *node, const uint8_t destination[16],
     const uint8_t *text, size_t length, uint64_t timestamp, uint8_t id[32]);

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "message_archive.h"
 #include "archive_view.h"
+#include "archive_scan.h"
 #include <assert.h>
 #include <string.h>
 static uint8_t records[64][1024]; static size_t sizes[64]; static bool fail;
@@ -15,6 +16,38 @@ static rns_status_t write_record(void *c,const char *k,const uint8_t *data,size_
 }
 static rns_status_t remove_record(void *c,const char *k) { (void)c; if(fail) return RNS_ERROR_IO; sizes[slot(k)]=0; return RNS_OK; }
 int main(void) {
+    heltec_archive_scan scan={.cursor=64}; size_t selected=99;
+    assert(!heltec_archive_scan_next(&scan,0,&selected));
+    heltec_archive_scan_request(&scan);
+    assert(heltec_archive_scan_next(&scan,0,&selected) && selected==0);
+    heltec_archive_scan_complete(&scan,0,true);
+    /* Failed first record stays scheduled; new announces do not accelerate it. */
+    heltec_archive_scan_request(&scan);
+    assert(!heltec_archive_scan_next(&scan,4999,&selected));
+    uint64_t now=5000;
+    for(size_t i=1;i<64;++i,now+=250U) {
+        assert(heltec_archive_scan_next(&scan,now,&selected) && selected==i);
+        heltec_archive_scan_complete(&scan,now,false);
+        assert(!heltec_archive_scan_next(&scan,now,&selected));
+    }
+    assert(heltec_archive_scan_next(&scan,now,&selected) && selected==0);
+    heltec_archive_scan_complete(&scan,now,false);
+    for(size_t i=1;i<64;++i) {
+        now+=250U; assert(heltec_archive_scan_next(&scan,now,&selected) && selected==i);
+        heltec_archive_scan_complete(&scan,now,i==63);
+    }
+    assert(!heltec_archive_scan_next(&scan,now+4999U,&selected));
+    now+=5000U;
+    /* Failed last record restarts a bounded sweep, then quiesces after success. */
+    for(size_t i=0;i<64;++i,now+=250U) {
+        assert(heltec_archive_scan_next(&scan,now,&selected) && selected==i);
+        heltec_archive_scan_complete(&scan,now,false);
+    }
+    assert(!heltec_archive_scan_next(&scan,now,&selected));
+    heltec_archive_scan_request(&scan);
+    assert(heltec_archive_scan_next(&scan,UINT64_MAX-1U,&selected));
+    heltec_archive_scan_complete(&scan,UINT64_MAX-1U,true);
+    assert(!heltec_archive_scan_next(&scan,UINT64_MAX,&selected));
     rns_storage_ops_t ops={.read=read_record,.write_atomic=write_record,.remove=remove_record};
     rns_storage_t *storage; assert(rns_storage_create(&ops,NULL,&storage)==RNS_OK);
     heltec_message_archive *a; assert(heltec_message_archive_open(storage,&a)==RNS_OK);
