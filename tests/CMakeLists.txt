@@ -100,6 +100,10 @@ target_link_libraries(hosted_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(hosted_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(hosted_live_driver)
 add_executable(discovery_live_driver interop/discovery_live_driver.c)
+add_executable(lxmf_packet_live_driver interop/lxmf_packet_live_driver.c)
+target_link_libraries(lxmf_packet_live_driver PRIVATE reticulum::reticulum)
+target_compile_features(lxmf_packet_live_driver PRIVATE c_std_17)
+reticulum_set_project_warnings(lxmf_packet_live_driver)
 target_link_libraries(discovery_live_driver PRIVATE reticulum::reticulum)
 target_compile_features(discovery_live_driver PRIVATE c_std_17)
 reticulum_set_project_warnings(discovery_live_driver)
@@ -115,6 +119,12 @@ if(RETICULUM_PYTHON_INTEROP)
             message(FATAL_ERROR "Set RETICULUM_PYTHON_${checkout} to its pinned source checkout")
         endif()
     endforeach()
+    add_test(NAME interop_lxmf_packet_udp
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_lxmf_packet_live.py
+            --reticulum ${RETICULUM_PYTHON_RNS} --lxmf ${RETICULUM_PYTHON_LXMF}
+            --driver $<TARGET_FILE:lxmf_packet_live_driver>)
+    set_tests_properties(interop_lxmf_packet_udp PROPERTIES
+        LABELS "interop;python;embedded;udp" TIMEOUT 140 RUN_SERIAL TRUE)
     foreach(transport udp tcp)
         add_test(NAME interop_discovery_${transport}
             COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/test_discovery_live.py
