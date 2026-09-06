@@ -48,7 +48,10 @@ packet captures or logs containing private traffic.
 
 Recipient identity discovery defaults to a five-minute wall-clock deadline.
 Restarting does not renew it; expiry keeps the message and requires an explicit
-retry. Backward system-clock adjustments can extend this wait. Message journals
+retry. A monotonic session guard prevents backward system-clock adjustments
+from extending a running identity-discovery wait. After restart, the remaining
+wall-clock budget is capped at the configured timeout; repeated reboots with
+an incorrect wall clock cannot establish accurate offline elapsed time. Message journals
 written by this version use extended delivery records: back up your store before
 upgrading, and do not open an upgraded store with an older binary.
 

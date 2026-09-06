@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 static uint64_t fake_now(void *context) { return *(uint64_t *)context; }
 static const rns_identity *unknown(void *context, const uint8_t destination[16]) {
@@ -125,12 +127,62 @@ int main(void) {
     assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
     assert(resumed.delivery.identity_deadline == 160u);
     assert(resumed.delivery.attempts == 0u);
-    /* Backward wall-clock changes are an explicit limitation of this profile:
-     * do not silently replace the persisted deadline on every poll. */
+    /* Wall rollback cannot replenish this session's monotonic budget. */
     wall = 120u;
     assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
     assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
     assert(resumed.delivery.identity_deadline == 160u);
+    now += 30000u;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_TIMEOUT);
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    now += 20000u;
+    known = &identity;
+    struct stat size_before;
+    assert(stat(path, &size_before) == 0);
+    int full = open(path, O_WRONLY);
+    assert(full >= 0 && ftruncate(full, LXMF_STORE_MAX_FILE_SIZE) == 0);
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_CRYPTO);
+    assert(ftruncate(full, size_before.st_size) == 0 && close(full) == 0);
+    known = NULL;
+    wall = 0u;
+    now += 10000u;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_TIMEOUT);
+    assert(lxmf_store_read(&store, message.message_id, &resumed, content, sizeof content) == LXMF_OK);
+    assert(resumed.status == LXMF_DELIVERY_FAILED && resumed.delivery.attempts == 0u);
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    now -= 1u; /* Regressing monotonic source fails closed. */
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_TIMEOUT);
+    now = UINT64_MAX - 5u;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    now += 4u; /* Near-maximum clock must not overflow an absolute deadline. */
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    assert(lxmf_router_cancel_message(&router, message.message_id) == LXMF_OK);
+    now = 1000u;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    lxmf_router_destroy(&router); lxmf_store_close(&store);
+    /* Restart at a rolled-back wall clock still grants at most one timeout. */
+    wall = 1u; now = 1u;
+    assert(lxmf_store_open(&store, path) == LXMF_OK);
+    assert(lxmf_router_init(&router, &options) == LXMF_OK);
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+    now += 30000u;
+    assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_TIMEOUT);
+    /* Removed records and successfully timed-out messages must not exhaust
+     * the bounded guard capacity over a long-lived router session. */
+    assert(lxmf_store_remove(&store, message.message_id) == LXMF_OK);
+    for (size_t i = 0; i < 2u * (LXMF_STORE_MAX_MESSAGES + 2u); ++i) {
+        memset(message.message_id, 0, sizeof message.message_id);
+        message.message_id[0] = 0x70u;
+        message.message_id[1] = (uint8_t)i;
+        message.message_id[2] = (uint8_t)(i >> 8);
+        assert(lxmf_store_put(&store, &message, &inserted) == LXMF_OK && inserted);
+        assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_PENDING);
+        if ((i & 1u) == 0u) {
+            now += 30000u;
+            assert(lxmf_router_send_message(&router, message.message_id) == LXMF_ERR_TIMEOUT);
+        }
+        assert(lxmf_store_remove(&store, message.message_id) == LXMF_OK);
+    }
     lxmf_router_destroy(&router); lxmf_store_close(&store);
     rns_runtime_destroy(runtime);
     for (size_t i = 0; i < 2u; ++i) rns_udp_endpoint_destroy(peers[i]);

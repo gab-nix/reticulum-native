@@ -131,7 +131,8 @@ typedef struct {
     void *wall_clock_context;
     /* Zero selects 300 seconds. Persisted deadlines count offline time.
      * Without wall_clock, the platform wall clock is used for discovery.
-     * Requires a stable wall clock: backward adjustments extend the wait. */
+     * A per-message monotonic session guard bounds backward wall-clock jumps.
+     * Restart caps the remaining wall-clock budget at this timeout. */
     uint32_t identity_discovery_timeout_seconds;
     /* Zero disables inbound stamp enforcement. Costs 1..254 accept either a
      * valid issued-ticket stamp or a proof-of-work stamp. */
@@ -278,6 +279,8 @@ struct lxmf_router {
     /* Round-robin pending queue position; one unavailable peer must not
      * monopolize a caller's bounded polling batch. */
     size_t pending_cursor;
+    /* Private bounded discovery timers; never serialized as monotonic time. */
+    struct lxmf_discovery_guard *discovery_guards;
 };
 
 typedef struct {

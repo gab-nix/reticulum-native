@@ -44,6 +44,63 @@ static uint64_t router_monotonic_ms(const lxmf_router_t *router) {
     return rns_hal_monotonic_ms(&now) == RNS_OK ? now : 0U;
 }
 
+struct lxmf_discovery_guard {
+    struct lxmf_discovery_guard *next;
+    uint8_t id[LXMF_MESSAGE_ID_LENGTH];
+    uint64_t last_ms, remaining_ms;
+};
+
+static void discovery_forget(lxmf_router_t *router, const uint8_t *id) {
+    struct lxmf_discovery_guard **entry = &router->discovery_guards;
+    while (*entry != NULL) {
+        struct lxmf_discovery_guard *guard = *entry;
+        if (id == NULL || memcmp(guard->id, id, LXMF_MESSAGE_ID_LENGTH) == 0) {
+            *entry = guard->next;
+            free(guard);
+            if (id != NULL) return;
+        } else entry = &guard->next;
+    }
+}
+
+static lxmf_status_t discovery_remaining(lxmf_router_t *router,
+    const uint8_t *id, uint64_t wall, uint64_t deadline, uint64_t now) {
+    /* Metadata reads use the store's in-memory index: only NOT-PRESENT
+     * (FORMAT here), not an IO/argument failure, permits pruning. */
+    struct lxmf_discovery_guard **cursor = &router->discovery_guards;
+    while (*cursor != NULL) {
+        struct lxmf_discovery_guard *entry = *cursor;
+        lxmf_delivery_metadata_t metadata;
+        if (lxmf_store_read_delivery(router->config.store, entry->id, &metadata) == LXMF_ERR_FORMAT) {
+            *cursor = entry->next;
+            free(entry);
+        } else cursor = &entry->next;
+    }
+    struct lxmf_discovery_guard *guard = router->discovery_guards;
+    size_t count = 0U;
+    while (guard != NULL && memcmp(guard->id, id, LXMF_MESSAGE_ID_LENGTH) != 0) {
+        ++count;
+        guard = guard->next;
+    }
+    if (guard == NULL) {
+        if (count >= LXMF_STORE_MAX_MESSAGES) return LXMF_ERR_BOUNDS;
+        guard = calloc(1U, sizeof *guard);
+        if (guard == NULL) return LXMF_ERR_BOUNDS;
+        memcpy(guard->id, id, LXMF_MESSAGE_ID_LENGTH);
+        uint64_t limit = router->config.identity_discovery_timeout_seconds != 0U
+            ? router->config.identity_discovery_timeout_seconds : 300U;
+        uint64_t remaining = deadline > wall ? deadline - wall : 0U;
+        guard->remaining_ms = (remaining < limit ? remaining : limit) * 1000U;
+        guard->last_ms = now;
+        guard->next = router->discovery_guards;
+        router->discovery_guards = guard;
+    }
+    if (now < guard->last_ms || now - guard->last_ms >= guard->remaining_ms)
+        guard->remaining_ms = 0U;
+    else guard->remaining_ms -= now - guard->last_ms;
+    guard->last_ms = now;
+    return wall >= deadline || guard->remaining_ms == 0U ? LXMF_ERR_TIMEOUT : LXMF_OK;
+}
+
 static void finish_direct_attempt(
     lxmf_router_t *router, const uint8_t id[LXMF_MESSAGE_ID_LENGTH],
     lxmf_delivery_method_t method, uint32_t attempt, lxmf_status_t result,
@@ -832,6 +889,7 @@ static void release_resources(lxmf_router_t *router, bool all) {
 
 void lxmf_router_destroy(lxmf_router_t *router) {
     if (router == NULL) return;
+    discovery_forget(router, NULL);
     propagation_clear(router, true);
     propagation_sync_clear(router, true);
     lxmf_stamp_job_destroy(router->stamp_job);
@@ -1536,6 +1594,7 @@ lxmf_status_t lxmf_router_send_message(
         stored.delivery.attempts = 0U;
         stored.delivery.retry_at_ms = 0U;
         stored.delivery.identity_deadline = 0U;
+        discovery_forget(router, id);
     }
     if (method == LXMF_DELIVERY_METHOD_PROPAGATED) {
         if (router->propagation.used || router->propagation_sync.status.active) {
@@ -1577,6 +1636,8 @@ lxmf_status_t lxmf_router_send_message(
             if (rns_hal_wallclock_ms(&milliseconds) != RNS_OK) return LXMF_ERR_CRYPTO;
             wall = milliseconds / 1000u;
         }
+        if (router->config.monotonic_clock == NULL &&
+            rns_hal_monotonic_ms(&now) != RNS_OK) return LXMF_ERR_CRYPTO;
         if (stored.delivery.identity_deadline == 0u) {
             uint64_t timeout = router->config.identity_discovery_timeout_seconds != 0u
                 ? router->config.identity_discovery_timeout_seconds : 300u;
@@ -1584,12 +1645,17 @@ lxmf_status_t lxmf_router_send_message(
             stored.delivery.identity_deadline = wall + timeout;
             if (lxmf_store_update_delivery(router->config.store, id, &stored.delivery) != LXMF_OK)
                 return LXMF_ERR_CRYPTO;
-        } else if (wall >= stored.delivery.identity_deadline) {
+        }
+        lxmf_status_t discovery = discovery_remaining(router, id, wall,
+            stored.delivery.identity_deadline, now);
+        if (discovery != LXMF_OK && discovery != LXMF_ERR_TIMEOUT) return discovery;
+        if (discovery == LXMF_ERR_TIMEOUT) {
             stored.delivery.queue_reason = LXMF_QUEUE_REASON_IDENTITY_TIMEOUT;
             stored.delivery.retry_at_ms = 0u;
             if (lxmf_store_update_delivery(router->config.store, id, &stored.delivery) != LXMF_OK ||
                 lxmf_store_update_status(router->config.store, id, LXMF_DELIVERY_FAILED) != LXMF_OK)
                 return LXMF_ERR_CRYPTO;
+            discovery_forget(router, id);
             report(router, id, LXMF_DELIVERY_FAILED, LXMF_ERR_TIMEOUT);
             report_event(router, id, method, LXMF_DELIVERY_FAILED,
                 LXMF_QUEUE_REASON_IDENTITY_TIMEOUT, LXMF_ERR_TIMEOUT, stored.delivery.attempts);
@@ -1621,6 +1687,7 @@ lxmf_status_t lxmf_router_send_message(
     if (lxmf_store_update_delivery(router->config.store, id,
                                    &stored.delivery) != LXMF_OK)
         return LXMF_ERR_CRYPTO;
+    discovery_forget(router, id);
     lxmf_status_t stamp_status = prepare_outbound_stamp(router, &stored, id);
     if (stamp_status != LXMF_OK) {
         stored.delivery.queue_reason = LXMF_QUEUE_REASON_STAMP;
@@ -1788,6 +1855,7 @@ lxmf_status_t lxmf_router_cancel_message(
                                      LXMF_DELIVERY_FAILED) != LXMF_OK)
             return LXMF_ERR_CRYPTO;
         propagation_clear(router, true);
+        discovery_forget(router, id);
         report_event(router, id, LXMF_DELIVERY_METHOD_PROPAGATED,
             LXMF_DELIVERY_FAILED, LXMF_QUEUE_REASON_CANCELLED,
             LXMF_ERR_CANCELLED, metadata.attempts);
@@ -1809,6 +1877,7 @@ lxmf_status_t lxmf_router_cancel_message(
             lxmf_stamp_job_destroy(router->stamp_job);
             router->stamp_job = NULL;
         }
+        discovery_forget(router, id);
         report_event(router, id, delivery.desired_method, LXMF_DELIVERY_FAILED,
                      LXMF_QUEUE_REASON_CANCELLED, LXMF_ERR_CANCELLED,
                      delivery.attempts);
@@ -1836,6 +1905,7 @@ lxmf_status_t lxmf_router_cancel_message(
         lxmf_store_update_status(router->config.store, id,
                                  LXMF_DELIVERY_FAILED) != LXMF_OK)
         return LXMF_ERR_CRYPTO;
+    discovery_forget(router, id);
     for (size_t i = 0U; i < LXMF_ROUTER_MAX_RESOURCES; ++i) {
         lxmf_router_resource_slot_t *slot = &router->resources[i];
         if (!slot->used || slot->terminal ||
