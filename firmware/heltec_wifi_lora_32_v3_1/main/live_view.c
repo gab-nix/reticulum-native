@@ -50,9 +50,9 @@ void heltec_live_messages(heltec_live_view *v, bool next, char lines[8][22]) {
 void heltec_live_nodes(heltec_live_view *v, const heltec_radio_discovery *s,
                       uint64_t now, bool next, char lines[8][22]) {
     if(v->peer_snapshot) {
-        uint8_t addresses[32][16]; bool observed[32]; size_t count=0,selected=0;
+        uint8_t addresses[32][16]; unsigned state[32]; size_t count=0,selected=0;
         memset(lines,0,8U*22U);
-        for(size_t i=0;i<32;++i) if(v->peer_snapshot(v->peer_context,i,addresses[count],&observed[count])) ++count;
+        for(size_t i=0;i<32;++i) if(v->peer_snapshot(v->peer_context,i,addresses[count],&state[count])) ++count;
         for(size_t i=0;i<count;++i) if(v->node_selected && !memcmp(v->node_key,addresses[i],16)) selected=i;
         if(next && count) selected=(selected+1U)%count;
         (void)snprintf(lines[0],22,"LXMF NODES %u",(unsigned)count);
@@ -64,8 +64,10 @@ void heltec_live_nodes(heltec_live_view *v, const heltec_radio_discovery *s,
                 (void)snprintf(lines[i-first+1U],22,"%c %.19s",i==selected?'*':' ',label);
             }
             const uint8_t *a=addresses[selected];
-            (void)snprintf(lines[5],22,"%02X%02X%02X%02X %s",a[12],a[13],a[14],a[15],observed[selected]?"OBSERVED":"KNOWN");
-            (void)snprintf(lines[6],22,"REACHABILITY UNKNOWN");
+            static const char *states[]={"KNOWN","CONNECTING","LINKED","UNREACHABLE"};
+            unsigned current=state[selected]<4?state[selected]:0;
+            (void)snprintf(lines[5],22,"%02X%02X%02X%02X %s",a[12],a[13],a[14],a[15],states[current]);
+            (void)snprintf(lines[6],22,"%s",current==2?"ENCRYPTED LINK":current==0?"REACHABILITY UNKNOWN":"RECONNECT ON SEND");
         } else { v->node_selected=false; (void)snprintf(lines[2],22,"NO REMEMBERED PEERS"); }
         memcpy(lines[7],"TAP NEXT  HOLD MENU",20U); return;
     }

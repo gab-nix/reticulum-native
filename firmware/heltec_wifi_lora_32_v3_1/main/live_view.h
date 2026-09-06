@@ -3,7 +3,8 @@
 #define HELTEC_LIVE_VIEW_H
 #include "radio_discovery.h"
 #include "peer_label.h"
-typedef bool (*heltec_peer_snapshot_fn)(void *context,size_t slot,uint8_t address[16],bool *observed);
+/* state: 0 known, 1 connecting, 2 linked, 3 unreachable. */
+typedef bool (*heltec_peer_snapshot_fn)(void *context,size_t slot,uint8_t address[16],unsigned *state);
 typedef struct {
     char messages[8][96];
     size_t count, selected;

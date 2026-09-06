@@ -5,11 +5,13 @@
 #include "reticulum/interface.h"
 #include "reticulum/storage.h"
 typedef struct lxmf_packet_node lxmf_packet_node_t;
+typedef enum { LXMF_PEER_KNOWN, LXMF_PEER_CONNECTING, LXMF_PEER_LINKED, LXMF_PEER_UNREACHABLE } lxmf_packet_peer_state;
 typedef struct {
     bool delivery, has_ratchet, metadata_valid;
     uint8_t stamp_cost;
     char display_name[128];
     bool observed_this_boot;
+    lxmf_packet_peer_state state;
 } lxmf_packet_peer_info;
 typedef bool (*lxmf_packet_peer_protected_fn)(void *context, const uint8_t destination[16]);
 /* Borrowed peer00..peer31 store; open before packet reception. Bad records are
@@ -21,6 +23,15 @@ rns_status_t lxmf_packet_node_peer_storage_status(const lxmf_packet_node_t *node
 /* Snapshot from verified announces only. No keys or borrowed private state. */
 bool lxmf_packet_node_peer_info(const lxmf_packet_node_t *node,
     const uint8_t destination[16], lxmf_packet_peer_info *info);
+bool lxmf_packet_node_peer_at(const lxmf_packet_node_t *node, size_t slot,
+    uint8_t destination[16], lxmf_packet_peer_info *info);
+/* Enable caller-polled direct links before reception/sending. Existing saved
+ * opportunistic outbox records retain their original delivery representation. */
+rns_status_t lxmf_packet_node_enable_links(lxmf_packet_node_t *node);
+rns_status_t lxmf_packet_node_request_peer(lxmf_packet_node_t *node,const uint8_t destination[16],uint64_t now_ms);
+/* Local archive replay only. Direct archives are reverified without trying to
+ * prove a defunct link; a sender retransmission obtains its normal proof. */
+rns_status_t lxmf_packet_node_replay_archive(lxmf_packet_node_t *node,const uint8_t *record,size_t length);
 /* Message slices are borrowed only for the callback. No plaintext is logged.
  * Single caller ownership; callbacks must not re-enter or destroy the node. */
 typedef void (*lxmf_packet_message_fn)(void *context, const lxmf_message_t *message);
@@ -81,6 +92,7 @@ typedef struct {
     lxmf_packet_send_state state;
     rns_status_t error;
     bool durable;
+    bool direct;
 } lxmf_packet_outgoing;
 /* Four transactional out0..out3 records; separate from identity storage.
  * Open before sending. All calls use the endpoint's single owner task.

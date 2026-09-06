@@ -45,10 +45,10 @@ static bool peer_name(void *context,const uint8_t address[16],char name[128]) {
     if(!lxmf_packet_node_peer_info(node,address,&info) || !info.metadata_valid) return false;
     memcpy(name,info.display_name,128); return true;
 }
-static bool peer_snapshot(void *context,size_t slot,uint8_t address[16],bool *observed) {
+static bool peer_snapshot(void *context,size_t slot,uint8_t address[16],unsigned *state) {
     (void)context; lxmf_packet_peer_info info;
     if(!lxmf_packet_node_peer_at(node,slot,address,&info)) return false;
-    *observed=info.observed_this_boot; return true;
+    *state=(unsigned)info.state; return true;
 }
 static heltec_message_archive *archive;
 static heltec_archive_view archive_ui;
@@ -354,7 +354,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                         /* Copy: the acceptance callback can replace this record. */
                         uint8_t raw[500]; size_t length=m->packet_length;
                         memcpy(raw,m->packet,length);
-                        (void)lxmf_packet_node_receive(node,raw,length);
+                        (void)lxmf_packet_node_replay_archive(node,raw,length);
                         rns_hal_secure_zero(raw,sizeof(raw));
                     } else if(signature==LXMF_SIGNATURE_FAILED) {
                         archive_item=*m; archive_item.signature=signature;

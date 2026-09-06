@@ -14,6 +14,7 @@ idf_component_register(
         "${RETICULUM_ROOT}/src/link/embedded_link.c"
         "${RETICULUM_ROOT}/src/destination/destination.c"
         "${RETICULUM_ROOT}/src/transport/proof.c"
+        "${RETICULUM_ROOT}/src/transport/transport.c"
         "${RETICULUM_ROOT}/src/lxmf/lxmf.c"
         "${RETICULUM_ROOT}/src/lxmf/router.c"
         "${RETICULUM_ROOT}/src/lxmf/delivery.c"
