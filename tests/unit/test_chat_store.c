@@ -6,6 +6,7 @@
 static uint8_t records[8][4096]; static size_t lengths[8]; static bool fail;
 static unsigned reply_calls;
 static unsigned cancel_calls;
+static unsigned write_attempts;
 static bool named(void *context,const uint8_t sender[16],char name[128]) {
     (void)context; (void)sender; memcpy(name,"Rei\nPeer",9); return true;
 }
@@ -25,7 +26,7 @@ static rns_status_t read_record(void *c, const char *k, uint8_t *out, size_t cap
     memcpy(out,records[i],lengths[i]); *len=lengths[i]; return RNS_OK;
 }
 static rns_status_t write_record(void *c,const char *k,const uint8_t *data,size_t len) {
-    (void)c; if(fail) return RNS_ERROR_IO; unsigned i=slot(k); assert(len <= 4096);
+    (void)c; ++write_attempts; if(fail) return RNS_ERROR_IO; unsigned i=slot(k); assert(len <= 4096);
     memcpy(records[i],data,len); lengths[i]=len; return RNS_OK;
 }
 static rns_status_t remove_record(void *c,const char *k) {
@@ -170,6 +171,22 @@ int main(void) {
     assert(heltec_chat_view_open_unread(&view,s));
     for(unsigned i=0;i<95;++i) assert(!heltec_chat_view_poll(&view,s,true,false,lines));
     assert(strstr(lines[6],"PAGE 96/96") && strlen(lines[6])<22);
+    m.id[0]=6; m.timestamp=103;
+    assert(heltec_chat_store_add(s,sender,&m)==RNS_OK);
+    assert(heltec_chat_view_open_unread(&view,s));
+    fail=true; unsigned before=write_attempts;
+    assert(!heltec_chat_view_poll(&view,s,false,false,lines));
+    assert(write_attempts==before+1 && view.error==RNS_ERROR_IO);
+    size_t unread_before=heltec_chat_store_unread(s);
+    for(unsigned i=0;i<20;++i) assert(!heltec_chat_view_poll(&view,s,false,false,lines));
+    assert(!heltec_chat_view_poll(&view,s,true,false,lines));
+    assert(write_attempts==before+1 && heltec_chat_store_unread(s)==unread_before);
+    assert(view.error==RNS_ERROR_IO);
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==2);
+    view.action=1; fail=false;
+    assert(!heltec_chat_view_poll(&view,s,false,true,lines) && view.screen==1);
+    assert(write_attempts==before+2 && heltec_chat_store_unread(s)==unread_before-1);
+    assert(view.error==RNS_OK);
     heltec_chat_store_close(s);
     records[0][0]=99; assert(heltec_chat_store_open(storage,&s)==RNS_ERROR_PROTOCOL && !s);
     rns_storage_destroy(storage); return 0;

@@ -35,13 +35,14 @@ bool heltec_chat_view_open_unread(heltec_chat_view *v,const heltec_chat_store *s
     }
     if(!latest) return false;
     memcpy(v->sender,owner->sender,16); memcpy(v->message,latest->id,32);
-    v->selected=true; v->message_selected=true; v->back=false; v->screen=1; v->page=0;
+    v->selected=true; v->message_selected=true; v->back=false; v->screen=1; v->page=0; v->read_attempted=false;
     return true;
 }
 bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
                           bool next,bool select,char lines[8][22]) {
     size_t slots[8],count=0,index=0,mi=0;
     memset(lines,0,8U*22U);
+    if(v->screen!=1) v->read_attempted=false;
     if(next) { v->error=RNS_OK; v->reply_queued=false; }
     for(size_t i=0;i<8;++i) if(heltec_chat_store_get(store,i)) slots[count++]=i;
     bool found=false;
@@ -133,8 +134,15 @@ bool heltec_chat_view_poll(heltec_chat_view *v,heltec_chat_store *store,
             (void)snprintf(lines[6],22,"MSG %u/%u PAGE %u/%u",
                 ((unsigned)mi+1U)%100U,(unsigned)chat->count%100U,
                 (v->page+1U)%100U,(unsigned)pages%100U);
-            rns_status_t read_status=heltec_chat_store_mark_read(store,chat->sender,m->id);
-            if(read_status!=RNS_OK) v->error=read_status;
+            /* One write attempt per selected message/open. Rendering and
+             * paging must not hammer a failing flash journal. Leaving and
+             * deliberately reopening provides an explicit retry. */
+            if(!v->read_attempted || memcmp(v->read_id,m->id,32)) {
+                memcpy(v->read_id,m->id,32); v->read_attempted=true;
+                if(v->error==v->read_error) v->error=RNS_OK;
+                v->read_error=heltec_chat_store_mark_read(store,chat->sender,m->id);
+            }
+            if(v->read_error!=RNS_OK) v->error=v->read_error;
         }
     } else if(v->screen==2) {
         const char *actions[]={"CHAT LIST","READ MESSAGES",v->send_reply?"QUICK REPLY":"REPLY UNAVAILABLE","DELETE CHAT","CANCEL REPLY"};

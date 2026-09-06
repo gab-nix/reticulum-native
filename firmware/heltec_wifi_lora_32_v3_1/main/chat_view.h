@@ -20,6 +20,9 @@ typedef struct {
     bool reply_queued;
     unsigned page;
     heltec_peer_name_fn peer_name;
+    bool read_attempted;
+    uint8_t read_id[32];
+    rns_status_t read_error;
 } heltec_chat_view;
 /* Pure one-button controller; true returns to the main menu. */
 bool heltec_chat_view_poll(heltec_chat_view *view, heltec_chat_store *store,
