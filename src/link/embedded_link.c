@@ -250,7 +250,7 @@ rns_status_t rns_embedded_link_receive(rns_embedded_link_manager *m,const uint8_
     slot *s=find(m,p.destination_hash);if(!s)return RNS_ERROR_NOT_FOUND;
     if(p.destination_type!=3)return RNS_ERROR_PROTOCOL;
     if(s->link.state==RNS_LINK_PENDING && p.packet_type==3 && p.context==0xff) {
-        if(!rns_link_initiator_accept_proof(&s->link,p.data,p.data_length))return RNS_ERROR_CRYPTO;
+        if(!rns_link_initiator_accept_proof(&s->link,p.data,p.data_length)){notify(m,s,RNS_ERROR_CRYPTO);return RNS_ERROR_CRYPTO;}
         uint8_t rtt[128];size_t n;
         if(!rns_link_build_rtt_confirm(&s->link,rtt,sizeof rtt,&n))return RNS_ERROR_CRYPTO;
         s->deadline=now+QUEUE_MS;

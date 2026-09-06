@@ -97,7 +97,12 @@ typedef struct {
 /* Four transactional out0..out3 records; separate from identity storage.
  * Open before sending. All calls use the endpoint's single owner task.
  * Poll persists transitions before sending. Pending attempts survive reboot.
- * Quick text is bounded to 32 bytes; stamps/resources are not generated. */
+ * Quick text is bounded to 32 bytes; stamps/resources are not generated.
+ * Direct records v3 retain anti-downgrade flags (v1/v2 remain readable).
+ * Handshake-only IO/timeout may fall back to a verified zero-cost ratchet
+ * peer before DATA ever queues. Invalid authentication, prior DATA, cancelled
+ * sends and interrupted direct attempts restored after reboot cannot fall
+ * back. Conversion preserves signed bytes/ID and persists before RF. */
 rns_status_t lxmf_packet_node_open_outbox(lxmf_packet_node_t *node, rns_storage_t *storage);
 rns_status_t lxmf_packet_node_send(lxmf_packet_node_t *node, const uint8_t destination[16],
     const uint8_t *text, size_t length, uint64_t timestamp, uint8_t id[32]);

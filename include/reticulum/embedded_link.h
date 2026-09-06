@@ -20,6 +20,8 @@ typedef struct {
  * are ignored. Backwards monotonic time closes existing links with TIMEOUT;
  * the next operation may establish a new link on the corrected clock.
  * IFAC-wrapped input must be authenticated/stripped before receive.
+ * A rejected handshake proof emits the existing state with CRYPTO; this does
+ * not establish a link and lets callers persist anti-downgrade policy.
  * No transit routing or Resource support is provided. */
 rns_status_t rns_embedded_link_create(const rns_identity *, const uint8_t[16],
     rns_interface_t *, const rns_embedded_link_callbacks *, void *, rns_embedded_link_manager **);

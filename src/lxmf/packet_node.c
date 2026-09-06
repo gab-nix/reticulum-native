@@ -55,7 +55,7 @@ struct lxmf_packet_node {
     rns_storage_t *outbox;
     bool quarantined_outbox[4];
     struct {
-        bool used, dirty, attempt_started;
+        bool used, dirty, attempt_started, direct_sent, fallback_blocked, proof_pending;
         uint8_t link_id[16];
         lxmf_packet_outgoing view;
         rns_identity recipient;
@@ -307,11 +307,12 @@ rns_status_t lxmf_packet_node_receive(lxmf_packet_node_t *n, const uint8_t *raw,
     }
     if(p.packet_type==3 && p.header_type==0 && p.destination_type==0 && p.context==0) {
         for(size_t i=0;i<4;++i) if(n->outgoing[i].used && !n->outgoing[i].view.direct && n->outgoing[i].view.attempts &&
-            n->outgoing[i].view.state<LXMF_PACKET_DELIVERED &&
+            (n->outgoing[i].view.state==LXMF_PACKET_TRANSMITTING||n->outgoing[i].view.state==LXMF_PACKET_AWAITING_PROOF) &&
             !memcmp(p.destination_hash,n->outgoing[i].hash,16) &&
             rns_proof_validate(&n->outgoing[i].recipient,n->outgoing[i].hash,p.data,p.data_length)) {
-            n->outgoing[i].view.state=LXMF_PACKET_DELIVERED;
-            n->outgoing[i].view.error=RNS_OK; n->outgoing[i].dirty=true;
+            if(n->outgoing[i].view.state==LXMF_PACKET_TRANSMITTING)n->outgoing[i].proof_pending=true;
+            else {n->outgoing[i].view.state=LXMF_PACKET_DELIVERED;
+                n->outgoing[i].view.error=RNS_OK; n->outgoing[i].dirty=true;}
         }
     }
     if (memcmp(p.destination_hash, n->address, 16)) { ++n->stats.other_destinations; return RNS_OK; }
@@ -448,6 +449,11 @@ static rns_status_t direct_data(void *context,const uint8_t link_id[16],const ui
 }
 static void direct_state(void *context,const uint8_t link_id[16],rns_link_state state,rns_status_t status) {
     lxmf_packet_node_t *n=context;
+    if(status==RNS_ERROR_CRYPTO||status==RNS_ERROR_PROTOCOL)
+        for(size_t i=0;i<4;++i) if(n->outgoing[i].used&&n->outgoing[i].view.direct&&
+            !memcmp(n->outgoing[i].link_id,link_id,16)) {
+            n->outgoing[i].fallback_blocked=true;n->outgoing[i].view.error=status;n->outgoing[i].dirty=true;
+        }
     if(state==RNS_LINK_ACTIVE) {
         rns_identity identity; uint8_t destination[16];
         if(rns_embedded_link_authenticated_peer(n->links,link_id,&identity)==RNS_OK &&
@@ -524,7 +530,8 @@ static void out_key(size_t slot,char key[8]) { (void)snprintf(key,8,"out%u",(uns
 static rns_status_t save_out(lxmf_packet_node_t *n,size_t i) {
     uint8_t wire[OUT_RECORD]={1}; char key[8];
     const lxmf_packet_outgoing *v=&n->outgoing[i].view;
-    wire[0]=v->direct?2:1; wire[119]=v->direct?1:0;
+    wire[0]=v->direct?3:1;
+    wire[119]=v->direct?(uint8_t)(1u|(n->outgoing[i].direct_sent?2u:0u)|(n->outgoing[i].fallback_blocked?4u:0u)):0;
     wire[1]=(uint8_t)v->state; wire[2]=(uint8_t)v->attempts; wire[3]=(uint8_t)v->error;
     memcpy(wire+4,v->destination,16); memcpy(wire+20,v->id,32);
     rns_identity_export_public(&n->outgoing[i].recipient,wire+52);
@@ -553,14 +560,15 @@ rns_status_t lxmf_packet_node_open_outbox(lxmf_packet_node_t *n,rns_storage_t *s
         if(status==RNS_ERROR_NOT_FOUND) { status=RNS_OK; continue; }
         if(status==RNS_ERROR_QUARANTINED) { n->quarantined_outbox[i]=true; status=RNS_OK; continue; }
         if(status!=RNS_OK) break;
-        if(length!=sizeof(wire) || (wire[0]!=1 && wire[0]!=2) ||
-            (wire[0]==2 && wire[119]!=1) || wire[1]<1 || wire[1]>6 ||
+        if(length!=sizeof(wire) || (wire[0]!=1 && wire[0]!=2 && wire[0]!=3) ||
+            (wire[0]==2 && wire[119]!=1) ||
+            (wire[0]==3 && (!(wire[119]&1u)||(wire[119]&0xf8u))) || wire[1]<1 || wire[1]>6 ||
             wire[2]>3 || wire[3]>RNS_ERROR_QUARANTINED || !wire[118] || wire[118]>32 ||
             ((wire[1]==LXMF_PACKET_TRANSMITTING || wire[1]==LXMF_PACKET_AWAITING_PROOF || wire[1]==LXMF_PACKET_DELIVERED) && !wire[2]) ||
             memcmp(wire+660,n->address,16)) { status=RNS_ERROR_PROTOCOL; break; }
         size_t raw_length=(size_t)wire[116]*256U+wire[117];
         rns_packet packet; uint8_t address[16];
-        bool direct=wire[0]==2;
+        bool direct=wire[0]>=2;
         if(!raw_length || raw_length>500 ||
             !rns_identity_from_public(&n->outgoing[i].recipient,wire+52) ||
             !rns_destination_hash(&n->outgoing[i].recipient,"lxmf",aspects,1,address) ||
@@ -575,6 +583,10 @@ rns_status_t lxmf_packet_node_open_outbox(lxmf_packet_node_t *n,rns_storage_t *s
         lxmf_packet_outgoing *v=&n->outgoing[i].view;
         v->state=(lxmf_packet_send_state)wire[1]; v->attempts=wire[2]; v->error=(rns_status_t)wire[3];
         v->direct=direct;
+        n->outgoing[i].direct_sent=wire[0]==3&&(wire[119]&2u);
+        /* An interrupted attempt may have seen an authentication error whose
+         * journal write failed. Never downgrade an interrupted direct send. */
+        n->outgoing[i].fallback_blocked=direct&&(wire[2]>0||(wire[0]==3&&(wire[119]&4u)));
         memcpy(v->destination,wire+4,16); memcpy(v->id,wire+20,32);
         for(size_t j=0;j<i;++j) if(n->outgoing[j].used && !memcmp(n->outgoing[j].view.id,v->id,32)) status=RNS_ERROR_PROTOCOL;
         if(status!=RNS_OK) break;
@@ -662,11 +674,37 @@ rns_status_t lxmf_packet_node_send(lxmf_packet_node_t *n,const uint8_t destinati
     n->outgoing[slot].used=true; memcpy(id,v->id,32); return RNS_OK;
 }
 static void retry_out(lxmf_packet_node_t *n,size_t i,rns_status_t status,uint64_t now) {
+    if(status==RNS_ERROR_CRYPTO||status==RNS_ERROR_PROTOCOL)n->outgoing[i].fallback_blocked=true;
     n->outgoing[i].attempt_started=false;
     n->outgoing[i].view.error=status;
     n->outgoing[i].view.state=n->outgoing[i].view.attempts<3?LXMF_PACKET_QUEUED:LXMF_PACKET_FAILED;
     n->outgoing[i].ready=now+5000U*n->outgoing[i].view.attempts;
     n->outgoing[i].dirty=true;
+}
+static bool handshake_fallback(lxmf_packet_node_t *n,size_t i) {
+    lxmf_packet_outgoing *v=&n->outgoing[i].view;
+    if(!v->direct||n->outgoing[i].direct_sent||n->outgoing[i].fallback_blocked||
+       n->outgoing[i].attempt_started||!v->attempts||v->attempts>=3||
+       (v->error!=RNS_ERROR_TIMEOUT&&v->error!=RNS_ERROR_IO))return false;
+    size_t p=PEERS;
+    for(size_t j=0;j<PEERS;++j)if(n->peers[j].used&&!memcmp(n->peers[j].address,v->destination,16)){p=j;break;}
+    if(p==PEERS||!n->peers[p].delivery||!n->peers[p].metadata_valid||
+       !n->peers[p].has_ratchet||n->peers[p].stamp_cost||n->peers[p].requires_stamp)return false;
+    if(n->outgoing[i].length<16)return false;
+    uint8_t encrypted[RNS_MTU],packet[RNS_MTU],hash[32];size_t encrypted_length=0,packet_length=0;
+    /* Keep the original signed LXMF bytes; only replace their transport
+     * representation. The outer destination supplies the omitted prefix. */
+    bool ok=rns_identity_encrypt(&n->peers[p].identity,n->peers[p].ratchet,
+        n->outgoing[i].raw+16,n->outgoing[i].length-16,encrypted,sizeof encrypted,&encrypted_length)!=0;
+    rns_packet outer={.data=encrypted,.data_length=encrypted_length};memcpy(outer.destination_hash,v->destination,16);
+    if(ok)ok=rns_packet_encode(&outer,packet,sizeof packet,&packet_length)&&rns_packet_hash(packet,packet_length,hash);
+    rns_hal_secure_zero(encrypted,sizeof encrypted);
+    if(!ok){rns_hal_secure_zero(packet,sizeof packet);return false;}
+    memcpy(n->outgoing[i].raw,packet,packet_length);n->outgoing[i].length=packet_length;
+    memcpy(n->outgoing[i].hash,hash,32);n->outgoing[i].recipient=n->peers[p].identity;
+    rns_hal_secure_zero(packet,sizeof packet);memset(n->outgoing[i].link_id,0,16);
+    v->direct=false;n->outgoing[i].dirty=true;
+    return true;
 }
 void lxmf_packet_node_poll(lxmf_packet_node_t *n,uint64_t now) {
     lxmf_packet_node_poll_ready(n,now,0x0fU);
@@ -697,6 +735,7 @@ void lxmf_packet_node_poll_ready(lxmf_packet_node_t *n,uint64_t now,uint8_t read
         if(n->outgoing[i].view.state==LXMF_PACKET_AWAITING_PROOF && now>=n->outgoing[i].deadline)
             retry_out(n,i,RNS_ERROR_TIMEOUT,now);
         if(!(ready_mask & (1U<<i)) || n->outgoing[i].view.state!=LXMF_PACKET_QUEUED || now<n->outgoing[i].ready) continue;
+        if(handshake_fallback(n,i)&&save_out(n,i)!=RNS_OK)continue;
         if(n->outgoing[i].view.direct) {
             if(!n->links) { n->outgoing[i].view.error=RNS_ERROR_UNSUPPORTED; n->outgoing[i].view.state=LXMF_PACKET_FAILED; n->outgoing[i].dirty=true; continue; }
             if(!n->outgoing[i].attempt_started) {
@@ -715,6 +754,7 @@ void lxmf_packet_node_poll_ready(lxmf_packet_node_t *n,uint64_t now,uint8_t read
                 retry_out(n,i,RNS_ERROR_IO,now); continue;
             }
             if(state!=RNS_LINK_ACTIVE) continue;
+            n->outgoing[i].direct_sent=true;
             n->outgoing[i].view.state=LXMF_PACKET_TRANSMITTING; n->outgoing[i].dirty=true;
             if(save_out(n,i)!=RNS_OK) { n->outgoing[i].view.state=LXMF_PACKET_QUEUED; continue; }
             rns_status_t sent=rns_embedded_link_send(n->links,n->outgoing[i].link_id,n->outgoing[i].raw,
@@ -722,6 +762,7 @@ void lxmf_packet_node_poll_ready(lxmf_packet_node_t *n,uint64_t now,uint8_t read
             if(sent!=RNS_OK) retry_out(n,i,sent,now);
             continue;
         }
+        n->outgoing[i].proof_pending=false;
         ++n->outgoing[i].view.attempts; n->outgoing[i].view.state=LXMF_PACKET_TRANSMITTING;
         n->outgoing[i].dirty=true;
         if(save_out(n,i)!=RNS_OK) {
@@ -729,7 +770,7 @@ void lxmf_packet_node_poll_ready(lxmf_packet_node_t *n,uint64_t now,uint8_t read
         }
         rns_status_t status=rns_interface_send_with_id(n->interface_value,n->outgoing[i].raw,
             n->outgoing[i].length,&n->outgoing[i].transmission_id);
-        if(status!=RNS_OK) retry_out(n,i,status,now);
+        if(status!=RNS_OK) {n->outgoing[i].proof_pending=false;retry_out(n,i,status,now);}
     }
 }
 void lxmf_packet_node_tx_complete(lxmf_packet_node_t *n,uint32_t id,rns_status_t status,uint64_t now) {
@@ -738,9 +779,10 @@ void lxmf_packet_node_tx_complete(lxmf_packet_node_t *n,uint32_t id,rns_status_t
     if(n->links) rns_embedded_link_tx_complete(n->links,id,status,now);
     for(size_t i=0;i<4;++i) if(n->outgoing[i].used && !n->outgoing[i].view.direct &&
         n->outgoing[i].view.state==LXMF_PACKET_TRANSMITTING && n->outgoing[i].transmission_id==id) {
-        if(status!=RNS_OK) retry_out(n,i,status,now);
+        if(status!=RNS_OK) {n->outgoing[i].proof_pending=false;retry_out(n,i,status,now);}
         else {
-            n->outgoing[i].view.state=LXMF_PACKET_AWAITING_PROOF;
+            n->outgoing[i].view.state=n->outgoing[i].proof_pending?LXMF_PACKET_DELIVERED:LXMF_PACKET_AWAITING_PROOF;
+            n->outgoing[i].proof_pending=false;
             n->outgoing[i].view.error=RNS_OK; n->outgoing[i].deadline=now+120000U;
             n->outgoing[i].dirty=true;
         }
@@ -754,6 +796,7 @@ rns_status_t lxmf_packet_node_cancel(lxmf_packet_node_t *n,const uint8_t id[32])
     if(!n || !id) return RNS_ERROR_INVALID_ARGUMENT;
     for(size_t i=0;i<4;++i) if(n->outgoing[i].used && !memcmp(id,n->outgoing[i].view.id,32)) {
         if(n->outgoing[i].view.state>=LXMF_PACKET_DELIVERED) return RNS_ERROR_INVALID_STATE;
+        n->outgoing[i].proof_pending=false;
         n->outgoing[i].view.state=LXMF_PACKET_CANCELLED; n->outgoing[i].dirty=true; return RNS_OK;
     }
     return RNS_ERROR_NOT_FOUND;
