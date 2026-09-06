@@ -11,6 +11,7 @@
 #include "chat_journal.h"
 #include "chat_view.h"
 #include "archive_view.h"
+#include "archive_scan.h"
 #include "radio_discovery.h"
 #include "reticulum/boards/heltec_reticulum_radio.h"
 #include "reticulum/boards/heltec_status_ui_esp.h"
@@ -54,9 +55,8 @@ static heltec_message_archive *archive;
 static heltec_archive_view archive_ui;
 /* Shared scratch belongs to the single polling task, never an ISR. */
 static heltec_archived_message archive_item;
-static size_t archive_cursor = 64;
-static uint64_t archive_generation, archive_next;
-static bool archive_rescan;
+static heltec_archive_scan archive_scan={.cursor=64};
+static uint64_t archive_generation;
 static bool outbox_ready;
 static bool peer_in_history(void *context,const uint8_t destination[16]) {
     (void)context;
@@ -294,7 +294,7 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                 (int)lxmf_packet_node_peer_storage_status(node));
             /* Restored identities are not RF observations, but can validate
              * archived signatures immediately using the bounded poll scan. */
-            if(peers==RNS_OK && archive) archive_cursor=0;
+            if(peers==RNS_OK && archive) heltec_archive_scan_request(&archive_scan);
         }
         ESP_LOGI(TAG, "Chat storage opening: %d; identity storage unchanged", (int)chat_status);
         if(heltec_chat_flash_quarantined()) ESP_LOGW(TAG,"Storage degraded: quarantined records preserved");
@@ -340,13 +340,13 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
         lxmf_packet_node_stats(node,&archive_stats);
         if(archive_generation!=archive_stats.learned_announces) {
             archive_generation=archive_stats.learned_announces;
-            if(archive_cursor==64) archive_cursor=0;
-            else archive_rescan=true;
+            heltec_archive_scan_request(&archive_scan);
         }
         /* At most one archived packet per interval; no unbounded crypto scan. */
-        if(archive && archive_cursor<64 && now>=archive_next) {
-            const heltec_archived_message *m=heltec_message_archive_get(archive,archive_cursor++);
-            archive_next=now+250U;
+        size_t archive_slot;
+        if(archive && heltec_archive_scan_next(&archive_scan,now,&archive_slot)) {
+            const heltec_archived_message *m=heltec_message_archive_get(archive,archive_slot);
+            bool retry=false;
             if(m && m->signature==LXMF_SIGNATURE_UNVERIFIED) {
                 lxmf_signature_state_t signature=LXMF_SIGNATURE_UNVERIFIED;
                 if(lxmf_packet_node_check_archive(node,m->packet,m->packet_length,m->source,m->id,&signature)==RNS_OK) {
@@ -354,16 +354,17 @@ void heltec_packet_messaging_run(rns_storage_t *storage) {
                         /* Copy: the acceptance callback can replace this record. */
                         uint8_t raw[500]; size_t length=m->packet_length;
                         memcpy(raw,m->packet,length);
-                        (void)lxmf_packet_node_replay_archive(node,raw,length);
+                        retry=lxmf_packet_node_replay_archive(node,raw,length)!=RNS_OK;
                         rns_hal_secure_zero(raw,sizeof(raw));
                     } else if(signature==LXMF_SIGNATURE_FAILED) {
                         archive_item=*m; archive_item.signature=signature;
                         chat_status=heltec_message_archive_put(archive,&archive_item);
+                        retry=chat_status!=RNS_OK;
                         rns_hal_secure_zero(&archive_item,sizeof(archive_item));
                     }
                 }
             }
-            if(archive_cursor==64 && archive_rescan) { archive_cursor=0; archive_rescan=false; }
+            heltec_archive_scan_complete(&archive_scan,now,retry);
         }
         rns_interface_stats_t radio_stats = {0};
         (void)rns_interface_get_stats(radio, &radio_stats);
